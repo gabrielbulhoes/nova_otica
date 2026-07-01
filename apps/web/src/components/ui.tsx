@@ -36,7 +36,9 @@ export function ErrorState({ message }: { message?: string }) {
 }
 
 const movementStatus: Record<string, { label: string; cls: string }> = {
-  PENDING: { label: 'Pendente', cls: 'amber' },
+  REQUESTED: { label: 'Solicitada', cls: 'blue' },
+  REJECTED: { label: 'Rejeitada', cls: 'red' },
+  PENDING: { label: 'Aprovada/Pendente', cls: 'amber' },
   CONFIRMED: { label: 'Confirmada', cls: 'green' },
   CANCELLED: { label: 'Cancelada', cls: 'red' },
   RECONCILED: { label: 'Reconciliada', cls: 'gray' },

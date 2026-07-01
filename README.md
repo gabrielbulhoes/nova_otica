@@ -15,6 +15,30 @@ diária **06:00–07:00**. Por isso a arquitetura combina:
 O estoque exibido é sempre **"ao vivo"**:
 `saldo = base sincronizada + movimentações internas confirmadas − reservas`.
 
+### Perfis de acesso
+
+A plataforma tem autenticação por JWT e dois papéis:
+
+| Papel           | Acesso                                                                        |
+| --------------- | ----------------------------------------------------------------------------- |
+| `ADMIN`         | Gestor da rede — enxerga todas as lojas, aprova transferências, ajusta mínimos, gerencia usuários. |
+| `STORE_MANAGER` | Gestor de loja — estoque, vendas e movimentações restritos à **sua** filial; pode **solicitar** transferências (sujeitas à aprovação da rede). |
+
+Credenciais criadas pelo seed (modo demonstração):
+
+- **Admin:** `admin@novaotica.com` / `admin123`
+- **Gestor de loja:** `loja<idFilial>@novaotica.com` / `loja123` (ex.: `loja1@novaotica.com`)
+
+### Fluxo de transferência com aprovação
+
+```
+STORE_MANAGER solicita ──▶ REQUESTED ──▶ ADMIN aprova ──▶ PENDING (reserva saldo)
+                              │                                  │
+                              └── ADMIN rejeita ──▶ REJECTED     └── confirma ──▶ CONFIRMED (efetiva)
+                                                                                     │
+                                                            sincronização da manhã ──▶ RECONCILED
+```
+
 ---
 
 ## Arquitetura
@@ -109,11 +133,15 @@ sincronizada + movimentações internas.
 
 ## Rotas da API (resumo)
 
+Todas as rotas `/api/*` exigem `Authorization: Bearer <token>`, exceto `/api/auth/login`.
+
 | Método | Rota                              | Descrição                                  |
 | ------ | --------------------------------- | ------------------------------------------ |
+| POST   | `/api/auth/login`                 | Autentica e devolve o token (público)      |
+| GET    | `/api/auth/me`                    | Dados do usuário autenticado               |
+| GET    | `/api/users` · POST `/api/users`  | Gestão de usuários (ADMIN)                 |
 | GET    | `/api/dashboard/summary`          | Indicadores gerais da rede                 |
 | GET    | `/api/dashboard/sales-by-store`   | Vendas (30d) por loja                      |
-| GET    | `/api/dashboard/low-stock`        | Produtos com saldo baixo                   |
 | GET    | `/api/stock`                      | Estoque consolidado (saldo ao vivo)        |
 | GET    | `/api/stock/by-product`           | Saldo somado por produto na rede           |
 | GET    | `/api/products`                   | Catálogo de produtos                       |
@@ -121,9 +149,15 @@ sincronizada + movimentações internas.
 | GET    | `/api/sales`                      | Vendas (filtro por loja/período)           |
 | GET    | `/api/customers`                  | Clientes                                   |
 | GET    | `/api/movements`                  | Movimentações internas                     |
-| POST   | `/api/movements`                  | Cria transferência/baixa/entrada/ajuste    |
+| POST   | `/api/movements`                  | Cria/solicita transferência/baixa/entrada/ajuste |
+| POST   | `/api/movements/:id/approve`      | Aprova a solicitação (ADMIN)               |
+| POST   | `/api/movements/:id/reject`       | Rejeita a solicitação (ADMIN)              |
 | POST   | `/api/movements/:id/confirm`      | Confirma (efetiva no estoque)              |
 | POST   | `/api/movements/:id/cancel`       | Cancela                                    |
+| GET    | `/api/reports/abc`                | Curva ABC por receita                      |
+| GET    | `/api/reports/turnover`           | Giro de estoque no período                 |
+| GET    | `/api/alerts`                     | Alertas de ruptura e estoque baixo         |
+| PUT    | `/api/alerts/min-stock`           | Define o estoque mínimo de um produto (ADMIN) |
 | GET    | `/api/sync/status`                | Estado da integração e da janela           |
 | POST   | `/api/sync/run`                   | Dispara sincronização manual               |
 
@@ -143,10 +177,19 @@ Rotas cobertas: `lojas`, `vendedores`, `cores`, `tamanhos`, `produtos`,
 
 ---
 
+## Testes
+
+Testes unitários com Vitest cobrindo mappers, trava de janela, cálculo de
+estoque ao vivo e classificação ABC:
+
+```bash
+npm test -w @nova-otica/api
+```
+
 ## Próximos passos sugeridos
 
-- Autenticação/perfis de usuário (gerente da rede × gerente de loja).
-- Ordem de transferência com fluxo de aprovação e comprovante.
-- Relatórios de giro de estoque e curva ABC.
-- Notificações de ruptura/estoque mínimo por loja.
-- Testes automatizados (Vitest) para mappers e motor de sincronização.
+- Comprovante/nota de transferência (PDF) e histórico de auditoria por usuário.
+- Notificações ativas (e-mail/WhatsApp) para rupturas e aprovações pendentes.
+- Estoque mínimo por loja (hoje é por produto) e sugestão automática de reposição.
+- Relatório de curva ABC com estoque médio real (histórico de posições).
+- Testes de integração ponta a ponta (Supertest) para os fluxos de aprovação.

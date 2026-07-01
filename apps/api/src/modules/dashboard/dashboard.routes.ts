@@ -29,7 +29,7 @@ dashboardRouter.get(
         _sum: { total: true },
         _count: true,
       }),
-      prisma.inventoryMovement.count({ where: { status: 'PENDING' } }),
+      prisma.inventoryMovement.count({ where: { status: { in: ['REQUESTED', 'PENDING'] } } }),
       prisma.syncRun.findFirst({ orderBy: { startedAt: 'desc' } }),
     ]);
 

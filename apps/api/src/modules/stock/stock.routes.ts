@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, parsePaging } from '../../http/helpers.js';
+import { scopedStoreId } from '../auth/auth.middleware.js';
 import { listStock, stockByProduct } from './stock.service.js';
 
 export const stockRouter = Router();
@@ -10,7 +11,7 @@ stockRouter.get(
   asyncHandler(async (req, res) => {
     const { limit, page, skip } = parsePaging(req.query);
     const { total, rows } = await listStock({
-      storeId: req.query.storeId as string | undefined,
+      storeId: scopedStoreId(req, req.query.storeId as string | undefined),
       productId: req.query.productId as string | undefined,
       search: req.query.search as string | undefined,
       category: req.query.category as string | undefined,

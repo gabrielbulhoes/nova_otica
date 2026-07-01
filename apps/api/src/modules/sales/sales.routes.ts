@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
+import { scopedStoreId } from '../auth/auth.middleware.js';
 
 export const salesRouter = Router();
 
@@ -11,7 +12,8 @@ salesRouter.get(
   asyncHandler(async (req, res) => {
     const { limit, page, skip } = parsePaging(req.query);
     const where: Prisma.SaleWhereInput = {};
-    if (req.query.storeId) where.storeId = req.query.storeId as string;
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    if (storeId) where.storeId = storeId;
 
     const start = req.query.date_start as string | undefined;
     const end = req.query.date_end as string | undefined;

@@ -2,6 +2,46 @@ import axios from 'axios';
 
 export const api = axios.create({ baseURL: '/api' });
 
+// ─── Autenticação ────────────────────────────────────────────────────────────
+
+const TOKEN_KEY = 'nova_otica_token';
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
+export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
+api.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    if (error?.response?.status === 401 && getToken()) {
+      clearToken();
+      if (!location.pathname.startsWith('/login')) location.assign('/login');
+    }
+    return Promise.reject(error);
+  },
+);
+
+export type Role = 'ADMIN' | 'STORE_MANAGER';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  storeId: string | null;
+  storeName?: string | null;
+}
+
+export const login = (email: string, password: string) =>
+  api.post<{ token: string; user: AuthUser }>('/auth/login', { email, password }).then((r) => r.data);
+export const getMe = () => api.get<AuthUser>('/auth/me').then((r) => r.data);
+
 // ─── Tipos compartilhados com a API ──────────────────────────────────────────
 
 export interface Paged<T> {
@@ -73,17 +113,61 @@ export interface Product {
   size?: { name: string } | null;
 }
 
+export type MovementStatus =
+  | 'REQUESTED'
+  | 'REJECTED'
+  | 'PENDING'
+  | 'CONFIRMED'
+  | 'CANCELLED'
+  | 'RECONCILED';
+
 export interface Movement {
   id: string;
   type: 'TRANSFER' | 'SALE' | 'ADJUSTMENT' | 'RETURN';
-  status: 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'RECONCILED';
+  status: MovementStatus;
   quantity: number;
   reason: string | null;
   reference: string | null;
+  decisionNote: string | null;
   createdAt: string;
   product: { id: string; description: string };
   fromStore: { id: string; name: string } | null;
   toStore: { id: string; name: string } | null;
+}
+
+export interface AbcRow {
+  productId: string;
+  description: string;
+  brand: string | null;
+  category: string | null;
+  revenue: number;
+  units: number;
+  revenuePct: number;
+  cumulativePct: number;
+  class: 'A' | 'B' | 'C';
+}
+
+export interface TurnoverRow {
+  productId: string;
+  description: string;
+  brand: string | null;
+  category: string | null;
+  unitsSold: number;
+  currentStock: number;
+  turnover: number;
+  daysOfInventory: number | null;
+}
+
+export interface StockAlert {
+  level: 'OUT' | 'LOW';
+  storeId: string;
+  storeName: string;
+  productId: string;
+  description: string;
+  brand: string | null;
+  category: string | null;
+  availableNow: number;
+  threshold: number;
 }
 
 export interface SyncStatus {
@@ -141,6 +225,29 @@ export const confirmMovement = (id: string) =>
   api.post<Movement>(`/movements/${id}/confirm`).then((r) => r.data);
 export const cancelMovement = (id: string) =>
   api.post<Movement>(`/movements/${id}/cancel`).then((r) => r.data);
+export const approveMovement = (id: string, note?: string) =>
+  api.post<Movement>(`/movements/${id}/approve`, { note }).then((r) => r.data);
+export const rejectMovement = (id: string, note?: string) =>
+  api.post<Movement>(`/movements/${id}/reject`, { note }).then((r) => r.data);
+
+// ─── Relatórios e alertas ────────────────────────────────────────────────────
+
+export const getAbc = (params: Record<string, string | number | undefined>) =>
+  api
+    .get<{ days: number; totalRevenue: number; summary: Record<'A' | 'B' | 'C', { products: number; revenue: number }>; rows: AbcRow[] }>(
+      '/reports/abc',
+      { params },
+    )
+    .then((r) => r.data);
+export const getTurnover = (params: Record<string, string | number | undefined>) =>
+  api.get<{ days: number; rows: TurnoverRow[] }>('/reports/turnover', { params }).then((r) => r.data);
+
+export const getAlerts = (params: Record<string, string | undefined>) =>
+  api
+    .get<{ total: number; out: number; low: number; rows: StockAlert[] }>('/alerts', { params })
+    .then((r) => r.data);
+export const setMinStock = (productId: string, minStock: number | null) =>
+  api.put('/alerts/min-stock', { productId, minStock }).then((r) => r.data);
 
 export const getSyncStatus = () => api.get<SyncStatus>('/sync/status').then((r) => r.data);
 export const runSync = () => api.post('/sync/run').then((r) => r.data);

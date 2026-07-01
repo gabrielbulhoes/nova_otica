@@ -32,10 +32,35 @@ model Store {
   stockItems    StockItem[]
   sales         Sale[]
   sellers       Seller[]
+  users         User[]
   movementsFrom InventoryMovement[] @relation("MovementFromStore")
   movementsTo   InventoryMovement[] @relation("MovementToStore")
 
   @@index([active])
+}
+
+enum Role {
+  ADMIN // gestor da rede — acesso total
+  STORE_MANAGER // gestor de loja — escopo restrito à própria filial
+}
+
+/// Usuário da plataforma. ADMIN enxerga toda a rede; STORE_MANAGER é
+/// limitado à `storeId` (estoque, vendas e movimentações da sua loja).
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(STORE_MANAGER)
+  storeId      String?
+  active       Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  store Store? @relation(fields: [storeId], references: [id])
+
+  @@index([role])
 }
 
 /// Vendedor / funcionário (Sellbie: rota `vendedores`, campo `funcionario`).
@@ -96,6 +121,7 @@ model Product {
   sizeId      String?
   price       Decimal? @db.Decimal(12, 2)
   cost        Decimal? @db.Decimal(12, 2)
+  minStock    Int? // estoque mínimo por loja (dispara alerta de ruptura)
   active      Boolean  @default(true)
 
   includedAt DateTime? // dataInclusao
@@ -233,7 +259,9 @@ enum MovementType {
 }
 
 enum MovementStatus {
-  PENDING // registrada, aguardando confirmação
+  REQUESTED // solicitada por uma loja, aguardando aprovação da rede
+  REJECTED // solicitação recusada
+  PENDING // aprovada/registrada, reserva o saldo na origem
   CONFIRMED // efetivada no estoque interno
   CANCELLED // cancelada
   RECONCILED // já refletida pela sincronização da fonte
@@ -252,9 +280,12 @@ model InventoryMovement {
   quantity    Int
   reason      String?
   reference   String? // ex.: nº da venda/OS de origem
-  createdBy   String? // usuário que registrou
+  createdBy   String? // usuário que registrou/solicitou
+  approvedBy  String? // usuário que aprovou/rejeitou
+  decisionNote String? // justificativa da aprovação/recusa
 
   createdAt    DateTime  @default(now())
+  approvedAt   DateTime?
   confirmedAt  DateTime?
   reconciledAt DateTime?
 

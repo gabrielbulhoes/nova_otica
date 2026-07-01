@@ -6,6 +6,17 @@ function toMinutes(hhmm: string): number {
   return h * 60 + m;
 }
 
+/**
+ * Verdadeiro se `now` está dentro da janela [start, end). Suporta janelas que
+ * cruzam a meia-noite (start > end). Função pura — base do checkWindow.
+ */
+export function isWithinWindow(now: Date, start: string, end: string): boolean {
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const s = toMinutes(start);
+  const e = toMinutes(end);
+  return s <= e ? cur >= s && cur < e : cur >= s || cur < e;
+}
+
 export interface WindowCheck {
   allowed: boolean;
   now: string;
@@ -27,12 +38,7 @@ export function checkWindow(now = new Date()): WindowCheck {
     return { allowed: true, now: nowStr, window };
   }
 
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const start = toMinutes(env.SELLBIE_WINDOW_START);
-  const end = toMinutes(env.SELLBIE_WINDOW_END);
-
-  // Suporta janelas que cruzam a meia-noite (start > end).
-  const allowed = start <= end ? cur >= start && cur < end : cur >= start || cur < end;
+  const allowed = isWithinWindow(now, env.SELLBIE_WINDOW_START, env.SELLBIE_WINDOW_END);
 
   return {
     allowed,

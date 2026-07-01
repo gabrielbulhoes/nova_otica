@@ -1,11 +1,15 @@
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getSummary, getSalesByStore, getSyncStatus, formatBRL } from '../api/client';
+import { getSummary, getSalesByStore, getSyncStatus, getAlerts, formatBRL } from '../api/client';
 import { StatCard, PageHeader, Loading } from '../components/ui';
+import { useAuth } from '../auth/AuthContext';
 
 export function Dashboard() {
+  const { isAdmin } = useAuth();
   const summary = useQuery({ queryKey: ['summary'], queryFn: getSummary });
-  const byStore = useQuery({ queryKey: ['sales-by-store'], queryFn: getSalesByStore });
-  const sync = useQuery({ queryKey: ['sync-status'], queryFn: getSyncStatus });
+  const byStore = useQuery({ queryKey: ['sales-by-store'], queryFn: getSalesByStore, enabled: isAdmin });
+  const sync = useQuery({ queryKey: ['sync-status'], queryFn: getSyncStatus, enabled: isAdmin });
+  const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
 
   const maxTotal = Math.max(1, ...(byStore.data ?? []).map((s) => s.total));
 
@@ -29,6 +33,16 @@ export function Dashboard() {
         </div>
       )}
 
+      {alerts.data && alerts.data.total > 0 && (
+        <div className="banner warn">
+          <span className="dot amber" />
+          <div>
+            <strong>{alerts.data.out}</strong> ruptura(s) e <strong>{alerts.data.low}</strong> item(ns) com
+            estoque baixo. <Link to="/alertas" style={{ color: 'var(--primary)' }}>Ver alertas →</Link>
+          </div>
+        </div>
+      )}
+
       {summary.isLoading ? (
         <Loading />
       ) : summary.data ? (
@@ -38,9 +52,9 @@ export function Dashboard() {
             <StatCard label="Produtos" value={summary.data.products} />
             <StatCard label="Unidades em estoque" value={summary.data.stockUnits.toLocaleString('pt-BR')} />
             <StatCard
-              label="Movimentações pendentes"
+              label="Transferências pendentes"
               value={summary.data.pendingMovements}
-              hint="Transferências aguardando confirmação"
+              hint="Solicitações e aprovações a resolver"
             />
           </div>
 
@@ -66,6 +80,7 @@ export function Dashboard() {
             />
           </div>
 
+          {isAdmin && (
           <div className="card" style={{ marginTop: 16 }}>
             <h3 className="section-title">Vendas por loja (últimos 30 dias)</h3>
             {byStore.data && byStore.data.length > 0 ? (
@@ -103,6 +118,7 @@ export function Dashboard() {
               <div className="empty">Sem vendas no período.</div>
             )}
           </div>
+          )}
         </>
       ) : (
         <div className="empty">

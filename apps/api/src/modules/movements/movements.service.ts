@@ -1,6 +1,14 @@
 import { z } from 'zod';
+import type { Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
-import { badRequest, notFound } from '../../http/helpers.js';
+import { badRequest, HttpError, notFound } from '../../http/helpers.js';
+
+/** Quem está executando a ação (vem de req.user). */
+export interface Actor {
+  id: string;
+  role: Role;
+  storeId: string | null;
+}
 
 export const createMovementSchema = z
   .object({
@@ -11,8 +19,7 @@ export const createMovementSchema = z
     quantity: z.number().int().positive(),
     reason: z.string().max(280).optional(),
     reference: z.string().max(120).optional(),
-    createdBy: z.string().max(120).optional(),
-    /** Confirma imediatamente (efetiva no estoque ao vivo). */
+    /** Confirma imediatamente (apenas quando permitido pelo papel). */
     confirm: z.boolean().optional().default(false),
   })
   .superRefine((v, ctx) => {
@@ -40,7 +47,7 @@ async function ensureRefs(input: CreateMovementInput) {
 }
 
 /** Saldo disponível ao vivo na loja de origem (synced + delta confirmado - reservado). */
-async function availableAt(storeId: string, productId: string): Promise<number> {
+export async function availableAt(storeId: string, productId: string): Promise<number> {
   const item = await prisma.stockItem.findUnique({
     where: { storeId_productId: { storeId, productId } },
   });
@@ -59,10 +66,38 @@ async function availableAt(storeId: string, productId: string): Promise<number> 
   return synced + delta - reserved;
 }
 
-export async function createMovement(input: CreateMovementInput) {
-  await ensureRefs(input);
+/**
+ * Regras de papel:
+ * - STORE_MANAGER só opera na própria loja; TRANSFER que ele cria nasce como
+ *   REQUESTED (precisa de aprovação da rede). ADJUSTMENT é exclusivo do ADMIN.
+ * - ADMIN cria já efetivável (PENDING, ou CONFIRMED se `confirm`).
+ */
+function decideInitialStatus(input: CreateMovementInput, actor: Actor): 'REQUESTED' | 'PENDING' | 'CONFIRMED' {
+  if (input.type === 'TRANSFER' && actor.role === 'STORE_MANAGER') return 'REQUESTED';
+  return input.confirm ? 'CONFIRMED' : 'PENDING';
+}
 
-  if (input.fromStoreId) {
+function assertActorMayCreate(input: CreateMovementInput, actor: Actor) {
+  if (actor.role === 'ADMIN') return;
+  // STORE_MANAGER
+  if (input.type === 'ADJUSTMENT') {
+    throw new HttpError(403, 'Ajuste de estoque é exclusivo da rede (ADMIN).');
+  }
+  const stores = [input.fromStoreId, input.toStoreId].filter(Boolean) as string[];
+  const involvesOwnStore = stores.includes(actor.storeId ?? '__none__');
+  if (!involvesOwnStore) {
+    throw new HttpError(403, 'Você só pode movimentar envolvendo a sua própria loja.');
+  }
+}
+
+export async function createMovement(input: CreateMovementInput, actor: Actor) {
+  await ensureRefs(input);
+  assertActorMayCreate(input, actor);
+
+  const status = decideInitialStatus(input, actor);
+
+  // Só valida saldo quando a movimentação já vai reservar/efetivar agora.
+  if (input.fromStoreId && status !== 'REQUESTED') {
     const available = await availableAt(input.fromStoreId, input.productId);
     if (input.quantity > available) {
       throw badRequest(
@@ -74,15 +109,15 @@ export async function createMovement(input: CreateMovementInput) {
   const movement = await prisma.inventoryMovement.create({
     data: {
       type: input.type,
-      status: input.confirm ? 'CONFIRMED' : 'PENDING',
+      status,
       productId: input.productId,
       fromStoreId: input.fromStoreId ?? null,
       toStoreId: input.toStoreId ?? null,
       quantity: input.quantity,
       reason: input.reason ?? null,
       reference: input.reference ?? null,
-      createdBy: input.createdBy ?? null,
-      confirmedAt: input.confirm ? new Date() : null,
+      createdBy: actor.id,
+      confirmedAt: status === 'CONFIRMED' ? new Date() : null,
     },
   });
 
@@ -90,10 +125,47 @@ export async function createMovement(input: CreateMovementInput) {
   return movement;
 }
 
-export async function confirmMovement(id: string) {
+/** ADMIN aprova uma solicitação (REQUESTED -> PENDING). Revalida o saldo. */
+export async function approveMovement(id: string, actor: Actor, note?: string) {
+  if (actor.role !== 'ADMIN') throw new HttpError(403, 'Apenas a rede (ADMIN) aprova transferências.');
+  const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
+  if (!mov) throw notFound('Movimentação não encontrada');
+  if (mov.status !== 'REQUESTED') throw badRequest(`Movimentação não está em solicitação (${mov.status}).`);
+
+  if (mov.fromStoreId) {
+    const available = await availableAt(mov.fromStoreId, mov.productId);
+    if (mov.quantity > available) {
+      throw badRequest(`Saldo insuficiente na origem para aprovar (disponível: ${available}).`);
+    }
+  }
+
+  const updated = await prisma.inventoryMovement.update({
+    where: { id },
+    data: { status: 'PENDING', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
+  });
+  await recomputeReserved(mov.fromStoreId);
+  return updated;
+}
+
+/** ADMIN rejeita uma solicitação (REQUESTED -> REJECTED). */
+export async function rejectMovement(id: string, actor: Actor, note?: string) {
+  if (actor.role !== 'ADMIN') throw new HttpError(403, 'Apenas a rede (ADMIN) rejeita transferências.');
+  const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
+  if (!mov) throw notFound('Movimentação não encontrada');
+  if (mov.status !== 'REQUESTED') throw badRequest(`Movimentação não está em solicitação (${mov.status}).`);
+
+  return prisma.inventoryMovement.update({
+    where: { id },
+    data: { status: 'REJECTED', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
+  });
+}
+
+/** Efetiva uma movimentação aprovada (PENDING -> CONFIRMED). */
+export async function confirmMovement(id: string, actor: Actor) {
   const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
   if (!mov) throw notFound('Movimentação não encontrada');
   if (mov.status !== 'PENDING') throw badRequest(`Movimentação não está pendente (${mov.status}).`);
+  assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
   const updated = await prisma.inventoryMovement.update({
     where: { id },
@@ -103,10 +175,13 @@ export async function confirmMovement(id: string) {
   return updated;
 }
 
-export async function cancelMovement(id: string) {
+/** Cancela uma movimentação ainda não efetivada/reconciliada. */
+export async function cancelMovement(id: string, actor: Actor) {
   const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
   if (!mov) throw notFound('Movimentação não encontrada');
-  if (mov.status === 'RECONCILED') throw badRequest('Movimentação já reconciliada não pode ser cancelada.');
+  if (mov.status === 'RECONCILED' || mov.status === 'CONFIRMED')
+    throw badRequest('Movimentação já efetivada/reconciliada não pode ser cancelada.');
+  assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
   const updated = await prisma.inventoryMovement.update({
     where: { id },
@@ -114,6 +189,15 @@ export async function cancelMovement(id: string) {
   });
   await recomputeReserved(mov.fromStoreId);
   return updated;
+}
+
+/** STORE_MANAGER só controla movimentações que envolvem a sua loja. */
+function assertActorControls(fromStoreId: string | null, toStoreId: string | null, actor: Actor) {
+  if (actor.role === 'ADMIN') return;
+  const own = actor.storeId ?? '__none__';
+  if (fromStoreId !== own && toStoreId !== own) {
+    throw new HttpError(403, 'Ação restrita à sua própria loja.');
+  }
 }
 
 /** Recalcula a reserva (saídas PENDING) de uma loja específica. */

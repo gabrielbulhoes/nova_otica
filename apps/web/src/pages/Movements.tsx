@@ -7,8 +7,11 @@ import {
   createMovement,
   confirmMovement,
   cancelMovement,
+  approveMovement,
+  rejectMovement,
 } from '../api/client';
 import { PageHeader, Loading, StatusBadge, movementTypeLabel } from '../components/ui';
+import { useAuth } from '../auth/AuthContext';
 
 const TYPES = [
   { value: 'TRANSFER', label: 'Transferência entre lojas' },
@@ -19,6 +22,7 @@ const TYPES = [
 
 export function Movements() {
   const qc = useQueryClient();
+  const { isAdmin } = useAuth();
   const [statusFilter, setStatusFilter] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -27,13 +31,18 @@ export function Movements() {
     queryFn: () => getMovements({ status: statusFilter || undefined }),
   });
 
-  const confirm = useMutation({
-    mutationFn: confirmMovement,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['movements'] }),
-  });
-  const cancel = useMutation({
-    mutationFn: cancelMovement,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['movements'] }),
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['movements'] });
+    qc.invalidateQueries({ queryKey: ['stock'] });
+    qc.invalidateQueries({ queryKey: ['alerts'] });
+  };
+
+  const confirm = useMutation({ mutationFn: confirmMovement, onSuccess: invalidate });
+  const cancel = useMutation({ mutationFn: cancelMovement, onSuccess: invalidate });
+  const approve = useMutation({ mutationFn: (id: string) => approveMovement(id), onSuccess: invalidate });
+  const reject = useMutation({
+    mutationFn: (id: string) => rejectMovement(id, 'Rejeitada pela rede'),
+    onSuccess: invalidate,
   });
 
   return (
@@ -51,8 +60,10 @@ export function Movements() {
       <div className="toolbar">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="">Todos os status</option>
-          <option value="PENDING">Pendentes</option>
+          <option value="REQUESTED">Solicitadas</option>
+          <option value="PENDING">Aprovadas/Pendentes</option>
           <option value="CONFIRMED">Confirmadas</option>
+          <option value="REJECTED">Rejeitadas</option>
           <option value="CANCELLED">Canceladas</option>
           <option value="RECONCILED">Reconciliadas</option>
         </select>
@@ -88,6 +99,33 @@ export function Movements() {
                     <StatusBadge status={m.status} />
                   </td>
                   <td className="right">
+                    {m.status === 'REQUESTED' && isAdmin && (
+                      <>
+                        <button
+                          className="btn sm"
+                          disabled={approve.isPending}
+                          onClick={() => approve.mutate(m.id)}
+                        >
+                          Aprovar
+                        </button>{' '}
+                        <button
+                          className="btn sm danger"
+                          disabled={reject.isPending}
+                          onClick={() => reject.mutate(m.id)}
+                        >
+                          Rejeitar
+                        </button>
+                      </>
+                    )}
+                    {m.status === 'REQUESTED' && !isAdmin && (
+                      <button
+                        className="btn sm danger"
+                        disabled={cancel.isPending}
+                        onClick={() => cancel.mutate(m.id)}
+                      >
+                        Cancelar
+                      </button>
+                    )}
                     {m.status === 'PENDING' && (
                       <>
                         <button

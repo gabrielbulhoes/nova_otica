@@ -17,6 +17,12 @@ const schema = z.object({
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatório'),
 
+  JWT_SECRET: z.string().min(1).default('dev-secret-change-me'),
+  JWT_EXPIRES_IN: z.string().default('8h'),
+  DEFAULT_MIN_STOCK: z.coerce.number().int().nonnegative().default(3),
+  SEED_ADMIN_EMAIL: z.string().default('admin@novaotica.com'),
+  SEED_ADMIN_PASSWORD: z.string().default('admin123'),
+
   SELLBIE_MODE: z.enum(['mock', 'live']).default('mock'),
   SELLBIE_BASE_URL: z.string().optional().default(''),
   SELLBIE_API_KEY: z.string().optional().default(''),

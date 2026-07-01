@@ -2,6 +2,17 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { toNumber } from '../../http/helpers.js';
 
+/**
+ * Cálculo puro do saldo ao vivo de um item:
+ * - onHand = base sincronizada + ajuste de movimentações confirmadas;
+ * - availableNow = onHand − reservado (nunca negativo).
+ */
+export function computeLiveStock(quantity: number, reserved: number, pendingDelta: number) {
+  const onHand = quantity + pendingDelta;
+  const availableNow = Math.max(onHand - reserved, 0);
+  return { onHand, availableNow };
+}
+
 export interface StockFilter {
   storeId?: string;
   productId?: string;
@@ -21,6 +32,8 @@ export interface StockRow {
   brand: string | null;
   category: string | null;
   price: number | null;
+  /** Estoque mínimo do produto (nulo = usa o padrão da rede). */
+  minStock: number | null;
   /** Quantidade da última sincronização da fonte. */
   synced: number;
   /** Reservado por movimentações internas pendentes. */
@@ -98,8 +111,7 @@ export async function listStock(filter: StockFilter): Promise<{ total: number; r
 
   let rows: StockRow[] = items.map((it) => {
     const pendingDelta = deltas.get(`${it.storeId}:${it.productId}`) ?? 0;
-    const onHand = it.quantity + pendingDelta;
-    const availableNow = Math.max(onHand - it.reserved, 0);
+    const { onHand, availableNow } = computeLiveStock(it.quantity, it.reserved, pendingDelta);
     return {
       storeId: it.storeId,
       storeName: it.store.name,
@@ -109,6 +121,7 @@ export async function listStock(filter: StockFilter): Promise<{ total: number; r
       brand: it.product.brand,
       category: it.product.category,
       price: toNumber(it.product.price),
+      minStock: it.product.minStock,
       synced: it.quantity,
       reserved: it.reserved,
       pendingDelta,
