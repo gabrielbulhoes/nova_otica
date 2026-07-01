@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nova_otica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova_otica}
+      POSTGRES_DB: ${POSTGRES_DB:-nova_otica}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-nova_otica}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nova_otica}:${POSTGRES_PASSWORD:-nova_otica}@db:5432/${POSTGRES_DB:-nova_otica}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-troque-este-segredo-em-producao}
+      SELLBIE_MODE: ${SELLBIE_MODE:-mock}
+      SYNC_ON_BOOT: ${SYNC_ON_BOOT:-true}
+      WEB_ORIGIN: ${WEB_ORIGIN:-*}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@novaotica.com}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin123}
+    ports:
+      - '${APP_PORT:-3333}:3333'
+
+volumes:
+  pgdata:

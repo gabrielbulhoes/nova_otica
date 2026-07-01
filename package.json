@@ -1,0 +1,23 @@
+{
+  "name": "nova-otica",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gestão online, integrada e em tempo real de estoque para rede de óticas",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@nova-otica/api & npm run dev --workspace=@nova-otica/web",
+    "dev:api": "npm run dev --workspace=@nova-otica/api",
+    "dev:web": "npm run dev --workspace=@nova-otica/web",
+    "build": "npm run build --workspace=@nova-otica/api && npm run build --workspace=@nova-otica/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:up": "docker compose up -d db",
+    "db:migrate": "npm run prisma:migrate --workspace=@nova-otica/api",
+    "db:seed": "npm run seed --workspace=@nova-otica/api"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

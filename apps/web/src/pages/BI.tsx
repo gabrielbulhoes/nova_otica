@@ -1,0 +1,209 @@
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  getBiKpis,
+  getBiTimeseries,
+  getBiDimension,
+  getBiSalesFlow,
+  getBiTransferFlow,
+  getBiHeatmap,
+  getArStats,
+  getStores,
+  formatBRL,
+} from '../api/client';
+import { PageHeader, StatCard, Loading } from '../components/ui';
+import { EChart } from '../components/EChart';
+import {
+  barOption,
+  gaugeOption,
+  heatmapOption,
+  pieOption,
+  sankeyOption,
+  timeSeriesOption,
+} from '../bi/transforms';
+import { toCsv, downloadCsv } from '../bi/csv';
+import { useAuth } from '../auth/AuthContext';
+
+export function BI() {
+  const { isAdmin } = useAuth();
+  const [days, setDays] = useState('90');
+  const [storeId, setStoreId] = useState('');
+  const p = { days, storeId: storeId || undefined };
+
+  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
+  const kpis = useQuery({ queryKey: ['bi-kpis', days, storeId], queryFn: () => getBiKpis(p) });
+  const timeseries = useQuery({ queryKey: ['bi-ts', days, storeId], queryFn: () => getBiTimeseries(p) });
+  const byStore = useQuery({ queryKey: ['bi-store', days, storeId], queryFn: () => getBiDimension('store', p) });
+  const byPayment = useQuery({ queryKey: ['bi-pay', days, storeId], queryFn: () => getBiDimension('payment', p) });
+  const byCategory = useQuery({ queryKey: ['bi-cat', days, storeId], queryFn: () => getBiDimension('category', p) });
+  const flow = useQuery({ queryKey: ['bi-flow', days, storeId], queryFn: () => getBiSalesFlow(p) });
+  const transferFlow = useQuery({ queryKey: ['bi-transfer', days, storeId], queryFn: () => getBiTransferFlow(p) });
+  const heatmap = useQuery({ queryKey: ['bi-heat', days, storeId], queryFn: () => getBiHeatmap(p) });
+  const arStats = useQuery({ queryKey: ['ar-stats', days], queryFn: () => getArStats(Number(days)) });
+
+  const exportTimeseries = () => {
+    if (!timeseries.data) return;
+    downloadCsv(
+      `faturamento-${days}d`,
+      toCsv(timeseries.data.points, [
+        { key: 'date', label: 'Data' },
+        { key: 'total', label: 'Faturamento' },
+        { key: 'count', label: 'Vendas' },
+      ]),
+    );
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="BI — Business Intelligence"
+        subtitle="Visão analítica da rede. Vendas do ERP refletem a última sincronização (06h); estoque e movimentações são ao vivo."
+      />
+
+      <div className="toolbar">
+        <select value={days} onChange={(e) => setDays(e.target.value)}>
+          <option value="7">Últimos 7 dias</option>
+          <option value="30">Últimos 30 dias</option>
+          <option value="90">Últimos 90 dias</option>
+          <option value="180">Últimos 180 dias</option>
+        </select>
+        {isAdmin && (
+          <select value={storeId} onChange={(e) => setStoreId(e.target.value)}>
+            <option value="">Toda a rede</option>
+            {stores.data?.rows.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {kpis.isLoading || !kpis.data ? (
+        <Loading />
+      ) : (
+        <>
+          {/* KPIs numéricos */}
+          <div className="grid grid-4">
+            <StatCard label="Faturamento" value={formatBRL(kpis.data.revenue)} hint={`${kpis.data.salesCount} vendas`} />
+            <StatCard label="Ticket médio" value={formatBRL(kpis.data.avgTicket)} />
+            <StatCard label="Unidades em estoque" value={kpis.data.stockUnits.toLocaleString('pt-BR')} hint={`${kpis.data.unitsSold} vendidas no período`} />
+            <StatCard label="Transferências pendentes" value={kpis.data.pendingTransfers} />
+          </div>
+
+          {/* Gauges */}
+          <div className="grid grid-3" style={{ marginTop: 16 }}>
+            <div className="card">
+              <h3 className="section-title">Taxa de ruptura</h3>
+              <EChart option={gaugeOption(kpis.data.rupturaRate, 100, '% em ruptura', '#f06363', '%')} height={200} />
+            </div>
+            <div className="card">
+              <h3 className="section-title">Estoque baixo</h3>
+              <EChart option={gaugeOption(kpis.data.lowStockRate, 100, '% abaixo do mínimo', '#f5b73d', '%')} height={200} />
+            </div>
+            <div className="card">
+              <h3 className="section-title">Giro (proxy da rede)</h3>
+              <EChart option={gaugeOption(kpis.data.turnover, 2, 'un. vendidas / estoque', '#36c98f')} height={200} />
+            </div>
+          </div>
+
+          {/* Timeline */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <div className="row-between" style={{ marginBottom: 8 }}>
+              <h3 className="section-title" style={{ margin: 0 }}>Faturamento diário</h3>
+              <button className="btn ghost sm" onClick={exportTimeseries} disabled={!timeseries.data}>
+                ⤓ CSV
+              </button>
+            </div>
+            {timeseries.data && (
+              <EChart option={timeSeriesOption(timeseries.data.points)} height={280} exportName={`faturamento-${days}d`} />
+            )}
+          </div>
+
+          {/* Colunas + Pizza */}
+          <div className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="card">
+              <h3 className="section-title">Vendas por loja</h3>
+              {byStore.data && <EChart option={barOption(byStore.data.rows)} height={300} exportName="vendas-por-loja" />}
+            </div>
+            <div className="card">
+              <h3 className="section-title">Formas de pagamento</h3>
+              {byPayment.data && <EChart option={pieOption(byPayment.data.rows)} height={300} exportName="formas-de-pagamento" />}
+            </div>
+          </div>
+
+          {/* Sankeys: vendas e transferências */}
+          <div className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="card">
+              <h3 className="section-title">Fluxo de vendas — Categoria → Loja</h3>
+              {flow.data && flow.data.links.length > 0 ? (
+                <EChart option={sankeyOption(flow.data)} height={360} exportName="fluxo-vendas" />
+              ) : (
+                <div className="empty">Sem dados de fluxo no período.</div>
+              )}
+            </div>
+            <div className="card">
+              <h3 className="section-title">Transferências entre lojas — Origem → Destino</h3>
+              {transferFlow.data && transferFlow.data.links.length > 0 ? (
+                <EChart option={sankeyOption(transferFlow.data)} height={360} exportName="fluxo-transferencias" />
+              ) : (
+                <div className="empty">Sem transferências no período.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Colunas categoria + Heatmap */}
+          <div className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="card">
+              <h3 className="section-title">Vendas por categoria</h3>
+              {byCategory.data && <EChart option={barOption(byCategory.data.rows, '#a78bfa')} height={320} exportName="vendas-por-categoria" />}
+            </div>
+            <div className="card">
+              <h3 className="section-title">Receita por loja × dia da semana</h3>
+              {heatmap.data && heatmap.data.yLabels.length > 0 ? (
+                <EChart option={heatmapOption(heatmap.data)} height={320} exportName="heatmap-receita" />
+              ) : (
+                <div className="empty">Sem dados no período.</div>
+              )}
+            </div>
+          </div>
+
+          {/* Funil do provador virtual (AR) — sinergia BI × AR */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <h3 className="section-title">Provador virtual (AR) — provas → conversão</h3>
+            {arStats.data && arStats.data.total > 0 ? (
+              <div className="grid grid-2">
+                <div>
+                  <div className="grid grid-3">
+                    <StatCard label="Provas" value={arStats.data.total} />
+                    <StatCard label="Conversões" value={arStats.data.converted} hint="viraram carrinho/compra" />
+                    <StatCard label="Taxa" value={`${arStats.data.conversionRate}%`} />
+                  </div>
+                  <EChart
+                    option={gaugeOption(arStats.data.conversionRate, 100, 'conversão', '#36c98f', '%')}
+                    height={200}
+                  />
+                </div>
+                <div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                    Produtos mais provados
+                  </div>
+                  <EChart
+                    option={barOption(
+                      arStats.data.topProducts.map((t) => ({ label: t.description, total: t.tryOns })),
+                      '#38bdf8',
+                    )}
+                    height={280}
+                    exportName="top-provas"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="empty">Ainda sem provas registradas no período.</div>
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
