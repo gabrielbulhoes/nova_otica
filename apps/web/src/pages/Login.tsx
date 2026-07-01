@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { DEMO } from '../api/client';
 
 export function Login() {
   const { login } = useAuth();
@@ -68,7 +69,13 @@ export function Login() {
         </button>
 
         <p className="muted" style={{ fontSize: 12, marginTop: 16, marginBottom: 0 }}>
-          Demo: <strong>admin@novaotica.com</strong> / senha <strong>admin123</strong>
+          {DEMO ? (
+            <>Modo demonstração: qualquer e-mail e senha entram (sem autenticação real).</>
+          ) : (
+            <>
+              Exemplo: <strong>admin@novaotica.com</strong>
+            </>
+          )}
         </p>
       </form>
     </div>
