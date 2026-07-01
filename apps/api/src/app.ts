@@ -13,6 +13,7 @@ import { salesRouter } from './modules/sales/sales.routes.js';
 import { customersRouter } from './modules/customers/customers.routes.js';
 import { movementsRouter } from './modules/movements/movements.routes.js';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes.js';
+import { biRouter } from './modules/bi/bi.routes.js';
 import { reportsRouter } from './modules/reports/reports.routes.js';
 import { alertsRouter } from './modules/alerts/alerts.routes.js';
 import { syncRouter } from './modules/sync/sync.routes.js';
@@ -42,6 +43,7 @@ export function createApp() {
   app.use('/api/customers', customersRouter);
   app.use('/api/movements', movementsRouter);
   app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/bi', biRouter);
   app.use('/api/reports', reportsRouter);
   app.use('/api/alerts', alertsRouter);
   app.use('/api/sync', syncRouter);
