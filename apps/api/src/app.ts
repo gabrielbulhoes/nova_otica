@@ -5,6 +5,7 @@ import { env } from './config/env.js';
 import { errorMiddleware } from './http/errorMiddleware.js';
 import { requireAuth } from './modules/auth/auth.middleware.js';
 import { authRouter } from './modules/auth/auth.routes.js';
+import { streamRouter } from './modules/stream/stream.routes.js';
 import { usersRouter } from './modules/users/users.routes.js';
 import { storesRouter } from './modules/stores/stores.routes.js';
 import { productsRouter } from './modules/products/products.routes.js';
@@ -31,6 +32,9 @@ export function createApp() {
 
   // Autenticação: /login é público; /me é protegido dentro do próprio router.
   app.use('/api/auth', authRouter);
+
+  // SSE: autentica via token de query (EventSource não envia cabeçalhos).
+  app.use('/api/stream', streamRouter);
 
   // A partir daqui, toda a API exige autenticação.
   app.use('/api', requireAuth);

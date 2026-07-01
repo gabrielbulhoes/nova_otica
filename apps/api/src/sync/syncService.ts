@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
+import { publish } from '../lib/eventBus.js';
 import { getSellbieClient } from '../integrations/sellbie/index.js';
 import { checkWindow } from '../integrations/sellbie/window.js';
 import * as map from '../integrations/sellbie/mappers.js';
@@ -101,6 +102,7 @@ export async function runFullSync(trigger: Trigger = 'manual'): Promise<SyncResu
   });
 
   log.info('Sincronização concluída', { durationMs, totalRead, totalWritten, ok: !hadError });
+  publish({ type: 'sync.completed', ok: !hadError });
   return { ok: !hadError, window: win.window, durationMs, entities };
 }
 

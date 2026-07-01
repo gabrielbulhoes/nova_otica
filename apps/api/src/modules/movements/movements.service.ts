@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest, HttpError, notFound } from '../../http/helpers.js';
+import { publish } from '../../lib/eventBus.js';
 
 /** Quem está executando a ação (vem de req.user). */
 export interface Actor {
@@ -122,6 +123,7 @@ export async function createMovement(input: CreateMovementInput, actor: Actor) {
   });
 
   await recomputeReserved(input.fromStoreId);
+  publish({ type: 'movement.changed', storeId: input.fromStoreId ?? input.toStoreId, movementId: movement.id });
   return movement;
 }
 
@@ -144,6 +146,7 @@ export async function approveMovement(id: string, actor: Actor, note?: string) {
     data: { status: 'PENDING', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
   });
   await recomputeReserved(mov.fromStoreId);
+  publish({ type: 'movement.changed', storeId: mov.fromStoreId, movementId: id });
   return updated;
 }
 
@@ -154,10 +157,12 @@ export async function rejectMovement(id: string, actor: Actor, note?: string) {
   if (!mov) throw notFound('Movimentação não encontrada');
   if (mov.status !== 'REQUESTED') throw badRequest(`Movimentação não está em solicitação (${mov.status}).`);
 
-  return prisma.inventoryMovement.update({
+  const updated = await prisma.inventoryMovement.update({
     where: { id },
     data: { status: 'REJECTED', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
   });
+  publish({ type: 'movement.changed', storeId: mov.fromStoreId, movementId: id });
+  return updated;
 }
 
 /** Efetiva uma movimentação aprovada (PENDING -> CONFIRMED). */
@@ -172,6 +177,7 @@ export async function confirmMovement(id: string, actor: Actor) {
     data: { status: 'CONFIRMED', confirmedAt: new Date() },
   });
   await recomputeReserved(mov.fromStoreId);
+  publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
   return updated;
 }
 
@@ -188,6 +194,7 @@ export async function cancelMovement(id: string, actor: Actor) {
     data: { status: 'CANCELLED' },
   });
   await recomputeReserved(mov.fromStoreId);
+  publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
   return updated;
 }
 

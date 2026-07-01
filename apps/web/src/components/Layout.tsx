@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { useLiveInvalidation } from '../hooks/useLiveInvalidation';
 
 interface LinkDef {
   to: string;
@@ -24,6 +25,7 @@ const links: LinkDef[] = [
 export function Layout() {
   const { user, isAdmin, logout } = useAuth();
   const visible = links.filter((l) => !l.adminOnly || isAdmin);
+  useLiveInvalidation(); // liga o tempo real (SSE) enquanto autenticado
 
   return (
     <div className="app">
