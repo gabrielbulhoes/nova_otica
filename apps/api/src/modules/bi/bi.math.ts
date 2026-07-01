@@ -46,6 +46,42 @@ export function deriveKpis(i: KpiInputs): Kpis {
   };
 }
 
+export interface SankeyNode {
+  name: string;
+}
+export interface SankeyLink {
+  source: string;
+  target: string;
+  value: number;
+}
+
+/**
+ * Constrói nós/links de um Sankey a partir de pares (origem→destino, valor),
+ * somando duplicatas e coletando os nós únicos. Usa Map aninhado (sem
+ * separadores de string). Formato pronto para o ECharts.
+ */
+export function buildSankey(
+  pairs: { source: string; target: string; value: number }[],
+): { nodes: SankeyNode[]; links: SankeyLink[] } {
+  const bySource = new Map<string, Map<string, number>>();
+  const names = new Set<string>();
+  for (const p of pairs) {
+    if (!p.value) continue;
+    names.add(p.source);
+    names.add(p.target);
+    const targets = bySource.get(p.source) ?? new Map<string, number>();
+    targets.set(p.target, round2((targets.get(p.target) ?? 0) + p.value));
+    bySource.set(p.source, targets);
+  }
+  const links: SankeyLink[] = [];
+  for (const [source, targets] of bySource) {
+    for (const [target, value] of targets) {
+      links.push({ source, target, value });
+    }
+  }
+  return { nodes: Array.from(names).map((name) => ({ name })), links };
+}
+
 export interface DayBucket {
   date: string;
   total: number;

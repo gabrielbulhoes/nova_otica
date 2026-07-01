@@ -249,6 +249,65 @@ export const getAlerts = (params: Record<string, string | undefined>) =>
 export const setMinStock = (productId: string, minStock: number | null) =>
   api.put('/alerts/min-stock', { productId, minStock }).then((r) => r.data);
 
+// ─── BI ──────────────────────────────────────────────────────────────────────
+
+export interface BiKpis {
+  days: number;
+  revenue: number;
+  salesCount: number;
+  avgTicket: number;
+  turnover: number;
+  rupturaRate: number;
+  lowStockRate: number;
+  stockUnits: number;
+  unitsSold: number;
+  stockPositions: number;
+  outOfStock: number;
+  lowStock: number;
+  pendingTransfers: number;
+}
+
+export interface TimeseriesPoint {
+  date: string;
+  total: number;
+  count: number;
+}
+
+export interface DimensionRow {
+  key: string;
+  label: string;
+  total: number;
+  count: number;
+}
+
+export interface SalesFlow {
+  nodes: { name: string }[];
+  links: { source: string; target: string; value: number }[];
+}
+
+export interface HeatmapData {
+  xLabels: string[];
+  yLabels: string[];
+  cells: [number, number, number][];
+}
+
+type BiParams = Record<string, string | number | undefined>;
+
+export const getBiKpis = (params: BiParams) =>
+  api.get<BiKpis>('/bi/kpis', { params }).then((r) => r.data);
+export const getBiTimeseries = (params: BiParams) =>
+  api
+    .get<{ days: number; granularity: string; points: TimeseriesPoint[] }>('/bi/sales-timeseries', { params })
+    .then((r) => r.data);
+export const getBiDimension = (by: string, params: BiParams) =>
+  api
+    .get<{ by: string; rows: DimensionRow[] }>('/bi/sales-by-dimension', { params: { ...params, by } })
+    .then((r) => r.data);
+export const getBiSalesFlow = (params: BiParams) =>
+  api.get<SalesFlow>('/bi/sales-flow', { params }).then((r) => r.data);
+export const getBiHeatmap = (params: BiParams) =>
+  api.get<HeatmapData>('/bi/heatmap', { params }).then((r) => r.data);
+
 export const getSyncStatus = () => api.get<SyncStatus>('/sync/status').then((r) => r.data);
 export const runSync = () => api.post('/sync/run').then((r) => r.data);
 

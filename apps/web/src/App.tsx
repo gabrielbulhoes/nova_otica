@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { useAuth } from './auth/AuthContext';
@@ -11,6 +12,9 @@ import { Stores } from './pages/Stores';
 import { Sync } from './pages/Sync';
 import { Reports } from './pages/Reports';
 import { Alerts } from './pages/Alerts';
+
+// A página de BI carrega o ECharts (pesado) sob demanda — code-splitting.
+const BI = lazy(() => import('./pages/BI').then((m) => ({ default: m.BI })));
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
@@ -32,6 +36,14 @@ export function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route
+          path="bi"
+          element={
+            <Suspense fallback={<div className="empty">Carregando BI…</div>}>
+              <BI />
+            </Suspense>
+          }
+        />
         <Route path="estoque" element={<Stock />} />
         <Route path="produtos" element={<Products />} />
         <Route path="transferencias" element={<Movements />} />

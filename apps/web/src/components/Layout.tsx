@@ -10,6 +10,7 @@ interface LinkDef {
 
 const links: LinkDef[] = [
   { to: '/', label: 'Dashboard', end: true },
+  { to: '/bi', label: 'BI' },
   { to: '/estoque', label: 'Estoque' },
   { to: '/produtos', label: 'Produtos' },
   { to: '/transferencias', label: 'Transferências' },

@@ -1,7 +1,14 @@
 import { Router } from 'express';
 import { asyncHandler, badRequest } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
-import { getKpis, getSalesByDimension, getSalesTimeseries, type Dimension } from './bi.service.js';
+import {
+  getHeatmap,
+  getKpis,
+  getSalesByDimension,
+  getSalesFlow,
+  getSalesTimeseries,
+  type Dimension,
+} from './bi.service.js';
 
 export const biRouter = Router();
 
@@ -43,5 +50,25 @@ biRouter.get(
     }
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     res.json(await getSalesByDimension(days, by, storeId));
+  }),
+);
+
+/** GET /api/bi/sales-flow — Sankey Categoria → Loja. */
+biRouter.get(
+  '/sales-flow',
+  asyncHandler(async (req, res) => {
+    const days = parseDays(req.query.days);
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await getSalesFlow(days, storeId));
+  }),
+);
+
+/** GET /api/bi/heatmap — receita por loja × dia da semana. */
+biRouter.get(
+  '/heatmap',
+  asyncHandler(async (req, res) => {
+    const days = parseDays(req.query.days);
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await getHeatmap(days, storeId));
   }),
 );

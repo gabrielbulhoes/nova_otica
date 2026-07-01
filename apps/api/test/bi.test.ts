@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bucketSalesByDay, deriveKpis, toDayKey } from '../src/modules/bi/bi.math.js';
+import { buildSankey, bucketSalesByDay, deriveKpis, toDayKey } from '../src/modules/bi/bi.math.js';
 
 describe('deriveKpis', () => {
   it('calcula ticket médio, giro e taxas', () => {
@@ -64,5 +64,25 @@ describe('bucketSalesByDay', () => {
 
   it('toDayKey formata data local em aaaa-mm-dd', () => {
     expect(toDayKey(new Date(2024, 0, 5))).toBe('2024-01-05');
+  });
+});
+
+describe('buildSankey', () => {
+  it('soma duplicatas e preserva nomes com espaços', () => {
+    const { nodes, links } = buildSankey([
+      { source: 'Armação', target: 'Nova Ótica — São Paulo', value: 100 },
+      { source: 'Armação', target: 'Nova Ótica — São Paulo', value: 50 },
+      { source: 'Óculos de Sol', target: 'Nova Ótica — Campinas', value: 30 },
+    ]);
+    const names = nodes.map((n) => n.name).sort();
+    expect(names).toEqual(['Armação', 'Nova Ótica — Campinas', 'Nova Ótica — São Paulo', 'Óculos de Sol']);
+    const spLink = links.find((l) => l.target === 'Nova Ótica — São Paulo');
+    expect(spLink).toEqual({ source: 'Armação', target: 'Nova Ótica — São Paulo', value: 150 });
+    expect(links).toHaveLength(2);
+  });
+
+  it('ignora valores zero', () => {
+    const { links } = buildSankey([{ source: 'A', target: 'B', value: 0 }]);
+    expect(links).toHaveLength(0);
   });
 });
