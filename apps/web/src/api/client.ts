@@ -305,6 +305,8 @@ export const getBiDimension = (by: string, params: BiParams) =>
     .then((r) => r.data);
 export const getBiSalesFlow = (params: BiParams) =>
   api.get<SalesFlow>('/bi/sales-flow', { params }).then((r) => r.data);
+export const getBiTransferFlow = (params: BiParams) =>
+  api.get<SalesFlow>('/bi/transfer-flow', { params }).then((r) => r.data);
 export const getBiHeatmap = (params: BiParams) =>
   api.get<HeatmapData>('/bi/heatmap', { params }).then((r) => r.data);
 

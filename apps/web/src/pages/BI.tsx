@@ -5,6 +5,7 @@ import {
   getBiTimeseries,
   getBiDimension,
   getBiSalesFlow,
+  getBiTransferFlow,
   getBiHeatmap,
   getStores,
   formatBRL,
@@ -19,6 +20,7 @@ import {
   sankeyOption,
   timeSeriesOption,
 } from '../bi/transforms';
+import { toCsv, downloadCsv } from '../bi/csv';
 import { useAuth } from '../auth/AuthContext';
 
 export function BI() {
@@ -34,7 +36,20 @@ export function BI() {
   const byPayment = useQuery({ queryKey: ['bi-pay', days, storeId], queryFn: () => getBiDimension('payment', p) });
   const byCategory = useQuery({ queryKey: ['bi-cat', days, storeId], queryFn: () => getBiDimension('category', p) });
   const flow = useQuery({ queryKey: ['bi-flow', days, storeId], queryFn: () => getBiSalesFlow(p) });
+  const transferFlow = useQuery({ queryKey: ['bi-transfer', days, storeId], queryFn: () => getBiTransferFlow(p) });
   const heatmap = useQuery({ queryKey: ['bi-heat', days, storeId], queryFn: () => getBiHeatmap(p) });
+
+  const exportTimeseries = () => {
+    if (!timeseries.data) return;
+    downloadCsv(
+      `faturamento-${days}d`,
+      toCsv(timeseries.data.points, [
+        { key: 'date', label: 'Data' },
+        { key: 'total', label: 'Faturamento' },
+        { key: 'count', label: 'Vendas' },
+      ]),
+    );
+  };
 
   return (
     <>
@@ -92,42 +107,59 @@ export function BI() {
 
           {/* Timeline */}
           <div className="card" style={{ marginTop: 16 }}>
-            <h3 className="section-title">Faturamento diário</h3>
-            {timeseries.data && <EChart option={timeSeriesOption(timeseries.data.points)} height={280} />}
+            <div className="row-between" style={{ marginBottom: 8 }}>
+              <h3 className="section-title" style={{ margin: 0 }}>Faturamento diário</h3>
+              <button className="btn ghost sm" onClick={exportTimeseries} disabled={!timeseries.data}>
+                ⤓ CSV
+              </button>
+            </div>
+            {timeseries.data && (
+              <EChart option={timeSeriesOption(timeseries.data.points)} height={280} exportName={`faturamento-${days}d`} />
+            )}
           </div>
 
           {/* Colunas + Pizza */}
           <div className="grid grid-2" style={{ marginTop: 16 }}>
             <div className="card">
               <h3 className="section-title">Vendas por loja</h3>
-              {byStore.data && <EChart option={barOption(byStore.data.rows)} height={300} />}
+              {byStore.data && <EChart option={barOption(byStore.data.rows)} height={300} exportName="vendas-por-loja" />}
             </div>
             <div className="card">
               <h3 className="section-title">Formas de pagamento</h3>
-              {byPayment.data && <EChart option={pieOption(byPayment.data.rows)} height={300} />}
+              {byPayment.data && <EChart option={pieOption(byPayment.data.rows)} height={300} exportName="formas-de-pagamento" />}
             </div>
           </div>
 
-          {/* Sankey */}
-          <div className="card" style={{ marginTop: 16 }}>
-            <h3 className="section-title">Fluxo de vendas — Categoria → Loja</h3>
-            {flow.data && flow.data.links.length > 0 ? (
-              <EChart option={sankeyOption(flow.data)} height={360} />
-            ) : (
-              <div className="empty">Sem dados de fluxo no período.</div>
-            )}
+          {/* Sankeys: vendas e transferências */}
+          <div className="grid grid-2" style={{ marginTop: 16 }}>
+            <div className="card">
+              <h3 className="section-title">Fluxo de vendas — Categoria → Loja</h3>
+              {flow.data && flow.data.links.length > 0 ? (
+                <EChart option={sankeyOption(flow.data)} height={360} exportName="fluxo-vendas" />
+              ) : (
+                <div className="empty">Sem dados de fluxo no período.</div>
+              )}
+            </div>
+            <div className="card">
+              <h3 className="section-title">Transferências entre lojas — Origem → Destino</h3>
+              {transferFlow.data && transferFlow.data.links.length > 0 ? (
+                <EChart option={sankeyOption(transferFlow.data)} height={360} exportName="fluxo-transferencias" />
+              ) : (
+                <div className="empty">Sem transferências no período.</div>
+              )}
+            </div>
           </div>
 
           {/* Colunas categoria + Heatmap */}
           <div className="grid grid-2" style={{ marginTop: 16 }}>
             <div className="card">
               <h3 className="section-title">Vendas por categoria</h3>
-              {byCategory.data && <EChart option={barOption(byCategory.data.rows, '#a78bfa')} height={320} />}
+              {byCategory.data && <EChart option={barOption(byCategory.data.rows, '#a78bfa')} height={320} exportName="vendas-por-categoria" />}
             </div>
             <div className="card">
               <h3 className="section-title">Receita por loja × dia da semana</h3>
               {heatmap.data && heatmap.data.yLabels.length > 0 ? (
-                <EChart option={heatmapOption(heatmap.data)} height={320} />
+                <EChart option={heatmapOption(heatmap.data)} height={320} exportName="heatmap-receita" />
               ) : (
                 <div className="empty">Sem dados no período.</div>
               )}

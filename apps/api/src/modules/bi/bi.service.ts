@@ -185,6 +185,39 @@ export async function getSalesFlow(
   return buildSankey(pairs);
 }
 
+/** Sankey do fluxo de transferências entre lojas (Origem → Destino). */
+export async function getTransferFlow(
+  days: number,
+  storeId?: string,
+): Promise<{ nodes: SankeyNode[]; links: SankeyLink[] }> {
+  const start = periodStart(days);
+  const where: Prisma.InventoryMovementWhereInput = {
+    type: 'TRANSFER',
+    status: { in: ['PENDING', 'CONFIRMED', 'RECONCILED'] },
+    createdAt: { gte: start },
+    fromStoreId: { not: null },
+    toStoreId: { not: null },
+  };
+  if (storeId) where.OR = [{ fromStoreId: storeId }, { toStoreId: storeId }];
+
+  const movements = await prisma.inventoryMovement.findMany({
+    where,
+    select: {
+      quantity: true,
+      fromStore: { select: { name: true } },
+      toStore: { select: { name: true } },
+    },
+  });
+
+  // Prefixos evitam ciclos no Sankey (A→B e B→A viram nós distintos).
+  const pairs = movements.map((m) => ({
+    source: `Origem: ${m.fromStore?.name ?? '—'}`,
+    target: `Destino: ${m.toStore?.name ?? '—'}`,
+    value: m.quantity,
+  }));
+  return buildSankey(pairs);
+}
+
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 /** Heatmap de receita: Loja (linhas) × dia da semana (colunas). */

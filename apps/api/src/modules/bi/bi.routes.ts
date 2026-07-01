@@ -7,6 +7,7 @@ import {
   getSalesByDimension,
   getSalesFlow,
   getSalesTimeseries,
+  getTransferFlow,
   type Dimension,
 } from './bi.service.js';
 
@@ -60,6 +61,16 @@ biRouter.get(
     const days = parseDays(req.query.days);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     res.json(await getSalesFlow(days, storeId));
+  }),
+);
+
+/** GET /api/bi/transfer-flow — Sankey de transferências Origem → Destino. */
+biRouter.get(
+  '/transfer-flow',
+  asyncHandler(async (req, res) => {
+    const days = parseDays(req.query.days);
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await getTransferFlow(days, storeId));
   }),
 );
 
