@@ -15,6 +15,7 @@ const links: LinkDef[] = [
   { to: '/estoque', label: 'Estoque' },
   { to: '/produtos', label: 'Produtos' },
   { to: '/transferencias', label: 'Transferências' },
+  { to: '/loja', label: 'Loja online' },
   { to: '/alertas', label: 'Alertas' },
   { to: '/relatorios', label: 'Relatórios' },
   { to: '/vendas', label: 'Vendas' },

@@ -310,6 +310,89 @@ export const getBiTransferFlow = (params: BiParams) =>
 export const getBiHeatmap = (params: BiParams) =>
   api.get<HeatmapData>('/bi/heatmap', { params }).then((r) => r.data);
 
+// ─── AR (provador virtual) ───────────────────────────────────────────────────
+
+export interface ArProduct {
+  productId: string;
+  description: string;
+  brand: string | null;
+  category: string | null;
+  price: number | null;
+  assetType: 'GLB_3D' | 'OVERLAY_2D';
+  assetUrl: string;
+  available: number;
+}
+
+export interface ArAsset {
+  productId: string;
+  type: 'GLB_3D' | 'OVERLAY_2D';
+  url: string;
+  fit: Record<string, number> | null;
+  version: number;
+  product: { description: string; brand: string | null };
+}
+
+export const getArProducts = () =>
+  api.get<{ total: number; rows: ArProduct[] }>('/ar/products').then((r) => r.data);
+export const getArAsset = (productId: string) =>
+  api.get<ArAsset>(`/ar/products/${productId}/asset`).then((r) => r.data);
+export const recordTryOn = (body: { productId: string; storeId?: string; durationMs?: number; converted?: boolean }) =>
+  api.post<{ id: string }>('/ar/tryon-events', body).then((r) => r.data);
+export const getArStats = (days: number) =>
+  api
+    .get<{ days: number; total: number; converted: number; conversionRate: number; topProducts: { productId: string; description: string; tryOns: number }[] }>(
+      '/ar/stats',
+      { params: { days } },
+    )
+    .then((r) => r.data);
+
+// ─── Carrinho e pedidos ──────────────────────────────────────────────────────
+
+export interface CartItemView {
+  productId: string;
+  description: string;
+  unitPrice: number;
+  quantity: number;
+  total: number;
+  available: number;
+}
+export interface CartView {
+  cartId: string | null;
+  storeId: string | null;
+  storeName: string | null;
+  items: CartItemView[];
+  subtotal: number;
+  total: number;
+}
+export interface OrderView {
+  id: string;
+  number: string;
+  status: 'CREATED' | 'PAID' | 'FULFILLED' | 'CANCELLED' | 'REFUNDED';
+  subtotal: string | number;
+  total: string | number;
+  customerName: string | null;
+  createdAt: string;
+  paidAt: string | null;
+  store: { name: string } | null;
+  payment: { status: string; method: string | null; qrCode: string | null } | null;
+  items: { id: string; quantity: number; unitPrice: string | number; total: string | number; product: { description: string } }[];
+}
+
+export const getCart = () => api.get<CartView>('/cart').then((r) => r.data);
+export const addToCart = (body: { productId: string; storeId: string; quantity?: number }) =>
+  api.post<CartView>('/cart/items', body).then((r) => r.data);
+export const setCartQty = (productId: string, quantity: number) =>
+  api.patch<CartView>(`/cart/items/${productId}`, { quantity }).then((r) => r.data);
+export const removeFromCart = (productId: string) =>
+  api.delete<CartView>(`/cart/items/${productId}`).then((r) => r.data);
+export const clearCart = () => api.delete<CartView>('/cart').then((r) => r.data);
+
+export const checkout = (body: { method?: 'PIX' | 'CARD' | 'BOLETO'; customerName?: string }) =>
+  api.post<OrderView>('/orders', body).then((r) => r.data);
+export const payOrder = (id: string) => api.post<OrderView>(`/orders/${id}/pay`).then((r) => r.data);
+export const getOrders = () =>
+  api.get<Paged<OrderView>>('/orders').then((r) => r.data);
+
 export const getSyncStatus = () => api.get<SyncStatus>('/sync/status').then((r) => r.data);
 export const runSync = () => api.post('/sync/run').then((r) => r.data);
 

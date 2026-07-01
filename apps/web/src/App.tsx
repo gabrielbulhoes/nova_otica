@@ -12,6 +12,8 @@ import { Stores } from './pages/Stores';
 import { Sync } from './pages/Sync';
 import { Reports } from './pages/Reports';
 import { Alerts } from './pages/Alerts';
+import { Loja } from './pages/Loja';
+import { Cart } from './pages/Cart';
 
 // A página de BI carrega o ECharts (pesado) sob demanda — code-splitting.
 const BI = lazy(() => import('./pages/BI').then((m) => ({ default: m.BI })));
@@ -49,6 +51,8 @@ export function App() {
         <Route path="transferencias" element={<Movements />} />
         <Route path="alertas" element={<Alerts />} />
         <Route path="relatorios" element={<Reports />} />
+        <Route path="loja" element={<Loja />} />
+        <Route path="carrinho" element={<Cart />} />
         <Route path="vendas" element={<Sales />} />
         <Route path="lojas" element={<Stores />} />
         <Route path="sincronizacao" element={<Sync />} />
