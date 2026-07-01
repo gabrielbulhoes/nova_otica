@@ -19,7 +19,9 @@ timelines e heatmaps, respeitando o escopo por papel (rede × loja).
 
 ## 2. Critérios de aceite (nível feature)
 
-- [ ] Todo gráfico declara e exibe o **timestamp da fonte** do dado.
+- [ ] Todo gráfico declara e exibe o **timestamp da fonte** do dado, separando
+  **vendas em tempo real** (e-commerce/checkout — decisão D4) das **vendas
+  diárias do ERP** (última sync das 06h).
 - [ ] ADMIN enxerga a rede; STORE_MANAGER só a própria loja (reuso de `scopedStoreId`).
 - [ ] O painel atualiza **sem recarregar a página** quando ocorre uma
   movimentação/sync (via SSE), em ≤ 3 s.

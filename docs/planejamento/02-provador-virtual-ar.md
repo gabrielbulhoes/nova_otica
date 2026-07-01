@@ -45,20 +45,45 @@ rosto — para provar peças do **estoque** e concluir a **venda online**.
   comercial (C)** ou **app nativo (B)** — a spec do módulo isola o "provider"
   de AR atrás de uma interface, para trocar sem reescrever o resto.
 
-## 4. O gargalo real: assets 3D das armações
+## 4. O caminho crítico: assets 3D das armações — **DECISÃO: 3D total por SKU (D2)**
 
-Para "projeção **exata** de cada peça", cada SKU precisa de um **modelo 3D
-(glTF/GLB)** em escala real, com metadados de fit. **Este é o maior custo
-operacional da feature** e precisa de estratégia própria.
+Para "projeção **exata** de cada peça", cada SKU tem um **modelo 3D (glTF/GLB)**
+em escala real com metadados de fit. Como optamos por **3D total**, a produção
+de modelos para **100% do catálogo** é o **caminho crítico** da feature e vira
+uma **trilha contínua** (não um sprint único). O app degrada graciosamente:
+SKU sem modelo mostra placeholder "prova em breve" até o asset existir.
 
-### Estratégia de assets (decisão)
-- **3D por SKU** (exato): via CAD do fabricante, **fotogrametria** ou serviço
-  de **escaneamento 3D**. Preciso, porém caro/demorado por peça.
-- **Overlay 2D** (aproximado): PNG frontal da armação alinhado aos olhos.
-  Barato e cobre 100% do catálogo, mas sem vista lateral/rotação real.
-- **Recomendação — híbrido:** 3D nos **carros-chefe / mais vendidos** (curva A
-  do ABC!) e **2D** como *fallback* no restante, evoluindo a cobertura 3D com
-  base no que o BI mostrar que mais vende/prova.
+### Pipeline de ingestão de assets 3D
+```
+Fonte do modelo ─┬─ CAD do fabricante (ideal quando houver)
+                 ├─ Escaneamento 3D / fotogrametria (serviço/estúdio)
+                 └─ Modelagem manual (casos sem CAD/scan)
+      │
+      ▼
+[Normalização]  otimizar malha (Draco), padronizar eixos/escala real,
+                gerar LODs, texturas comprimidas (KTX2/Basis)
+      │
+      ▼
+[Metadados de fit]  frameWidth, bridgeWidth, templeLength, lensHeight,
+                    ponto de ancoragem, escala de referência
+      │
+      ▼
+[Validação/QA]  checagem automática (dimensões plausíveis, tamanho do
+                arquivo, orientação) + revisão visual
+      │
+      ▼
+[Publicação]  upload p/ object storage/CDN → cria `ProductAsset` (versão)
+```
+
+- **Padronização de escala** é obrigatória: modelos devem vir em milímetros
+  reais para o fit funcionar; a etapa de normalização força isso.
+- **Orçamento de performance**: Draco + KTX2 + LODs para caber no budget de
+  FPS mesmo com modelos por todo o catálogo.
+- **Governança**: `ProductAsset` versionado; processo de curadoria e reprocesso
+  quando o fabricante atualizar a peça.
+- **Priorização de produção**: começar pela **curva A do ABC** (mais vendidos),
+  usando o próprio BI para ordenar a fila de modelagem — cobertura cresce por
+  impacto de negócio, sem travar o lançamento.
 
 ### Metadados de fit (por asset)
 `frameWidth`, `bridgeWidth`, `templeLength`, `lensHeight`, ponto de ancoragem,
@@ -109,13 +134,34 @@ escala de referência — usados para dimensionar corretamente sobre o rosto.
 - Componente `<VirtualTryOn productId=… />` aberto a partir do catálogo.
 - Carregamento *lazy* (a lib de AR só entra no bundle sob demanda).
 
-## 7. Integração com estoque e venda online
+## 7. Integração com estoque e venda online — **DECISÃO: checkout completo (D4)**
 - "Provar" só aparece se `availableNow > 0` (estoque ao vivo já existente).
-- "Reservar" cria uma **reserva** (movimentação PENDING) segurando a peça.
-- "Comprar" inicia o fluxo de **venda online** (novo, escopo relacionado):
-  carrinho, checkout/pagamento, e baixa de estoque via movimentação `SALE`.
-  *→ Observação: o e-commerce completo é um épico à parte; o AR só precisa do
-  gancho de reserva/checkout.*
+- "Comprar" inicia o **e-commerce transacional completo** neste escopo:
+  carrinho → checkout → **pagamento** → baixa de estoque via movimentação `SALE`.
+
+### Épico de e-commerce (novo, decorrente de D4)
+Novos modelos Prisma e módulo `checkout`:
+- **`Cart` / `CartItem`** — carrinho por sessão/usuário, valida saldo ao vivo.
+- **`Order` / `OrderItem`** — pedido com status
+  (`CREATED → PAID → FULFILLED → CANCELLED/REFUNDED`).
+- **`Payment`** (online) — integração com **gateway** (ver abaixo), webhook de
+  confirmação, idempotência.
+- **Reserva → venda:** ao iniciar checkout, cria reserva (movimentação
+  `PENDING`) segurando a peça; ao **confirmar pagamento** (webhook), converte em
+  `SALE` (baixa efetiva) — evitando vender o mesmo item duas vezes.
+
+### Gateway de pagamento (decisão derivada — a confirmar)
+**Recomendação: Mercado Pago** (PIX + cartão + boleto; forte no Brasil; SDK
+maduro; webhooks). Alternativas: Pagar.me, Stripe, PagSeguro. A integração fica
+isolada atrás de uma interface `PaymentProvider` (trocar sem reescrever o checkout).
+
+> **Segurança/PCI:** nunca trafegar/armazenar dados de cartão no nosso backend —
+> usar *checkout/tokenização* do provedor; guardar só referências e status.
+
+### Impacto no tempo real / BI
+Pedidos e pagamentos online são **eventos em tempo real nossos** → alimentam o
+BI (funil provar→carrinho→pago) e passam a ser a **fonte de vendas em tempo
+real** (diferente das vendas do ERP, que são diárias).
 
 ## 8. Privacidade & LGPD (obrigatório)
 - Processamento de imagem **100% no dispositivo**; frames **não** sobem ao servidor.
@@ -168,8 +214,12 @@ Provider de AR isolado atrás de interface; ≥ 24 FPS no aparelho de referênci
 elegibilidade por estoque; consentimento LGPD; telemetria no BI; testes
 (unit+E2E com câmera mock) verdes; revisão de segurança/privacidade aprovada.
 
-## 12. Decisões que preciso de você
-1. **Entrega:** web-first (recomendado) × app nativo × SDK comercial?
-2. **Assets:** híbrido 3D+2D (recomendado) × só 2D (rápido/barato) × 3D total?
-3. **Venda online:** escopo agora (carrinho/checkout/pagamento) ou só
-   **reserva** no MVP e e-commerce depois?
+## 12. Decisões travadas
+1. **Entrega:** ✅ **Web-first** (MediaPipe/Jeeliz + Three.js, no app atual).
+2. **Assets:** ✅ **3D total por SKU** — pipeline de ingestão como trilha
+   contínua; degradação graciosa para SKUs sem modelo (§4).
+3. **Venda online:** ✅ **Checkout completo** — épico de e-commerce com gateway
+   de pagamento (§7).
+
+**Único ponto derivado a confirmar:** o **gateway de pagamento** (recomendo
+Mercado Pago).

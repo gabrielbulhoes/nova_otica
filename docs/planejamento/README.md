@@ -80,31 +80,44 @@ visão para não induzir a erro.
 
 ---
 
-## Roadmap consolidado (sprints de ~2 semanas)
+## Roadmap consolidado (sprints de ~2 semanas) — revisado pós-decisões
 
-| Sprint | BI Dashboard                                   | Provador AR                                          |
-| ------ | ---------------------------------------------- | ---------------------------------------------------- |
-| **S1** | Infra de agregação `/api/bi/*` + testes        | Spike de tecnologia (MediaPipe/Jeeliz) + PoC de fit  |
-| **S2** | Canal SSE + KPIs/gauges + colunas/pizza        | Modelo `ProductAsset` + pipeline de 1 SKU 3D         |
-| **S3** | Sankey de transferências + timelines + heatmap | Módulo AR web (câmera→landmarks→render) MVP 1 SKU     |
-| **S4** | Filtros, escopo por papel, export, perf        | Escala p/ catálogo + fallback 2D + LGPD/consentimento |
-| **S5** | Telemetria do AR no BI (provas/conversão)      | Fluxo provar→disponibilidade→reservar/comprar        |
-| **S6** | Hardening, cache/materialized views, QA        | Matriz de dispositivos, performance (FPS), QA        |
+Com **3D total (D2)** e **checkout completo (D4)**, o programa ganha uma trilha
+de **pipeline de assets 3D** (contínua, paralela) e um **épico de e-commerce**.
+
+| Sprint | BI Dashboard | Provador AR | E-commerce / Assets 3D |
+| ------ | ------------ | ----------- | ---------------------- |
+| **S1** | Agregação `/api/bi/*` + testes | Spike + ADR do provider | Gateway (Mercado Pago?) + **pipeline de ingestão 3D** |
+| **S2** | SSE + KPIs/gauges + colunas/pizza | `ProductAsset` + render 3D de 1 SKU | Ingestão dos primeiros SKUs (curva A) |
+| **S3** | Sankey + timelines + heatmap | Módulo AR web (câmera→landmarks→render) | Model `Order`/`Cart` + carrinho |
+| **S4** | Filtros + escopo + export + perf | Calibração (DIP/escala) + oclusão + foto | Checkout + pagamento (PIX/cartão) |
+| **S5** | Telemetria do AR no BI | Provar→disponibilidade→**comprar** | Baixa de estoque na venda + confirmação |
+| **S6** | Hardening + materialized views + QA | Matriz de dispositivos + FPS | Conciliação de pagamento + estorno |
+| **S7+**| — | Cobertura 3D do catálogo (contínua) | Fretes, cupons, pós-venda |
+
+> A produção de **3D para todos os SKUs** é um trabalho **contínuo** (trilha
+> própria), não um sprint único — o app degrada graciosamente para SKUs ainda
+> sem modelo (placeholder "em breve") enquanto a cobertura 3D cresce.
 
 Cada célula é decomposta em incrementos Qodo nos documentos de cada feature.
 
 ---
 
-## Decisões pendentes (bloqueiam o início da implementação)
+## Decisões travadas (ADR)
 
-Estas escolhas mudam materialmente o esforço e o custo — ver detalhes e
-recomendações em cada documento:
+| # | Decisão | Escolha | Implicação |
+| - | ------- | ------- | ---------- |
+| D1 | Entrega do AR | **Web-first** (MediaPipe/Jeeliz + Three.js, no app atual) | Sem app store; on-device (LGPD); menor esforço inicial |
+| D2 | Assets do AR | **3D total por SKU** | Máxima fidelidade, porém **pipeline de assets vira caminho crítico** de todo o catálogo (ver §Assets) |
+| D3 | Biblioteca de BI | **Apache ECharts** (custom) | Uma lib cobre todos os gráficos; integrada ao auth/tema/tempo real |
+| D4 | Venda online no MVP | **Checkout completo** (carrinho + pagamento + baixa) | Adiciona um **épico de e-commerce** e a escolha de **gateway de pagamento** |
+| D5 | Transporte de tempo real | **SSE + React Query** (recomendação técnica) | Simples, unidirecional; fallback de polling |
 
-1. **Entrega do AR:** web no app atual (sem instalar) × app nativo × SDK
-   comercial de ótica. → *Recomendação: web-first (MediaPipe/Jeeliz).*
-2. **Fidelidade/assets do AR:** 3D por SKU (exato, caro) × overlay 2D (barato,
-   aproximado) × híbrido. → *Recomendação: híbrido (3D nos carros-chefe, 2D no resto).*
-3. **Biblioteca de BI:** Apache ECharts (tudo-em-um) × embutir Metabase/Superset.
-   → *Recomendação: ECharts custom (controle + integração).*
-4. **Transporte de tempo real:** SSE/polling × WebSockets.
-   → *Recomendação: SSE + React Query.*
+> **Consequência de D2 + D4:** o escopo cresceu em duas frentes pesadas —
+> produção de **3D para 100% dos SKUs** e um **e-commerce transacional**. O
+> roadmap abaixo já reflete isso (sprints extras de pipeline 3D e de checkout).
+
+### Decisão derivada em aberto — gateway de pagamento (por causa de D4)
+Checkout completo exige um provedor de pagamento. **Recomendação: Mercado Pago**
+(forte no Brasil, PIX + cartão + boleto, SDK maduro) — alternativas: Pagar.me,
+Stripe, PagSeguro. *A confirmar antes do épico de e-commerce.*
