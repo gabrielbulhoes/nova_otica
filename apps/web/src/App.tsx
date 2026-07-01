@@ -13,7 +13,10 @@ import { Sales } from './pages/Sales';
 import { Stores } from './pages/Stores';
 import { Sync } from './pages/Sync';
 import { Reports } from './pages/Reports';
+import { Planning } from './pages/Planning';
 import { Alerts } from './pages/Alerts';
+import { DEMO } from './api/client';
+import { DemoBadge } from './components/DemoBadge';
 import { Loja } from './pages/Loja';
 import { ProductPage } from './pages/ProductPage';
 import { Cart } from './pages/Cart';
@@ -57,6 +60,7 @@ export function App() {
         <Route path="transferencias" element={<Movements />} />
         <Route path="alertas" element={<Alerts />} />
         <Route path="relatorios" element={<Reports />} />
+        <Route path="planejamento" element={<Planning />} />
         <Route path="vendas" element={<Sales />} />
         <Route path="lojas" element={<Stores />} />
         <Route path="sincronizacao" element={<Sync />} />
@@ -78,5 +82,14 @@ export function App() {
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+  );
+}
+
+export function AppRoot() {
+  return (
+    <>
+      <App />
+      {DEMO && <DemoBadge />}
+    </>
   );
 }

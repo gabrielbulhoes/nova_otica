@@ -8,6 +8,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# Pacote de deploy da demo (gerado; entregue fora do repositório)
+novaotica-demo-hostgator.zip
+
 # Environment
 .env
 .env.local

@@ -163,6 +163,7 @@ a {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0; /* permite que .main role em vez de estourar a janela */
   background: var(--window-solid);
 }
 .titlebar {
@@ -183,7 +184,9 @@ a {
 }
 .main {
   flex: 1 1 auto;
+  min-height: 0; /* essencial p/ o scroll interno funcionar dentro do flex */
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 24px 28px 96px;
 }
 
@@ -239,8 +242,55 @@ a {
   }
 }
 @media (max-width: 720px) {
+  /* No mobile/tablet a "janela" deixa de ter altura fixa: o documento inteiro
+     rola normalmente (a sidebar empilha em cima e não corta o conteúdo). */
+  .macos-desktop {
+    padding: 0;
+  }
   .macos-window {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    border-radius: 0;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    /* No mobile a navegação vira um cabeçalho que rola com a página (não fixo),
+       liberando toda a altura para o conteúdo. */
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+    padding: 10px 14px;
+  }
+  .sidebar .traffic {
+    display: none;
+  }
+  .sidebar .brand {
+    padding: 0 8px 0 0;
+    width: auto;
+    white-space: nowrap;
+  }
+  .sidebar .nav-link {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .sidebar > div[style] {
+    margin-top: 8px !important;
+    width: 100%;
+  }
+  .sidebar .card {
+    padding: 10px 12px !important;
+  }
+  .window-main {
+    min-height: 0;
+    overflow: visible;
+  }
+  .main {
+    overflow: visible;
+    padding: 18px 16px 40px;
   }
   .grid-4,
   .grid-3,
@@ -820,6 +870,65 @@ th.num {
 }
 @media (max-width: 720px) {
   .dock {
+    display: none;
+  }
+}
+
+/* ─── Selo de dados fictícios (demonstração) ─────────────────────────────────── */
+
+.demo-seal {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  pointer-events: auto;
+  cursor: help;
+  user-select: none;
+}
+.demo-seal strong {
+  font-weight: 700;
+}
+.demo-seal-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.22);
+  animation: demo-seal-pulse 2.4s ease-in-out infinite;
+}
+@keyframes demo-seal-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-color-scheme: dark) {
+  .demo-seal {
+    background: rgba(40, 40, 42, 0.72);
+  }
+}
+@media (max-width: 720px) {
+  .demo-seal {
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 10px;
+    font-size: 11px;
+    padding: 5px 10px;
+  }
+}
+@media print {
+  .demo-seal {
     display: none;
   }
 }

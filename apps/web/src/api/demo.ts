@@ -257,6 +257,176 @@ function cartView() {
   return { cartId: 'cart_demo', storeId: cart.storeId, storeName: storeById(cart.storeId)?.name ?? null, items, subtotal, total: subtotal };
 }
 
+// ─── Planejamento & Compras (análise preditiva) ───────────────────────────────
+// Porta compacta e determinística de apps/api/src/modules/planning/planning.math.ts
+// (mesmas constantes), para que a demo mostre os mesmos indicadores sem backend.
+
+const PLAN = { leadTimeDays: 14, safetyDays: 7, targetCoverDays: 60, overstockDays: 120, fastCoverDays: 15, slowCoverDays: 90 };
+
+/** Hash estável em [0,1) a partir de uma string (velocidade fictícia por SKU). */
+function hash01(str: string) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
+/**
+ * Demanda diária fictícia, determinística e com boa variedade por produto.
+ * Como o estoque é somado pelas 4 lojas (~12–120 un.), os perfis são calibrados
+ * para gerar os quatro cenários de recomendação (comprar/manter/não comprar/
+ * liquidar) e um mix realista de giro numa rede de óticas.
+ */
+function demoDailyDemand(p: Product) {
+  const i = Number(p.externalId) - 1000;
+  const v = hash01(`vel:${p.externalId}`); // variação intra-perfil
+  switch (((i % 5) + 5) % 5) {
+    case 0:
+      return round2(4 + v * 2.5); // alto giro → COMPRAR
+    case 1:
+      return round2(1.0 + v * 0.7); // saudável → MANTER
+    case 2:
+      return round2(0.08 + v * 0.28); // baixo giro → NÃO COMPRAR (excesso)
+    case 3:
+      return 0; // parado → LIQUIDAR
+    default:
+      return round2(0.5 + v * 0.5); // saudável/limítrofe
+  }
+}
+
+interface DemoPlan {
+  productId: string; description: string; brand: string; category: string;
+  currentStock: number; unitsSold: number; dailyDemand: number; coverageDays: number | null;
+  reorderPoint: number; targetStock: number; unitCost: number; stockValue: number; excessValue: number;
+  revenue: number; movementClass: 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
+  recommendation: 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE'; suggestedQty: number; capital: number;
+  stockoutInDays: number | null; reason: string;
+}
+
+function demoPlans(days: number, storeId?: string): DemoPlan[] {
+  const scope = storeId ? stores.filter((s) => s.id === storeId) : stores;
+  return products.map((p) => {
+    const currentStock = scope.reduce((a, s) => a + (stockQty.get(key(s.id, p.id)) ?? 0), 0);
+    const dailyDemand = demoDailyDemand(p);
+    const unitsSold = Math.round(dailyDemand * days);
+    const unitCost = round2(p.price * 0.55);
+    const coverageDays = dailyDemand > 0 ? currentStock / dailyDemand : null;
+    const reorderPoint = dailyDemand * (PLAN.leadTimeDays + PLAN.safetyDays);
+    const targetStock = dailyDemand * PLAN.targetCoverDays;
+    const stockValue = round2(currentStock * unitCost);
+    const excessValue = round2(Math.max(0, currentStock - targetStock) * unitCost);
+    const revenue = round2(unitsSold * p.price);
+
+    let movementClass: DemoPlan['movementClass'];
+    if (dailyDemand === 0) movementClass = 'DEAD';
+    else if ((coverageDays as number) < PLAN.fastCoverDays) movementClass = 'FAST';
+    else if ((coverageDays as number) <= PLAN.slowCoverDays) movementClass = 'HEALTHY';
+    else movementClass = 'SLOW';
+
+    let recommendation: DemoPlan['recommendation'];
+    let suggestedQty = 0;
+    let reason: string;
+    if (dailyDemand === 0) {
+      if (currentStock > 0) { recommendation = 'LIQUIDATE'; reason = 'Sem vendas no período — capital parado; avaliar liquidação ou remanejamento.'; }
+      else { recommendation = 'DONT_BUY'; reason = 'Sem giro e sem estoque — não repor.'; }
+    } else if (currentStock <= reorderPoint) {
+      recommendation = 'BUY';
+      suggestedQty = Math.max(1, Math.ceil(targetStock - currentStock));
+      reason = `Abaixo do ponto de reposição (${round2(reorderPoint)} un.); repor para ~${PLAN.targetCoverDays} dias de cobertura.`;
+    } else if ((coverageDays as number) > PLAN.overstockDays) {
+      recommendation = 'DONT_BUY';
+      reason = `Excesso: ${Math.round(coverageDays as number)} dias de cobertura (acima de ${PLAN.overstockDays}). Não comprar.`;
+    } else {
+      recommendation = 'HOLD';
+      reason = `Cobertura adequada (${Math.round(coverageDays as number)} dias).`;
+    }
+
+    return {
+      productId: p.id, description: p.description, brand: p.brand, category: p.category,
+      currentStock, unitsSold, dailyDemand, coverageDays: coverageDays === null ? null : Math.round(coverageDays * 10) / 10,
+      reorderPoint: Math.round(reorderPoint * 10) / 10, targetStock: Math.round(targetStock), unitCost,
+      stockValue, excessValue, revenue, movementClass, recommendation, suggestedQty,
+      capital: round2(suggestedQty * unitCost),
+      stockoutInDays: dailyDemand > 0 && currentStock <= reorderPoint ? Math.floor(coverageDays as number) : null,
+      reason,
+    };
+  });
+}
+
+function planningOverviewDemo(days: number, storeId?: string) {
+  const plans = demoPlans(days, storeId);
+  const total = round2(plans.reduce((a, p) => a + p.stockValue, 0));
+  const parked = round2(plans.filter((p) => p.movementClass === 'DEAD').reduce((a, p) => a + p.stockValue, 0));
+  const excess = round2(plans.filter((p) => p.movementClass !== 'DEAD').reduce((a, p) => a + p.excessValue, 0));
+  const idle = round2(parked + excess);
+  const healthy = round2(Math.max(0, total - idle));
+
+  const movement = { dead: 0, slow: 0, healthy: 0, fast: 0 } as Record<string, number>;
+  for (const p of plans) movement[p.movementClass.toLowerCase()] += 1;
+
+  const catMap = new Map<string, { category: string; capital: number; idle: number; units: number }>();
+  for (const p of plans) {
+    const cur = catMap.get(p.category) ?? { category: p.category, capital: 0, idle: 0, units: 0 };
+    cur.capital = round2(cur.capital + p.stockValue);
+    cur.idle = round2(cur.idle + (p.movementClass === 'DEAD' ? p.stockValue : p.excessValue));
+    cur.units += p.currentStock;
+    catMap.set(p.category, cur);
+  }
+  const byCategory = [...catMap.values()].sort((a, b) => b.capital - a.capital);
+
+  const topIdle = plans
+    .map((p) => ({ productId: p.productId, description: p.description, category: p.category, currentStock: p.currentStock, unitCost: p.unitCost, idleValue: p.movementClass === 'DEAD' ? p.stockValue : p.excessValue, coverageDays: p.coverageDays, movementClass: p.movementClass }))
+    .filter((p) => p.idleValue > 0)
+    .sort((a, b) => b.idleValue - a.idleValue)
+    .slice(0, 8);
+
+  // Pareto (80/20) por receita
+  const ranked = plans.filter((p) => p.revenue > 0).sort((a, b) => b.revenue - a.revenue);
+  const totalRevenue = round2(ranked.reduce((a, p) => a + p.revenue, 0));
+  let cum = 0, classAProducts = 0, classARevenue = 0;
+  for (const p of ranked) {
+    cum += p.revenue;
+    if (totalRevenue > 0 && (cum / totalRevenue) * 100 <= 80) { classAProducts += 1; classARevenue += p.revenue; }
+    else break;
+  }
+  if (classAProducts === 0 && ranked.length > 0) { classAProducts = 1; classARevenue = ranked[0].revenue; }
+
+  return {
+    days, currency: 'BRL',
+    capital: { total, idle, parked, excess, healthy, idlePct: total > 0 ? Math.round((idle / total) * 1000) / 10 : 0 },
+    movement,
+    pareto: {
+      totalRevenue, totalProducts: ranked.length, classAProducts,
+      classAShareOfSkus: ranked.length > 0 ? Math.round((classAProducts / ranked.length) * 1000) / 10 : 0,
+      classARevenueShare: totalRevenue > 0 ? Math.round((classARevenue / totalRevenue) * 1000) / 10 : 0,
+    },
+    topIdle, byCategory,
+  };
+}
+
+function purchaseSuggestionsDemo(days: number, storeId?: string) {
+  const plans = demoPlans(days, storeId);
+  const summary = { buy: 0, hold: 0, dontBuy: 0, liquidate: 0, buyCapital: 0, avoidedCapital: 0 };
+  for (const p of plans) {
+    if (p.recommendation === 'BUY') { summary.buy += 1; summary.buyCapital += p.capital; }
+    else if (p.recommendation === 'HOLD') summary.hold += 1;
+    else if (p.recommendation === 'DONT_BUY') { summary.dontBuy += 1; summary.avoidedCapital += p.excessValue; }
+    else { summary.liquidate += 1; summary.avoidedCapital += p.stockValue; }
+  }
+  summary.buyCapital = round2(summary.buyCapital);
+  summary.avoidedCapital = round2(summary.avoidedCapital);
+  const rank = { BUY: 0, LIQUIDATE: 1, DONT_BUY: 2, HOLD: 3 } as Record<string, number>;
+  const rows = [...plans].sort((a, b) => {
+    const r = rank[a.recommendation] - rank[b.recommendation];
+    if (r !== 0) return r;
+    if (a.recommendation === 'BUY') return (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9);
+    return b.stockValue - a.stockValue;
+  });
+  return { days, summary, rows };
+}
+
 const ADMIN_USER = { id: 'demo_admin', email: 'admin@novaotica.com', name: 'Administrador (Demo)', role: 'ADMIN', storeId: null, storeName: null };
 
 // ─── Roteador ────────────────────────────────────────────────────────────────
@@ -347,6 +517,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   // Relatórios
   if (url === '/reports/abc') return abc(days);
   if (url === '/reports/turnover') return turnover(days);
+
+  // Planejamento & Compras (análise preditiva)
+  if (url === '/planning/overview') return planningOverviewDemo(days, params.storeId || undefined);
+  if (url === '/planning/purchase-suggestions') return purchaseSuggestionsDemo(days, params.storeId || undefined);
 
   // Alertas
   if (url === '/alerts') return alerts();
