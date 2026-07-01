@@ -16,7 +16,7 @@ export function Login() {
     setLoading(true);
     try {
       await login(email.trim().toLowerCase(), password);
-      navigate('/');
+      navigate('/admin');
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
@@ -29,7 +29,12 @@ export function Login() {
 
   return (
     <div style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: 20 }}>
-      <form className="card" style={{ width: 360, maxWidth: '92vw' }} onSubmit={submit}>
+      <form className="card modal" style={{ width: 360, maxWidth: '92vw' }} onSubmit={submit}>
+        <div className="traffic" style={{ padding: '0 0 14px' }}>
+          <i className="r" />
+          <i className="y" />
+          <i className="g" />
+        </div>
         <div className="brand" style={{ padding: '0 0 6px', fontSize: 24 }}>
           Nova<span>Ótica</span>
         </div>

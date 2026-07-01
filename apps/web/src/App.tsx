@@ -1,7 +1,9 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { Layout } from './components/Layout';
+import { AdminShell } from './components/AdminShell';
+import { StoreShell } from './components/StoreShell';
 import { useAuth } from './auth/AuthContext';
+import { Launcher } from './pages/Launcher';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { Stock } from './pages/Stock';
@@ -20,7 +22,7 @@ const BI = lazy(() => import('./pages/BI').then((m) => ({ default: m.BI })));
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
-  if (loading) return <div className="empty">Carregando…</div>;
+  if (loading) return <div className="empty" style={{ paddingTop: 120 }}>Carregando…</div>;
   if (!user) return <Navigate to="/login" replace />;
   return children;
 }
@@ -28,12 +30,15 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 export function App() {
   return (
     <Routes>
+      <Route path="/" element={<Launcher />} />
       <Route path="/login" element={<Login />} />
+
+      {/* Painel administrativo (webdesk macOS) */}
       <Route
-        path="/"
+        path="/admin"
         element={
           <RequireAuth>
-            <Layout />
+            <AdminShell />
           </RequireAuth>
         }
       >
@@ -51,13 +56,25 @@ export function App() {
         <Route path="transferencias" element={<Movements />} />
         <Route path="alertas" element={<Alerts />} />
         <Route path="relatorios" element={<Reports />} />
-        <Route path="loja" element={<Loja />} />
-        <Route path="carrinho" element={<Cart />} />
         <Route path="vendas" element={<Sales />} />
         <Route path="lojas" element={<Stores />} />
         <Route path="sincronizacao" element={<Sync />} />
-        <Route path="*" element={<div className="empty">Página não encontrada.</div>} />
       </Route>
+
+      {/* Loja online (vitrine, acesso separado) */}
+      <Route
+        path="/loja"
+        element={
+          <RequireAuth>
+            <StoreShell />
+          </RequireAuth>
+        }
+      >
+        <Route index element={<Loja />} />
+        <Route path="carrinho" element={<Cart />} />
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

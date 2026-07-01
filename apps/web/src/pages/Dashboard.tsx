@@ -38,7 +38,7 @@ export function Dashboard() {
           <span className="dot amber" />
           <div>
             <strong>{alerts.data.out}</strong> ruptura(s) e <strong>{alerts.data.low}</strong> item(ns) com
-            estoque baixo. <Link to="/alertas" style={{ color: 'var(--primary)' }}>Ver alertas →</Link>
+            estoque baixo. <Link to="/admin/alertas" style={{ color: 'var(--accent)' }}>Ver alertas →</Link>
           </div>
         </div>
       )}
@@ -104,7 +104,7 @@ export function Dashboard() {
                           style={{
                             height: 8,
                             borderRadius: 4,
-                            background: 'var(--primary)',
+                            background: 'var(--accent)',
                             width: `${(s.total / maxTotal) * 100}%`,
                             minWidth: 4,
                           }}

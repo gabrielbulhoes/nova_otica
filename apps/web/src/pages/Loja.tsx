@@ -37,7 +37,7 @@ export function Loja() {
     <>
       <div className="row-between">
         <PageHeader title="Loja online" subtitle="Prove os óculos pela câmera e compre em tempo real." />
-        <Link to="/carrinho" className="btn">
+        <Link to="/loja/carrinho" className="btn">
           Carrinho ({cartCount})
         </Link>
       </div>

@@ -29,11 +29,11 @@ export function Reports() {
       <PageHeader title="Relatórios" subtitle="Curva ABC por receita e giro de estoque no período." />
 
       <div className="toolbar">
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button className={`btn ${tab === 'abc' ? '' : 'ghost'}`} onClick={() => setTab('abc')}>
+        <div className="segmented">
+          <button className={tab === 'abc' ? 'active' : ''} onClick={() => setTab('abc')}>
             Curva ABC
           </button>
-          <button className={`btn ${tab === 'turnover' ? '' : 'ghost'}`} onClick={() => setTab('turnover')}>
+          <button className={tab === 'turnover' ? 'active' : ''} onClick={() => setTab('turnover')}>
             Giro de estoque
           </button>
         </div>

@@ -102,7 +102,7 @@ export function Cart() {
       {cart.isLoading ? (
         <Loading />
       ) : items.length === 0 ? (
-        <div className="empty">Seu carrinho está vazio. <Link to="/loja" style={{ color: 'var(--primary)' }}>Ir à loja →</Link></div>
+        <div className="empty">Seu carrinho está vazio. <Link to="/loja" style={{ color: 'var(--accent)' }}>Ir à loja →</Link></div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
           <table>
