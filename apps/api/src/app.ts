@@ -17,6 +17,9 @@ import { dashboardRouter } from './modules/dashboard/dashboard.routes.js';
 import { biRouter } from './modules/bi/bi.routes.js';
 import { reportsRouter } from './modules/reports/reports.routes.js';
 import { alertsRouter } from './modules/alerts/alerts.routes.js';
+import { cartRouter } from './modules/commerce/cart.routes.js';
+import { ordersRouter } from './modules/commerce/orders.routes.js';
+import { arRouter } from './modules/ar/ar.routes.js';
 import { syncRouter } from './modules/sync/sync.routes.js';
 
 export function createApp() {
@@ -50,6 +53,9 @@ export function createApp() {
   app.use('/api/bi', biRouter);
   app.use('/api/reports', reportsRouter);
   app.use('/api/alerts', alertsRouter);
+  app.use('/api/cart', cartRouter);
+  app.use('/api/orders', ordersRouter);
+  app.use('/api/ar', arRouter);
   app.use('/api/sync', syncRouter);
 
   app.use((_req, res) => res.status(404).json({ error: 'Rota não encontrada' }));

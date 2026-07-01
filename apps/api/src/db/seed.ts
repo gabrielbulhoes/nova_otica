@@ -6,6 +6,7 @@ import { env } from '../config/env.js';
 import { runFullSync } from '../sync/syncService.js';
 import { createMovement } from '../modules/movements/movements.service.js';
 import { hashPassword } from '../modules/auth/auth.service.js';
+import { createAsset } from '../modules/ar/ar.service.js';
 
 async function seedUsers() {
   const adminEmail = env.SEED_ADMIN_EMAIL.toLowerCase();
@@ -77,6 +78,24 @@ async function main() {
       to: stores[1].name,
     });
   }
+
+  // Assets de AR de demonstração (curva A / óculos e armações com estoque).
+  const arProducts = await prisma.product.findMany({
+    where: {
+      category: { in: ['Armação', 'Óculos de Sol'] },
+      stockItems: { some: { quantity: { gt: 0 } } },
+      assets: { none: {} },
+    },
+    take: 5,
+  });
+  for (const p of arProducts) {
+    await createAsset(p.id, {
+      type: 'GLB_3D',
+      url: `https://assets.novaotica.demo/frames/${p.externalId}.glb`,
+      fit: { frameWidth: 138, bridgeWidth: 18, templeLength: 145, lensHeight: 42, scale: 1 },
+    });
+  }
+  logger.info('Seed: assets de AR de demonstração criados', { count: arProducts.length });
 
   await prisma.$disconnect();
   logger.info('Seed concluído.');
