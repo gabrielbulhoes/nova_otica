@@ -177,6 +177,55 @@ Rotas cobertas: `lojas`, `vendedores`, `cores`, `tamanhos`, `produtos`,
 
 ---
 
+## Interface (design system macOS)
+
+O frontend segue o **design system Apple/macOS (HIG)**, com **modo claro e
+escuro** (via `prefers-color-scheme`), e é dividido em duas superfícies:
+
+- **Painel administrativo (webdesk)** — `/admin/*`: janela macOS com sidebar
+  translúcida, dock e BI em tempo real (uso interno: gestores da rede/loja).
+- **Loja online** — `/loja/*`: vitrine estilo Apple Store com provador AR,
+  página de produto e carrinho (acesso separado do painel).
+- **Launcher** — `/`: escolhe entre as duas superfícies.
+
+## Publicação
+
+### Demo público (GitHub Pages)
+
+O app roda em **modo demonstração** (dados fictícios no navegador, sem backend),
+ideal para um link público. O workflow `.github/workflows/deploy-pages.yml`
+builda e publica no GitHub Pages. Para ativar (uma vez):
+
+1. **Settings → Pages → Source: GitHub Actions**.
+2. Faça merge para `main` (ou rode o workflow em **Actions → Publicar demo →
+   Run workflow**).
+
+O site fica em `https://<owner>.github.io/nova_otica/`. Rodar o build demo
+localmente:
+
+```bash
+VITE_DEMO=1 VITE_BASE=/nova_otica/ npm run build -w @nova-otica/web
+```
+
+> Segurança: o modo demo **não** expõe backend nem dados reais — por isso é o
+> caminho recomendado para acesso público. Publicar o sistema real exige
+> autenticação própria (e trocar as credenciais de seed).
+
+### Full-stack (Docker)
+
+Para hospedar o sistema real (API + Postgres + frontend servido pela própria
+API), use o `Dockerfile` e o `docker-compose.prod.yml`:
+
+```bash
+docker compose -f docker-compose.prod.yml up --build -d
+# App em http://localhost:3333  (a API serve o frontend em SERVE_WEB=true)
+```
+
+Defina `JWT_SECRET`, credenciais do Postgres e, para dados reais,
+`SELLBIE_MODE=live` + URL/credenciais da API.
+
+---
+
 ## Testes
 
 Testes unitários com Vitest cobrindo mappers, trava de janela, cálculo de

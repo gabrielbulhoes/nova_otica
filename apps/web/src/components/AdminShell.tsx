@@ -1,6 +1,15 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useLiveInvalidation } from '../hooks/useLiveInvalidation';
+
+const dockItems = [
+  { to: '/admin', icon: '🏠', label: 'Dashboard', end: true },
+  { to: '/admin/bi', icon: '📊', label: 'BI' },
+  { to: '/admin/estoque', icon: '📦', label: 'Estoque' },
+  { to: '/admin/transferencias', icon: '🔁', label: 'Transferências' },
+  { to: '/admin/alertas', icon: '🔔', label: 'Alertas' },
+  { to: '/loja', icon: '🕶️', label: 'Loja online' },
+];
 
 interface LinkDef {
   to: string;
@@ -26,6 +35,7 @@ const links: LinkDef[] = [
 export function AdminShell() {
   const { user, isAdmin, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   useLiveInvalidation();
 
   const visible = links.filter((l) => !l.adminOnly || isAdmin);
@@ -81,6 +91,22 @@ export function AdminShell() {
           <main className="main">
             <Outlet />
           </main>
+
+          <div className="dock">
+            {dockItems.map((d) => {
+              const active = d.end ? location.pathname === d.to : location.pathname.startsWith(d.to);
+              return (
+                <button
+                  key={d.to}
+                  className={active ? 'active' : ''}
+                  title={d.label}
+                  onClick={() => navigate(d.to)}
+                >
+                  {d.icon}
+                </button>
+              );
+            })}
+          </div>
         </section>
       </div>
     </div>

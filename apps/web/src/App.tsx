@@ -15,6 +15,7 @@ import { Sync } from './pages/Sync';
 import { Reports } from './pages/Reports';
 import { Alerts } from './pages/Alerts';
 import { Loja } from './pages/Loja';
+import { ProductPage } from './pages/ProductPage';
 import { Cart } from './pages/Cart';
 
 // A página de BI carrega o ECharts (pesado) sob demanda — code-splitting.
@@ -71,6 +72,7 @@ export function App() {
         }
       >
         <Route index element={<Loja />} />
+        <Route path="produto/:id" element={<ProductPage />} />
         <Route path="carrinho" element={<Cart />} />
       </Route>
 

@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -58,7 +60,19 @@ export function createApp() {
   app.use('/api/ar', arRouter);
   app.use('/api/sync', syncRouter);
 
-  app.use((_req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
+  // 404 apenas para rotas de API não encontradas.
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
+
+  // Em produção (SERVE_WEB=true), a própria API serve o build do frontend.
+  if (process.env.SERVE_WEB === 'true') {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const dist = process.env.WEB_DIST_DIR || path.resolve(here, '../../web/dist');
+    app.use(express.static(dist));
+    app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+  } else {
+    app.use((_req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
+  }
+
   app.use(errorMiddleware);
 
   return app;

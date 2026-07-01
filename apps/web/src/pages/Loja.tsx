@@ -8,6 +8,8 @@ import { VirtualTryOn } from '../ar/VirtualTryOn';
 export function Loja() {
   const qc = useQueryClient();
   const [storeId, setStoreId] = useState('');
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
   const [tryOn, setTryOn] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -16,6 +18,16 @@ export function Loja() {
   const cart = useQuery({ queryKey: ['cart'], queryFn: getCart });
 
   const effectiveStore = storeId || stores.data?.rows[0]?.id || '';
+
+  const allRows = products.data?.rows ?? [];
+  const categories = Array.from(new Set(allRows.map((p) => p.category).filter(Boolean))) as string[];
+  const rows = allRows.filter((p) => {
+    const q = search.trim().toLowerCase();
+    const matchSearch =
+      !q || p.description.toLowerCase().includes(q) || (p.brand ?? '').toLowerCase().includes(q);
+    const matchCat = !category || p.category === category;
+    return matchSearch && matchCat;
+  });
 
   const add = useMutation({
     mutationFn: (productId: string) => addToCart({ productId, storeId: effectiveStore, quantity: 1 }),
@@ -43,7 +55,20 @@ export function Loja() {
       </div>
 
       <div className="toolbar">
-        <label className="muted">Loja de retirada/estoque</label>
+        <input
+          placeholder="Buscar óculos ou marca…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ minWidth: 220 }}
+        />
+        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">Todas as categorias</option>
+          {categories.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
         <select value={effectiveStore} onChange={(e) => setStoreId(e.target.value)}>
           {stores.data?.rows.map((s) => (
             <option key={s.id} value={s.id}>
@@ -56,9 +81,9 @@ export function Loja() {
 
       {products.isLoading ? (
         <Loading />
-      ) : products.data && products.data.rows.length > 0 ? (
+      ) : rows.length > 0 ? (
         <div className="grid grid-4">
-          {products.data.rows.map((p) => (
+          {rows.map((p) => (
             <div className="card" key={p.productId}>
               <div
                 style={{
@@ -78,7 +103,9 @@ export function Loja() {
                   </g>
                 </svg>
               </div>
-              <div style={{ fontWeight: 600 }}>{p.description}</div>
+              <Link to={`/loja/produto/${p.productId}`} style={{ fontWeight: 600, color: 'var(--text)' }}>
+                {p.description}
+              </Link>
               <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
                 {p.brand ?? ''} {p.category ? `· ${p.category}` : ''}
               </div>
@@ -95,7 +122,11 @@ export function Loja() {
           ))}
         </div>
       ) : (
-        <div className="empty">Nenhum produto com provador disponível. Cadastre assets de AR.</div>
+        <div className="empty">
+          {allRows.length === 0
+            ? 'Nenhum produto com provador disponível. Cadastre assets de AR.'
+            : 'Nenhum produto encontrado com os filtros atuais.'}
+        </div>
       )}
 
       {tryOn && (

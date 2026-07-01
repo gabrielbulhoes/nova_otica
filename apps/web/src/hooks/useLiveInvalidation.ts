@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { getToken } from '../api/client';
+import { DEMO, getToken } from '../api/client';
 
 // Prefixos das queries "ao vivo" que devem refazer fetch quando algo muda.
 const LIVE_KEYS = [
@@ -27,6 +27,7 @@ export function useLiveInvalidation(): void {
   const qc = useQueryClient();
 
   useEffect(() => {
+    if (DEMO) return; // sem backend/SSE no modo demonstração
     const token = getToken();
     if (!token) return;
 

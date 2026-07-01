@@ -1,0 +1,49 @@
+name: Publicar demo (GitHub Pages)
+
+# Publica o frontend em modo demonstração (dados fictícios, sem backend) no
+# GitHub Pages. Requer, uma única vez: Settings → Pages → Source: GitHub Actions.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Instalar dependências (sem scripts)
+        run: npm ci --ignore-scripts
+      - name: Build do frontend (modo demo)
+        env:
+          VITE_DEMO: '1'
+          VITE_BASE: /nova_otica/
+        run: npm run build --workspace=@nova-otica/web
+      - name: SPA fallback (deep links)
+        run: cp apps/web/dist/index.html apps/web/dist/404.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

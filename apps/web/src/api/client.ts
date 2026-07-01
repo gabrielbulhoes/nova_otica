@@ -1,6 +1,30 @@
 import axios from 'axios';
+import { demoHandle } from './demo';
+
+/** Modo demonstração: o app roda sem backend, com dados fictícios no navegador. */
+export const DEMO = import.meta.env.VITE_DEMO === '1';
 
 export const api = axios.create({ baseURL: '/api' });
+
+if (DEMO) {
+  // Adapter que responde localmente a partir do handler de demonstração.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  api.defaults.adapter = (async (config: any) => {
+    const url: string = config.url ?? '';
+    const method: string = config.method ?? 'get';
+    const params = config.params ?? {};
+    const body = config.data ? (typeof config.data === 'string' ? JSON.parse(config.data) : config.data) : {};
+    const result = demoHandle({ method, url, params, body }) as Record<string, unknown>;
+    const status = result && typeof result === 'object' && '__status' in result ? (result.__status as number) : 200;
+    const base = { statusText: 'OK', headers: {}, config };
+    if (status >= 400) {
+      const error: any = new Error('demo error');
+      error.response = { ...base, status, data: result };
+      throw error;
+    }
+    return { ...base, status: 200, data: result };
+  }) as any;
+}
 
 // ─── Autenticação ────────────────────────────────────────────────────────────
 
@@ -334,6 +358,20 @@ export interface ArAsset {
 
 export const getArProducts = () =>
   api.get<{ total: number; rows: ArProduct[] }>('/ar/products').then((r) => r.data);
+
+export interface ProductDetail {
+  id: string;
+  externalId: string;
+  description: string;
+  brand: string | null;
+  category: string | null;
+  price: string | number | null;
+  color?: { name: string } | null;
+  size?: { name: string } | null;
+  stockItems: { quantity: number; store: { id: string; name: string } }[];
+}
+export const getProduct = (id: string) =>
+  api.get<ProductDetail>(`/products/${id}`).then((r) => r.data);
 export const getArAsset = (productId: string) =>
   api.get<ArAsset>(`/ar/products/${productId}/asset`).then((r) => r.data);
 export const recordTryOn = (body: { productId: string; storeId?: string; durationMs?: number; converted?: boolean }) =>
