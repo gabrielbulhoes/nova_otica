@@ -7,6 +7,7 @@ import {
   getBiSalesFlow,
   getBiTransferFlow,
   getBiHeatmap,
+  getArStats,
   getStores,
   formatBRL,
 } from '../api/client';
@@ -38,6 +39,7 @@ export function BI() {
   const flow = useQuery({ queryKey: ['bi-flow', days, storeId], queryFn: () => getBiSalesFlow(p) });
   const transferFlow = useQuery({ queryKey: ['bi-transfer', days, storeId], queryFn: () => getBiTransferFlow(p) });
   const heatmap = useQuery({ queryKey: ['bi-heat', days, storeId], queryFn: () => getBiHeatmap(p) });
+  const arStats = useQuery({ queryKey: ['ar-stats', days], queryFn: () => getArStats(Number(days)) });
 
   const exportTimeseries = () => {
     if (!timeseries.data) return;
@@ -164,6 +166,41 @@ export function BI() {
                 <div className="empty">Sem dados no período.</div>
               )}
             </div>
+          </div>
+
+          {/* Funil do provador virtual (AR) — sinergia BI × AR */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <h3 className="section-title">Provador virtual (AR) — provas → conversão</h3>
+            {arStats.data && arStats.data.total > 0 ? (
+              <div className="grid grid-2">
+                <div>
+                  <div className="grid grid-3">
+                    <StatCard label="Provas" value={arStats.data.total} />
+                    <StatCard label="Conversões" value={arStats.data.converted} hint="viraram carrinho/compra" />
+                    <StatCard label="Taxa" value={`${arStats.data.conversionRate}%`} />
+                  </div>
+                  <EChart
+                    option={gaugeOption(arStats.data.conversionRate, 100, 'conversão', '#36c98f', '%')}
+                    height={200}
+                  />
+                </div>
+                <div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                    Produtos mais provados
+                  </div>
+                  <EChart
+                    option={barOption(
+                      arStats.data.topProducts.map((t) => ({ label: t.description, total: t.tryOns })),
+                      '#38bdf8',
+                    )}
+                    height={280}
+                    exportName="top-provas"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="empty">Ainda sem provas registradas no período.</div>
+            )}
           </div>
         </>
       )}
