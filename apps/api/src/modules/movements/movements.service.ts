@@ -113,7 +113,9 @@ function assertActorMayCreate(input: CreateMovementInput, actor: Actor) {
  */
 async function lockStockRow(db: Db, storeId: string, productId: string): Promise<void> {
   const key = `${storeId}:${productId}`;
-  await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+  // pg_advisory_xact_lock retorna void; envelopa em SELECT 1 para o Prisma
+  // conseguir desserializar a coluna de retorno.
+  await db.$queryRaw`SELECT 1 AS locked FROM (SELECT pg_advisory_xact_lock(hashtext(${key}))) AS _lock`;
 }
 
 /**
