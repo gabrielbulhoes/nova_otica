@@ -13,6 +13,10 @@ jobs:
   # Testes unitários + typecheck + build (sem banco).
   build-test:
     runs-on: ubuntu-latest
+    # Os testes unitários não conectam ao banco, mas a validação de env exige
+    # DATABASE_URL. URL fictícia satisfaz a validação sem qualquer conexão.
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
