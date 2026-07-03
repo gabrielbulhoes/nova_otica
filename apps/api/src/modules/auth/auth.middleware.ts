@@ -44,9 +44,12 @@ export function scopedStoreId(req: Request, requested?: string): string | undefi
   return requested;
 }
 
-/** Garante que o STORE_MANAGER só opere na própria loja. */
+/**
+ * Garante que o STORE_MANAGER só opere na própria loja. Recurso sem loja
+ * (storeId nulo) é tratado como nível de rede: negado para gestor de loja.
+ */
 export function assertStoreAccess(req: Request, storeId?: string | null): void {
-  if (req.user?.role === 'STORE_MANAGER' && storeId && storeId !== req.user.storeId) {
+  if (req.user?.role === 'STORE_MANAGER' && storeId !== req.user.storeId) {
     throw new HttpError(403, 'Você só pode operar na sua própria loja');
   }
 }

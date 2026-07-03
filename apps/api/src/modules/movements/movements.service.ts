@@ -175,20 +175,27 @@ export async function approveMovement(id: string, actor: Actor, note?: string) {
   if (!mov) throw notFound('Movimentação não encontrada');
   if (mov.status !== 'REQUESTED') throw badRequest(`Movimentação não está em solicitação (${mov.status}).`);
 
-  if (mov.fromStoreId) {
-    const available = await availableAt(mov.fromStoreId, mov.productId);
-    if (mov.quantity > available) {
-      throw badRequest(`Saldo insuficiente na origem para aprovar (disponível: ${available}).`);
+  await prisma.$transaction(async (tx) => {
+    if (mov.fromStoreId) {
+      // Mesmo chokepoint de concorrência das reservas: valida o saldo sob lock,
+      // senão aprovar em paralelo com um checkout do último item causa oversell.
+      await lockStockRow(tx, mov.fromStoreId, mov.productId);
+      const available = await availableAt(mov.fromStoreId, mov.productId, tx);
+      if (mov.quantity > available) {
+        throw badRequest(`Saldo insuficiente na origem para aprovar (disponível: ${available}).`);
+      }
     }
-  }
-
-  const updated = await prisma.inventoryMovement.update({
-    where: { id },
-    data: { status: 'PENDING', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
+    // Guarda de status atômica: evita aprovar duas vezes uma mesma solicitação.
+    const res = await tx.inventoryMovement.updateMany({
+      where: { id, status: 'REQUESTED' },
+      data: { status: 'PENDING', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
+    });
+    if (res.count === 0) throw badRequest('Solicitação não está mais em aberto (concorrência).');
   });
+
   await recomputeReserved(mov.fromStoreId);
   publish({ type: 'movement.changed', storeId: mov.fromStoreId, movementId: id });
-  return updated;
+  return prisma.inventoryMovement.findUnique({ where: { id } });
 }
 
 /** ADMIN rejeita uma solicitação (REQUESTED -> REJECTED). */

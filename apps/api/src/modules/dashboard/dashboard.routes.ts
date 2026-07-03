@@ -100,7 +100,9 @@ dashboardRouter.get(
 dashboardRouter.get(
   '/low-stock',
   asyncHandler(async (req, res) => {
-    const threshold = Number(req.query.threshold) || 3;
+    // Aceita threshold=0 (só produtos zerados); usa 3 apenas quando ausente/inválido.
+    const rawThreshold = Number(req.query.threshold);
+    const threshold = Number.isFinite(rawThreshold) && rawThreshold >= 0 ? rawThreshold : 3;
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     const grouped = await prisma.stockItem.groupBy({
       by: ['productId'],

@@ -18,16 +18,16 @@ customersRouter.get(
   asyncHandler(async (req, res) => {
     const { limit, page, skip } = parsePaging(req.query);
     const search = req.query.search as string | undefined;
+    const isAdmin = req.user?.role === 'ADMIN';
 
-    const where: Prisma.CustomerWhereInput = search
-      ? {
-          OR: [
-            { name: { contains: search, mode: 'insensitive' } },
-            { document: { contains: search } },
-            { email: { contains: search, mode: 'insensitive' } },
-          ],
-        }
-      : {};
+    // Busca por documento (CPF/CNPJ) é exclusiva do ADMIN — do contrário a
+    // busca por substring contornaria a máscara e permitiria enumerar CPFs.
+    const or: Prisma.CustomerWhereInput[] = [
+      { name: { contains: search ?? '', mode: 'insensitive' } },
+      { email: { contains: search ?? '', mode: 'insensitive' } },
+    ];
+    if (isAdmin && search) or.push({ document: { contains: search } });
+    const where: Prisma.CustomerWhereInput = search ? { OR: or } : {};
 
     const [total, rows] = await Promise.all([
       prisma.customer.count({ where }),

@@ -1,11 +1,13 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { prisma } from '../src/lib/prisma.js';
 import {
+  approveMovement,
   availableAt,
   confirmMovement,
   createMovement,
   type Actor,
 } from '../src/modules/movements/movements.service.js';
+import { cancelOrder, checkout } from '../src/modules/commerce/checkout.service.js';
 
 /**
  * Testes de concorrência REAIS (precisam de um PostgreSQL). Rodam apenas quando
@@ -65,6 +67,74 @@ describe.skipIf(!RUN)('concorrência de estoque (integração com Postgres)', ()
     expect(ok).toBe(1);
     const fresh = await prisma.inventoryMovement.findUnique({ where: { id: mov.id } });
     expect(fresh?.status).toBe('CONFIRMED');
+    await prisma.inventoryMovement.deleteMany({ where: { productId, fromStoreId: storeId } });
+  });
+
+  it('aprovar transferência sob lock não causa oversell vs reserva concorrente', async () => {
+    const store2 = (await prisma.store.findMany({ take: 2 }))[1];
+    const { storeId, productId } = await scenario(1);
+    const manager: Actor = { id: 'system-test', role: 'STORE_MANAGER', storeId };
+    // Transferência REQUESTED (criada por gestor de loja) consumindo a última un.
+    const transfer = await createMovement(
+      { type: 'TRANSFER', productId, fromStoreId: storeId, toStoreId: store2.id, quantity: 1 },
+      manager,
+    );
+    // Aprovar a transferência corre com uma venda da mesma última unidade.
+    const results = await Promise.allSettled([
+      approveMovement(transfer.id, SYSTEM),
+      createMovement({ type: 'SALE', productId, fromStoreId: storeId, quantity: 1, confirm: false }, SYSTEM),
+    ]);
+    const ok = results.filter((r) => r.status === 'fulfilled').length;
+    expect(ok).toBe(1);
+    expect(await availableAt(storeId, productId)).toBe(0);
+    await prisma.inventoryMovement.deleteMany({
+      where: { productId, OR: [{ fromStoreId: storeId }, { toStoreId: storeId }] },
+    });
+  });
+
+  it('duplo checkout do mesmo carrinho gera apenas 1 pedido/reserva', async () => {
+    const { storeId, productId } = await scenario(5);
+    const user = await prisma.user.upsert({
+      where: { email: 'concurrency-test@local' },
+      create: { email: 'concurrency-test@local', name: 'Teste', passwordHash: 'x', role: 'ADMIN' },
+      update: {},
+    });
+    await prisma.order.deleteMany({ where: { userId: user.id } });
+    await prisma.cart.deleteMany({ where: { userId: user.id } });
+    await prisma.cart.create({
+      data: { userId: user.id, storeId, status: 'OPEN', items: { create: [{ productId, quantity: 1 }] } },
+    });
+
+    const results = await Promise.allSettled([checkout(user.id, {}), checkout(user.id, {})]);
+    const ok = results.filter((r) => r.status === 'fulfilled').length;
+    expect(ok).toBe(1); // o 2º vê o carrinho já CONVERTED e falha
+    expect(await availableAt(storeId, productId)).toBe(4); // reservado só 1× (não 2×)
+
+    await prisma.order.deleteMany({ where: { userId: user.id } });
+    await prisma.cart.deleteMany({ where: { userId: user.id } });
+    await prisma.inventoryMovement.deleteMany({ where: { productId, fromStoreId: storeId } });
+  });
+
+  it('cancelar pedido libera a reserva de estoque', async () => {
+    const { storeId, productId } = await scenario(5);
+    const user = await prisma.user.upsert({
+      where: { email: 'concurrency-test@local' },
+      create: { email: 'concurrency-test@local', name: 'Teste', passwordHash: 'x', role: 'ADMIN' },
+      update: {},
+    });
+    await prisma.order.deleteMany({ where: { userId: user.id } });
+    await prisma.cart.deleteMany({ where: { userId: user.id } });
+    await prisma.cart.create({
+      data: { userId: user.id, storeId, status: 'OPEN', items: { create: [{ productId, quantity: 2 }] } },
+    });
+
+    const order = await checkout(user.id, {});
+    expect(await availableAt(storeId, productId)).toBe(3); // 5 - 2 reservados
+    await cancelOrder(order.id);
+    expect(await availableAt(storeId, productId)).toBe(5); // reserva liberada
+
+    await prisma.order.deleteMany({ where: { userId: user.id } });
+    await prisma.cart.deleteMany({ where: { userId: user.id } });
     await prisma.inventoryMovement.deleteMany({ where: { productId, fromStoreId: storeId } });
   });
 });

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { asyncHandler, parsePaging } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
 import type { Actor } from '../movements/movements.service.js';
-import { checkout, confirmPayment, getOrderView, listOrders } from './checkout.service.js';
+import { cancelOrder, checkout, confirmPayment, getOrderView, listOrders } from './checkout.service.js';
 
 export const ordersRouter = Router();
 
@@ -52,5 +52,13 @@ ordersRouter.post(
   '/:id/pay',
   asyncHandler(async (req, res) => {
     res.json(await confirmPayment(req.params.id, actorOf(req)));
+  }),
+);
+
+/** POST /api/orders/:id/cancel — cancela o pedido e libera as reservas. */
+ordersRouter.post(
+  '/:id/cancel',
+  asyncHandler(async (req, res) => {
+    res.json(await cancelOrder(req.params.id, actorOf(req)));
   }),
 );
