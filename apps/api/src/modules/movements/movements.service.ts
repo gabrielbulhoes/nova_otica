@@ -1,8 +1,11 @@
 import { z } from 'zod';
-import type { Role } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest, HttpError, notFound } from '../../http/helpers.js';
 import { publish } from '../../lib/eventBus.js';
+
+/** Cliente Prisma ou cliente de transação — permite reuso dentro de $transaction. */
+type Db = Prisma.TransactionClient | typeof prisma;
 
 /** Quem está executando a ação (vem de req.user). */
 export interface Actor {
@@ -47,24 +50,36 @@ async function ensureRefs(input: CreateMovementInput) {
   }
 }
 
-/** Saldo disponível ao vivo na loja de origem (synced + delta confirmado - reservado). */
-export async function availableAt(storeId: string, productId: string): Promise<number> {
-  const item = await prisma.stockItem.findUnique({
+/**
+ * Saldo disponível ao vivo na loja de origem:
+ *   synced + (entradas confirmadas − saídas confirmadas) − reservas PENDENTES.
+ * Usa a agregação AO VIVO das reservas PENDING (não o campo denormalizado
+ * `reserved`), para que a validação enxergue reservas concorrentes já gravadas
+ * e o controle de concorrência (advisory lock) funcione de fato.
+ */
+export async function availableAt(storeId: string, productId: string, db: Db = prisma): Promise<number> {
+  const item = await db.stockItem.findUnique({
     where: { storeId_productId: { storeId, productId } },
   });
   const synced = item?.quantity ?? 0;
-  const reserved = item?.reserved ?? 0;
 
-  const inbound = await prisma.inventoryMovement.aggregate({
-    where: { status: 'CONFIRMED', toStoreId: storeId, productId },
-    _sum: { quantity: true },
-  });
-  const outbound = await prisma.inventoryMovement.aggregate({
-    where: { status: 'CONFIRMED', fromStoreId: storeId, productId },
-    _sum: { quantity: true },
-  });
-  const delta = (inbound._sum.quantity ?? 0) - (outbound._sum.quantity ?? 0);
-  return synced + delta - reserved;
+  const [inbound, outbound, pending] = await Promise.all([
+    db.inventoryMovement.aggregate({
+      where: { status: 'CONFIRMED', toStoreId: storeId, productId },
+      _sum: { quantity: true },
+    }),
+    db.inventoryMovement.aggregate({
+      where: { status: 'CONFIRMED', fromStoreId: storeId, productId },
+      _sum: { quantity: true },
+    }),
+    db.inventoryMovement.aggregate({
+      where: { status: 'PENDING', fromStoreId: storeId, productId },
+      _sum: { quantity: true },
+    }),
+  ]);
+  const confirmedDelta = (inbound._sum.quantity ?? 0) - (outbound._sum.quantity ?? 0);
+  const reserved = pending._sum.quantity ?? 0;
+  return synced + confirmedDelta - reserved;
 }
 
 /**
@@ -91,15 +106,30 @@ function assertActorMayCreate(input: CreateMovementInput, actor: Actor) {
   }
 }
 
-export async function createMovement(input: CreateMovementInput, actor: Actor) {
-  await ensureRefs(input);
-  assertActorMayCreate(input, actor);
+/**
+ * Trava concorrente as reservas do mesmo (loja, produto) por meio de um advisory
+ * lock transacional do Postgres — auto-liberado no commit/rollback. Duas reservas
+ * simultâneas do último item passam a ser serializadas (evita oversell).
+ */
+async function lockStockRow(db: Db, storeId: string, productId: string): Promise<void> {
+  const key = `${storeId}:${productId}`;
+  await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+}
 
-  const status = decideInitialStatus(input, actor);
-
+/**
+ * Cria a movimentação DENTRO de uma transação, validando o saldo sob lock.
+ * Reutilizável pelo checkout (que abre a própria transação).
+ */
+export async function createMovementTx(
+  db: Db,
+  input: CreateMovementInput,
+  status: 'REQUESTED' | 'PENDING' | 'CONFIRMED',
+  createdBy: string,
+) {
   // Só valida saldo quando a movimentação já vai reservar/efetivar agora.
   if (input.fromStoreId && status !== 'REQUESTED') {
-    const available = await availableAt(input.fromStoreId, input.productId);
+    await lockStockRow(db, input.fromStoreId, input.productId);
+    const available = await availableAt(input.fromStoreId, input.productId, db);
     if (input.quantity > available) {
       throw badRequest(
         `Saldo insuficiente na origem (disponível: ${available}, solicitado: ${input.quantity}).`,
@@ -107,7 +137,7 @@ export async function createMovement(input: CreateMovementInput, actor: Actor) {
     }
   }
 
-  const movement = await prisma.inventoryMovement.create({
+  return db.inventoryMovement.create({
     data: {
       type: input.type,
       status,
@@ -117,10 +147,19 @@ export async function createMovement(input: CreateMovementInput, actor: Actor) {
       quantity: input.quantity,
       reason: input.reason ?? null,
       reference: input.reference ?? null,
-      createdBy: actor.id,
+      createdBy,
       confirmedAt: status === 'CONFIRMED' ? new Date() : null,
     },
   });
+}
+
+export async function createMovement(input: CreateMovementInput, actor: Actor) {
+  await ensureRefs(input);
+  assertActorMayCreate(input, actor);
+
+  const status = decideInitialStatus(input, actor);
+
+  const movement = await prisma.$transaction((tx) => createMovementTx(tx, input, status, actor.id));
 
   await recomputeReserved(input.fromStoreId);
   publish({ type: 'movement.changed', storeId: input.fromStoreId ?? input.toStoreId, movementId: movement.id });
@@ -165,6 +204,19 @@ export async function rejectMovement(id: string, actor: Actor, note?: string) {
   return updated;
 }
 
+/**
+ * Efetiva PENDING -> CONFIRMED com guarda de status atômica (updateMany
+ * condicional): impede confirmar duas vezes ou confirmar algo já cancelado.
+ * Reutilizável pelo checkout dentro da sua transação.
+ */
+export async function confirmMovementTx(db: Db, id: string): Promise<void> {
+  const res = await db.inventoryMovement.updateMany({
+    where: { id, status: 'PENDING' },
+    data: { status: 'CONFIRMED', confirmedAt: new Date() },
+  });
+  if (res.count === 0) throw badRequest('Movimentação não está mais pendente (concorrência).');
+}
+
 /** Efetiva uma movimentação aprovada (PENDING -> CONFIRMED). */
 export async function confirmMovement(id: string, actor: Actor) {
   const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
@@ -172,13 +224,10 @@ export async function confirmMovement(id: string, actor: Actor) {
   if (mov.status !== 'PENDING') throw badRequest(`Movimentação não está pendente (${mov.status}).`);
   assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
-  const updated = await prisma.inventoryMovement.update({
-    where: { id },
-    data: { status: 'CONFIRMED', confirmedAt: new Date() },
-  });
+  await confirmMovementTx(prisma, id);
   await recomputeReserved(mov.fromStoreId);
   publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
-  return updated;
+  return prisma.inventoryMovement.findUnique({ where: { id } });
 }
 
 /** Cancela uma movimentação ainda não efetivada/reconciliada. */
@@ -189,13 +238,16 @@ export async function cancelMovement(id: string, actor: Actor) {
     throw badRequest('Movimentação já efetivada/reconciliada não pode ser cancelada.');
   assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
-  const updated = await prisma.inventoryMovement.update({
-    where: { id },
+  // Guarda de status: só cancela o que ainda não foi efetivado/reconciliado.
+  const res = await prisma.inventoryMovement.updateMany({
+    where: { id, status: { notIn: ['CONFIRMED', 'RECONCILED', 'CANCELLED'] } },
     data: { status: 'CANCELLED' },
   });
+  if (res.count === 0) throw badRequest('Movimentação não pode mais ser cancelada (concorrência).');
+
   await recomputeReserved(mov.fromStoreId);
   publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
-  return updated;
+  return prisma.inventoryMovement.findUnique({ where: { id } });
 }
 
 /** STORE_MANAGER só controla movimentações que envolvem a sua loja. */
@@ -208,7 +260,7 @@ function assertActorControls(fromStoreId: string | null, toStoreId: string | nul
 }
 
 /** Recalcula a reserva (saídas PENDING) de uma loja específica. */
-async function recomputeReserved(storeId?: string | null) {
+export async function recomputeReserved(storeId?: string | null) {
   if (!storeId) return;
   const grouped = await prisma.inventoryMovement.groupBy({
     by: ['productId'],

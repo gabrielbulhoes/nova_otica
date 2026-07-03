@@ -2,7 +2,12 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest, HttpError, notFound, toNumber } from '../../http/helpers.js';
 import { publish } from '../../lib/eventBus.js';
-import { confirmMovement, createMovement, type Actor } from '../movements/movements.service.js';
+import {
+  confirmMovementTx,
+  createMovementTx,
+  recomputeReserved,
+  type Actor,
+} from '../movements/movements.service.js';
 import { getPaymentProvider, type PaymentMethod } from './payment.provider.js';
 import { computeOrderTotals, lineTotal } from './commerce.math.js';
 
@@ -60,64 +65,75 @@ export async function checkout(
   });
   if (!cart || cart.items.length === 0) throw badRequest('Carrinho vazio.');
 
-  const lines = cart.items.map((it) => {
-    const unitPrice = toNumber(it.product.price) ?? 0;
-    return { productId: it.productId, quantity: it.quantity, unitPrice, total: lineTotal(unitPrice, it.quantity) };
-  });
+  // Ordena por produto: locks sempre adquiridos na mesma ordem (anti-deadlock).
+  const lines = cart.items
+    .map((it) => {
+      const unitPrice = toNumber(it.product.price) ?? 0;
+      return { productId: it.productId, quantity: it.quantity, unitPrice, total: lineTotal(unitPrice, it.quantity) };
+    })
+    .sort((a, b) => a.productId.localeCompare(b.productId));
   const { subtotal, total } = computeOrderTotals(lines);
 
-  const order = await prisma.order.create({
-    data: {
-      number: genOrderNumber(),
-      userId,
-      storeId: cart.storeId,
-      customerName: opts.customerName ?? null,
-      status: 'CREATED',
-      subtotal,
-      total,
-      items: {
-        create: lines.map((l) => ({
-          productId: l.productId,
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          total: l.total,
-        })),
-      },
-    },
-    include: { items: true },
-  });
-
-  // Reserva de estoque por item (SALE PENDING). createMovement revalida o saldo.
-  for (const item of order.items) {
-    const movement = await createMovement(
-      {
-        type: 'SALE',
-        productId: item.productId,
-        fromStoreId: cart.storeId,
-        quantity: item.quantity,
-        reference: order.number,
-        confirm: false,
-      },
-      SYSTEM,
-    );
-    await prisma.orderItem.update({ where: { id: item.id }, data: { movementId: movement.id } });
-  }
-
+  // Intent de pagamento fora da transação (no gateway real é I/O de rede).
   const provider = getPaymentProvider();
-  const intent = await provider.createPayment({ orderNumber: order.number, amount: total, method: opts.method });
-  await prisma.onlinePayment.create({
-    data: {
-      orderId: order.id,
-      provider: provider.name,
-      method: intent.method,
-      status: 'PENDING',
-      amount: total,
-      externalId: intent.externalId,
-      qrCode: intent.qrCode ?? null,
-    },
+  const orderNumber = genOrderNumber();
+  const intent = await provider.createPayment({ orderNumber, amount: total, method: opts.method });
+
+  // Transação única: pedido + reservas (com validação de saldo sob lock) +
+  // pagamento + baixa do carrinho. Falha em qualquer passo reverte tudo.
+  const order = await prisma.$transaction(async (tx) => {
+    const stillOpen = await tx.cart.findFirst({ where: { id: cart.id, status: 'OPEN' } });
+    if (!stillOpen) throw badRequest('Carrinho já finalizado.');
+
+    const created = await tx.order.create({
+      data: {
+        number: orderNumber,
+        userId,
+        storeId: cart.storeId,
+        customerName: opts.customerName ?? null,
+        status: 'CREATED',
+        subtotal,
+        total,
+        items: {
+          create: lines.map((l) => ({
+            productId: l.productId,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            total: l.total,
+          })),
+        },
+      },
+      include: { items: true },
+    });
+
+    // Reserva por item (SALE PENDING) validando saldo sob advisory lock.
+    for (const l of lines) {
+      const orderItem = created.items.find((i) => i.productId === l.productId && !i.movementId);
+      const movement = await createMovementTx(
+        tx,
+        { type: 'SALE', productId: l.productId, fromStoreId: cart.storeId, quantity: l.quantity, reference: orderNumber, confirm: false },
+        'PENDING',
+        SYSTEM.id,
+      );
+      if (orderItem) await tx.orderItem.update({ where: { id: orderItem.id }, data: { movementId: movement.id } });
+    }
+
+    await tx.onlinePayment.create({
+      data: {
+        orderId: created.id,
+        provider: provider.name,
+        method: intent.method,
+        status: 'PENDING',
+        amount: total,
+        externalId: intent.externalId,
+        qrCode: intent.qrCode ?? null,
+      },
+    });
+    await tx.cart.update({ where: { id: cart.id }, data: { status: 'CONVERTED' } });
+    return created;
   });
 
-  await prisma.cart.update({ where: { id: cart.id }, data: { status: 'CONVERTED' } });
+  await recomputeReserved(cart.storeId);
   publish({ type: 'order.changed', storeId: cart.storeId, orderId: order.id });
 
   return getOrderView(order.id);
@@ -144,19 +160,20 @@ export async function confirmPayment(orderId: string, actor?: Actor) {
     throw badRequest('Pagamento recusado pelo provedor.');
   }
 
-  await prisma.onlinePayment.update({ where: { orderId }, data: { status: 'APPROVED' } });
-  await prisma.order.update({ where: { id: orderId }, data: { status: 'PAID', paidAt: new Date() } });
-
-  // Efetiva as reservas → baixa de estoque ao vivo.
-  for (const item of order.items) {
-    if (!item.movementId) continue;
-    try {
-      await confirmMovement(item.movementId, SYSTEM);
-    } catch {
-      // reserva já confirmada/cancelada — ignora (idempotência).
+  // Transação: efetiva a baixa de estoque ANTES de marcar PAID. Se a baixa
+  // falhar, tudo reverte — o pedido não fica PAID sem a baixa correspondente.
+  await prisma.$transaction(async (tx) => {
+    for (const item of order.items) {
+      if (!item.movementId) continue;
+      const mov = await tx.inventoryMovement.findUnique({ where: { id: item.movementId } });
+      // Idempotente: só confirma o que ainda está reservado (PENDING).
+      if (mov && mov.status === 'PENDING') await confirmMovementTx(tx, item.movementId);
     }
-  }
+    await tx.onlinePayment.update({ where: { orderId }, data: { status: 'APPROVED' } });
+    await tx.order.update({ where: { id: orderId }, data: { status: 'PAID', paidAt: new Date() } });
+  });
 
+  await recomputeReserved(order.storeId);
   publish({ type: 'order.changed', storeId: order.storeId, orderId });
   return getOrderView(orderId);
 }
