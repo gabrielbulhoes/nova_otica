@@ -2,12 +2,11 @@ import { Router } from 'express';
 import { prisma } from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
 import { asyncHandler } from '../../http/helpers.js';
+import { requireRole } from '../auth/auth.middleware.js';
 import { checkWindow } from '../../integrations/sellbie/window.js';
 import { runFullSync } from '../../sync/syncService.js';
 
 export const syncRouter = Router();
-
-let manualRunning = false;
 
 /** GET /api/sync/status — estado da integração e da janela de uso. */
 syncRouter.get(
@@ -30,19 +29,17 @@ syncRouter.get(
   }),
 );
 
-/** POST /api/sync/run — dispara uma sincronização manual. */
+/** POST /api/sync/run — dispara uma sincronização manual (somente ADMIN). */
 syncRouter.post(
   '/run',
+  requireRole('ADMIN'),
   asyncHandler(async (_req, res) => {
-    if (manualRunning) {
+    // O controle de concorrência (evitar sync manual e agendado simultâneos)
+    // vive em runFullSync via um lock compartilhado; aqui apenas repassamos.
+    const result = await runFullSync('manual');
+    if (result.skipped) {
       return res.status(409).json({ error: 'Já existe uma sincronização em andamento.' });
     }
-    manualRunning = true;
-    try {
-      const result = await runFullSync('manual');
-      return res.status(result.ok ? 200 : 207).json(result);
-    } finally {
-      manualRunning = false;
-    }
+    return res.status(result.ok ? 200 : 207).json(result);
   }),
 );

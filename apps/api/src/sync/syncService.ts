@@ -12,16 +12,36 @@ export interface SyncResult {
   window: string;
   durationMs: number;
   entities: Record<string, { read: number; written: number; error?: string }>;
+  /** true quando o sync foi ignorado por já haver outro em andamento. */
+  skipped?: boolean;
 }
 
 type Trigger = 'schedule' | 'boot' | 'manual';
+
+/** Lock compartilhado por TODOS os gatilhos (agendado, boot e manual). */
+let syncRunning = false;
 
 /**
  * Executa a sincronização completa com a fonte (Sellbie). Idempotente:
  * faz upsert por `externalId`. A ordem respeita as dependências de FK.
  * Ao final, reconcilia as movimentações internas pendentes.
+ *
+ * Um único lock em memória impede execuções concorrentes (manual + agendada).
  */
 export async function runFullSync(trigger: Trigger = 'manual'): Promise<SyncResult> {
+  if (syncRunning) {
+    log.warn('Sync já em execução; ignorando gatilho', { trigger });
+    return { ok: false, skipped: true, window: '', durationMs: 0, entities: {} };
+  }
+  syncRunning = true;
+  try {
+    return await runFullSyncInner(trigger);
+  } finally {
+    syncRunning = false;
+  }
+}
+
+async function runFullSyncInner(trigger: Trigger): Promise<SyncResult> {
   const startedAt = Date.now();
   const client = getSellbieClient();
   const win = checkWindow();
@@ -79,8 +99,16 @@ export async function runFullSync(trigger: Trigger = 'manual'): Promise<SyncResu
   await track('saleItems', () => syncSaleItems(client));
   await track('payments', () => syncPayments(client));
 
-  // 5) Reconciliação das movimentações internas
-  await track('reconcile', () => reconcileMovements());
+  // 5) Reconciliação das movimentações internas.
+  // Só reconcilia se o estoque foi sincronizado com sucesso — do contrário os
+  // deltas confirmados seriam descartados contra uma base de estoque velha,
+  // corrompendo o saldo ao vivo.
+  if (entities.stock && !entities.stock.error) {
+    await track('reconcile', () => reconcileMovements());
+  } else {
+    log.warn('Reconciliação pulada: sincronização de estoque falhou ou não ocorreu');
+    entities.reconcile = { read: 0, written: 0, error: 'pulada: sync de estoque falhou' };
+  }
 
   const hadError = Object.values(entities).some((e) => e.error);
   const durationMs = Date.now() - startedAt;

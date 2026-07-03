@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
-import { badRequest, notFound, toNumber } from '../../http/helpers.js';
+import { badRequest, HttpError, notFound, toNumber } from '../../http/helpers.js';
 import { publish } from '../../lib/eventBus.js';
 import { confirmMovement, createMovement, type Actor } from '../movements/movements.service.js';
 import { getPaymentProvider, type PaymentMethod } from './payment.provider.js';
@@ -17,12 +17,32 @@ function genOrderNumber(): string {
   return `NO-${ts}-${rand}`;
 }
 
-export async function getOrderView(orderId: string) {
+/**
+ * Regra pura de autorização de acesso a um pedido: ADMIN vê tudo; STORE_MANAGER
+ * só vê pedidos da própria loja; o comprador vê o próprio pedido. Sem actor =
+ * uso interno (sistema), sempre permitido.
+ */
+export function canAccessOrder(
+  order: { storeId: string | null; userId: string | null },
+  actor?: Actor,
+): boolean {
+  if (!actor || actor.role === 'ADMIN') return true;
+  const ownsStore = !!order.storeId && order.storeId === actor.storeId;
+  const ownsOrder = !!order.userId && order.userId === actor.id;
+  return ownsStore || ownsOrder;
+}
+
+function assertOrderAccess(order: { storeId: string | null; userId: string | null }, actor?: Actor) {
+  if (!canAccessOrder(order, actor)) throw new HttpError(403, 'Acesso negado a este pedido.');
+}
+
+export async function getOrderView(orderId: string, actor?: Actor) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: { items: { include: { product: true } }, payment: true, store: true },
   });
   if (!order) throw notFound('Pedido não encontrado');
+  assertOrderAccess(order, actor);
   return order;
 }
 
@@ -107,12 +127,13 @@ export async function checkout(
  * Confirma o pagamento (simula o webhook do gateway): aprova, marca o pedido
  * como PAGO e efetiva as reservas (baixa de estoque). Idempotente.
  */
-export async function confirmPayment(orderId: string) {
+export async function confirmPayment(orderId: string, actor?: Actor) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: { items: true, payment: true },
   });
   if (!order) throw notFound('Pedido não encontrado');
+  assertOrderAccess(order, actor);
   if (order.status === 'PAID') return getOrderView(orderId);
   if (!order.payment) throw badRequest('Pedido sem pagamento associado.');
 

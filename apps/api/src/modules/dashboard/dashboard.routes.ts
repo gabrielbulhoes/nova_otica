@@ -1,15 +1,25 @@
 import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, toNumber } from '../../http/helpers.js';
+import { scopedStoreId } from '../auth/auth.middleware.js';
 
 export const dashboardRouter = Router();
 
-/** GET /api/dashboard/summary — indicadores gerais da rede. */
+/** GET /api/dashboard/summary — indicadores (escopo por loja p/ gestor de loja). */
 dashboardRouter.get(
   '/summary',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const since = new Date();
     since.setDate(since.getDate() - 30);
+
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    const stockWhere: Prisma.StockItemWhereInput = storeId ? { storeId } : {};
+    const salesWhere: Prisma.SaleWhereInput = { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) };
+    const pendingWhere: Prisma.InventoryMovementWhereInput = {
+      status: { in: ['REQUESTED', 'PENDING'] },
+      ...(storeId ? { OR: [{ fromStoreId: storeId }, { toStoreId: storeId }] } : {}),
+    };
 
     const [
       stores,
@@ -20,16 +30,16 @@ dashboardRouter.get(
       pendingMovements,
       lastSync,
     ] = await Promise.all([
-      prisma.store.count(),
+      storeId ? Promise.resolve(1) : prisma.store.count(),
       prisma.product.count(),
       prisma.customer.count(),
-      prisma.stockItem.aggregate({ _sum: { quantity: true } }),
+      prisma.stockItem.aggregate({ where: stockWhere, _sum: { quantity: true } }),
       prisma.sale.aggregate({
-        where: { saleDate: { gte: since } },
+        where: salesWhere,
         _sum: { total: true },
         _count: true,
       }),
-      prisma.inventoryMovement.count({ where: { status: { in: ['REQUESTED', 'PENDING'] } } }),
+      prisma.inventoryMovement.count({ where: pendingWhere }),
       prisma.syncRun.findFirst({ orderBy: { startedAt: 'desc' } }),
     ]);
 
@@ -59,13 +69,14 @@ dashboardRouter.get(
 /** GET /api/dashboard/sales-by-store — total de vendas (30d) por loja. */
 dashboardRouter.get(
   '/sales-by-store',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const since = new Date();
     since.setDate(since.getDate() - 30);
 
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     const grouped = await prisma.sale.groupBy({
       by: ['storeId'],
-      where: { saleDate: { gte: since } },
+      where: { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) },
       _sum: { total: true },
       _count: true,
     });
@@ -90,8 +101,10 @@ dashboardRouter.get(
   '/low-stock',
   asyncHandler(async (req, res) => {
     const threshold = Number(req.query.threshold) || 3;
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     const grouped = await prisma.stockItem.groupBy({
       by: ['productId'],
+      where: storeId ? { storeId } : {},
       _sum: { quantity: true },
     });
     const low = grouped

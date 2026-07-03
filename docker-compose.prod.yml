@@ -21,13 +21,15 @@ services:
       db:
         condition: service_healthy
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: postgresql://${POSTGRES_USER:-nova_otica}:${POSTGRES_PASSWORD:-nova_otica}@db:5432/${POSTGRES_DB:-nova_otica}?schema=public
-      JWT_SECRET: ${JWT_SECRET:-troque-este-segredo-em-producao}
+      # Sem defaults inseguros: o compose falha se estes não forem definidos.
+      JWT_SECRET: ${JWT_SECRET:?defina um JWT_SECRET forte (>= 24 caracteres)}
+      WEB_ORIGIN: ${WEB_ORIGIN:?defina WEB_ORIGIN com origens explícitas (sem "*")}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?defina uma SEED_ADMIN_PASSWORD própria}
       SELLBIE_MODE: ${SELLBIE_MODE:-mock}
       SYNC_ON_BOOT: ${SYNC_ON_BOOT:-true}
-      WEB_ORIGIN: ${WEB_ORIGIN:-*}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@novaotica.com}
-      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin123}
     ports:
       - '${APP_PORT:-3333}:3333'
 

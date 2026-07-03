@@ -37,7 +37,43 @@ const schema = z.object({
   SYNC_ON_BOOT: boolish.default('false'),
 });
 
-const parsed = schema.safeParse(process.env);
+// Valores inseguros que NÃO podem ir para produção com o default.
+const INSECURE_JWT_SECRET = 'dev-secret-change-me';
+const INSECURE_ADMIN_PASSWORD = 'admin123';
+
+const schemaWithProdGuards = schema.superRefine((v, ctx) => {
+  if (v.NODE_ENV !== 'production') return;
+  if (v.JWT_SECRET === INSECURE_JWT_SECRET || v.JWT_SECRET.length < 24) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['JWT_SECRET'],
+      message: 'Em produção, defina um JWT_SECRET forte (>= 24 caracteres, não o padrão).',
+    });
+  }
+  if (v.SEED_ADMIN_PASSWORD === INSECURE_ADMIN_PASSWORD) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['SEED_ADMIN_PASSWORD'],
+      message: 'Em produção, defina uma SEED_ADMIN_PASSWORD própria (não o padrão).',
+    });
+  }
+  if (v.WEB_ORIGIN.trim() === '*' || v.WEB_ORIGIN.includes('*')) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['WEB_ORIGIN'],
+      message: 'Em produção, WEB_ORIGIN deve listar origens explícitas (sem "*").',
+    });
+  }
+  if (v.SELLBIE_MODE === 'live' && !v.SELLBIE_BASE_URL) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['SELLBIE_BASE_URL'],
+      message: 'SELLBIE_MODE=live exige SELLBIE_BASE_URL configurada.',
+    });
+  }
+});
+
+const parsed = schemaWithProdGuards.safeParse(process.env);
 
 if (!parsed.success) {
   const issues = parsed.error.issues

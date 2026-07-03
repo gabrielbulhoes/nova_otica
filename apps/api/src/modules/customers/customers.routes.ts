@@ -1,9 +1,16 @@
 import { Router } from 'express';
-import type { Prisma } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
 
 export const customersRouter = Router();
+
+/** Oculta o documento (CPF/CNPJ) para quem não é ADMIN — expõe só os 3 finais. */
+export function maskDocument(doc: string | null, role?: Role): string | null {
+  if (!doc || role === 'ADMIN') return doc;
+  const digits = doc.replace(/\D/g, '');
+  return digits.length <= 3 ? '***' : `***${digits.slice(-3)}`;
+}
 
 /** GET /api/customers — clientes com busca por nome/documento. */
 customersRouter.get(
@@ -32,7 +39,8 @@ customersRouter.get(
         skip,
       }),
     ]);
-    res.json({ total, page, limit, rows });
+    const masked = rows.map((r) => ({ ...r, document: maskDocument(r.document, req.user?.role) }));
+    res.json({ total, page, limit, rows: masked });
   }),
 );
 
@@ -47,6 +55,6 @@ customersRouter.get(
       },
     });
     if (!customer) throw notFound('Cliente não encontrado');
-    res.json(customer);
+    res.json({ ...customer, document: maskDocument(customer.document, req.user?.role) });
   }),
 );
