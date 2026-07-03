@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import type { Request } from 'express';
 import { canAccessOrder } from '../src/modules/commerce/checkout.service.js';
 import { maskDocument } from '../src/modules/customers/customers.routes.js';
+import { scopedStoreWhere } from '../src/modules/auth/auth.middleware.js';
 import type { Actor } from '../src/modules/movements/movements.service.js';
 
 const admin: Actor = { id: 'u_admin', role: 'ADMIN', storeId: null };
@@ -40,5 +42,21 @@ describe('maskDocument', () => {
   it('trata nulo e documentos curtos', () => {
     expect(maskDocument(null, 'STORE_MANAGER')).toBeNull();
     expect(maskDocument('12', 'STORE_MANAGER')).toBe('***');
+  });
+});
+
+describe('scopedStoreWhere', () => {
+  const asReq = (user: unknown) => ({ user }) as unknown as Request;
+
+  it('ADMIN não filtra (vê todas as lojas)', () => {
+    expect(scopedStoreWhere(asReq({ role: 'ADMIN', storeId: null }))).toBeUndefined();
+  });
+
+  it('STORE_MANAGER filtra pela própria loja', () => {
+    expect(scopedStoreWhere(asReq({ role: 'STORE_MANAGER', storeId: 'st_a' }))).toEqual({ storeId: 'st_a' });
+  });
+
+  it('STORE_MANAGER sem loja recebe filtro impossível (nega tudo)', () => {
+    expect(scopedStoreWhere(asReq({ role: 'STORE_MANAGER', storeId: null }))).toEqual({ storeId: '__none__' });
   });
 });
