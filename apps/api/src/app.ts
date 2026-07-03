@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { env } from './config/env.js';
+import { prisma } from './lib/prisma.js';
 import { errorMiddleware } from './http/errorMiddleware.js';
 import { requireAuth } from './modules/auth/auth.middleware.js';
 import { authRouter } from './modules/auth/auth.routes.js';
@@ -32,8 +33,14 @@ export function createApp() {
   app.use(cors({ origin: env.WEB_ORIGIN.split(',').map((o) => o.trim()) }));
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'nova-otica-api', mode: env.SELLBIE_MODE });
+  // Readiness probe: confirma que a API responde E o banco está acessível.
+  app.get('/health', async (_req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ status: 'ok', service: 'nova-otica-api', mode: env.SELLBIE_MODE, db: 'up' });
+    } catch {
+      res.status(503).json({ status: 'degraded', service: 'nova-otica-api', mode: env.SELLBIE_MODE, db: 'down' });
+    }
   });
 
   // Autenticação: /login é público; /me é protegido dentro do próprio router.
