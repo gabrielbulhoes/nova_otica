@@ -14,6 +14,9 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().positive().default(3333),
   WEB_ORIGIN: z.string().default('http://localhost:5173'),
+  // Nº de proxies reversos confiáveis à frente da API (0 = nenhum). Necessário
+  // para que req.ip reflita o cliente real por trás de Nginx/Ingress/ELB.
+  TRUST_PROXY: z.coerce.number().int().nonnegative().default(0),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatório'),
 

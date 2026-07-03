@@ -27,4 +27,12 @@ describe('rateLimit', () => {
     expect(((await run(mw, { ip: 'a' })) as { status?: number }).status).toBe(429);
     expect(await run(mw, { ip: 'b' })).toBeUndefined();
   });
+
+  it('permanece estável sob alta cardinalidade de chaves (cota rígida)', async () => {
+    // Mais chaves distintas que o teto interno: não deve lançar nem degradar.
+    const mw = rateLimit({ windowMs: 60_000, max: 1, key: (r) => r.ip ?? '' });
+    for (let i = 0; i < 12_000; i += 1) {
+      expect(await run(mw, { ip: `ip-${i}` })).toBeUndefined();
+    }
+  });
 });

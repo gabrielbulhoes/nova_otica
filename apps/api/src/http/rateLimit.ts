@@ -6,6 +6,9 @@ interface Bucket {
   resetAt: number;
 }
 
+/** Cota rígida de chaves para conter uso de memória (DoS por alta cardinalidade). */
+const MAX_BUCKETS = 10_000;
+
 /**
  * Limitador de taxa simples em memória (janela fixa). Suficiente para conter
  * força-bruta de login numa instância única. Em produção com múltiplas
@@ -22,9 +25,15 @@ export function rateLimit(opts: {
   return (req, _res, next) => {
     const now = Date.now();
 
-    // Limpeza oportunista para não crescer sem limite.
-    if (buckets.size > 5000) {
+    // Cota rígida: primeiro remove expirados; se ainda exceder o teto, evicta os
+    // mais antigos (o Map preserva a ordem de inserção). Garante limite superior.
+    if (buckets.size >= MAX_BUCKETS) {
       for (const [k, b] of buckets) if (b.resetAt <= now) buckets.delete(k);
+      while (buckets.size >= MAX_BUCKETS) {
+        const oldest = buckets.keys().next().value;
+        if (oldest === undefined) break;
+        buckets.delete(oldest);
+      }
     }
 
     const key = opts.key ? opts.key(req) : req.ip ?? 'unknown';

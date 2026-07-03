@@ -29,6 +29,10 @@ import { syncRouter } from './modules/sync/sync.routes.js';
 export function createApp() {
   const app = express();
 
+  // Atrás de reverse proxy, faz req.ip refletir o cliente real (usado pelo
+  // rate-limit do login). Configurável por TRUST_PROXY (0 = não confia).
+  app.set('trust proxy', env.TRUST_PROXY);
+
   app.use(helmet());
   app.use(cors({ origin: env.WEB_ORIGIN.split(',').map((o) => o.trim()) }));
   app.use(express.json({ limit: '1mb' }));

@@ -22,8 +22,17 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p "$BACKUP_DIR"
 FILE="$BACKUP_DIR/nova-otica-$STAMP.dump"
 
+# Autenticação não-interativa (para cron/CI): use DATABASE_URL completo OU
+# POSTGRES_PASSWORD; sem nenhum dos dois, cai no ~/.pgpass. Assim o pg_dump
+# nunca fica travado esperando senha.
+[ -n "${POSTGRES_PASSWORD:-}" ] && export PGPASSWORD="$POSTGRES_PASSWORD"
+
 echo "Gerando backup em $FILE…"
-pg_dump -h "$PGHOST" -U "$PGUSER" -Fc "$PGDB" > "$FILE"
+if [ -n "${DATABASE_URL:-}" ]; then
+  pg_dump -Fc "$DATABASE_URL" > "$FILE"
+else
+  pg_dump -h "$PGHOST" -U "$PGUSER" -Fc "$PGDB" > "$FILE"
+fi
 
 echo "Expurgando backups com mais de $RETENTION_DAYS dias…"
 find "$BACKUP_DIR" -name 'nova-otica-*.dump' -type f -mtime +"$RETENTION_DAYS" -delete
