@@ -20,8 +20,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    // Permite ao dev-server ler o módulo compartilhado fora de apps/web.
-    fs: { allow: ['..', '../..'] },
+    // Sem fs.allow manual: o Vite já detecta a raiz do monorepo (workspaces)
+    // como diretório permitido, o que cobre tanto o módulo compartilhado
+    // (@planning em apps/api) quanto os node_modules içados na raiz. Restringir
+    // a apps/web quebraria o dev-server (as deps ficam na raiz do repo).
     proxy: {
       '/api': { target: API_TARGET, changeOrigin: true },
       '/health': { target: API_TARGET, changeOrigin: true },
