@@ -3,6 +3,14 @@
  * Permite publicar o app como site estático (ex.: GitHub Pages) sem backend
  * nem banco. Ativado por VITE_DEMO=1; nenhum dado real é usado.
  */
+import {
+  analyzeProduct,
+  buildOverview,
+  buildRebalance,
+  buildSuggestions,
+  DEFAULT_PLANNING_CONFIG,
+  type StoreProductInput,
+} from '@planning';
 
 const CATEGORIAS = ['Armação', 'Óculos de Sol', 'Lente', 'Acessório', 'Estojo'];
 const MARCAS = ['Ray-Ban', 'Oakley', 'Chilli Beans', 'Hoya', 'Bulget', 'Atitude'];
@@ -69,6 +77,31 @@ const stockQty = new Map<string, number>();
 for (const st of stores) for (const p of products) stockQty.set(`${st.id}:${p.id}`, r() < 0.12 ? int(0, 2) : int(3, 30));
 const reserved = new Map<string, number>();
 const key = (s: string, p: string) => `${s}:${p}`;
+
+// Vendas por loja×produto no período (base do planejamento/redistribuição)
+const soldQty = new Map<string, number>();
+for (const st of stores) for (const p of products) soldQty.set(key(st.id, p.id), r() < 0.25 ? 0 : int(0, 24));
+// Posições-vitrine determinísticas: garantem exemplos claros de redistribuição
+// (vende muito e falta em SP; parado em BH) em qualquer seed.
+soldQty.set(key(stores[0].id, products[0].id), 36);
+stockQty.set(key(stores[0].id, products[0].id), 3);
+soldQty.set(key(stores[3].id, products[0].id), 0);
+stockQty.set(key(stores[3].id, products[0].id), 18);
+soldQty.set(key(stores[1].id, products[5].id), 20);
+stockQty.set(key(stores[1].id, products[5].id), 2);
+soldQty.set(key(stores[2].id, products[5].id), 0);
+stockQty.set(key(stores[2].id, products[5].id), 14);
+// Falta na rede inteira (transferir não resolve): compra urgente com prazo.
+for (const st of stores) {
+  soldQty.set(key(st.id, products[2].id), 15);
+  stockQty.set(key(st.id, products[2].id), 2);
+}
+
+// Prazos por fornecedor (marca) editáveis na demo
+const demoLeadTimes = new Map<string, number>([
+  [MARCAS[0], 30],
+  [MARCAS[1], 7],
+]);
 
 // Produtos com provador (AR) — os de Armação / Óculos de Sol
 const arProductIds = products.filter((p) => p.category === 'Armação' || p.category === 'Óculos de Sol').map((p) => p.id);
@@ -347,6 +380,67 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   // Relatórios
   if (url === '/reports/abc') return abc(days);
   if (url === '/reports/turnover') return turnover(days);
+
+  // Planejamento & Compras (reusa a matemática do backend via @planning)
+  const cfgForBrand = (brand: string | null) =>
+    brand !== null && demoLeadTimes.has(brand)
+      ? { ...DEFAULT_PLANNING_CONFIG, leadTimeDays: demoLeadTimes.get(brand)! }
+      : DEFAULT_PLANNING_CONFIG;
+  const planningPlans = (period: number, storeId?: string) => {
+    const scope = storeId ? stores.filter((s) => s.id === storeId) : stores;
+    return products.map((prod) =>
+      analyzeProduct(
+        {
+          productId: prod.id,
+          description: prod.description,
+          brand: prod.brand,
+          category: prod.category,
+          unitsSold: scope.reduce((a, s) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
+          currentStock: scope.reduce((a, s) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
+          unitCost: round2(prod.price * 0.55),
+          unitPrice: prod.price,
+        },
+        period,
+        cfgForBrand(prod.brand),
+      ),
+    );
+  };
+  const planDays = Number(params.days) || 90;
+  if (url === '/planning/overview') return buildOverview(planningPlans(planDays, params.storeId), planDays);
+  if (url === '/planning/purchase-suggestions')
+    return buildSuggestions(planningPlans(planDays, params.storeId), planDays);
+  if (url === '/planning/rebalance') {
+    const inputs: StoreProductInput[] = [];
+    for (const s of stores)
+      for (const prod of products)
+        inputs.push({
+          storeId: s.id,
+          storeName: s.name,
+          productId: prod.id,
+          description: prod.description,
+          brand: prod.brand,
+          unitsSold: soldQty.get(key(s.id, prod.id)) ?? 0,
+          currentStock: stockQty.get(key(s.id, prod.id)) ?? 0,
+        });
+    return buildRebalance(inputs, planDays, cfgForBrand);
+  }
+  if (url === '/planning/suppliers' && m === 'GET')
+    return {
+      defaultLeadTimeDays: DEFAULT_PLANNING_CONFIG.leadTimeDays,
+      rows: MARCAS.map((brand) => ({
+        brand,
+        leadTimeDays: demoLeadTimes.get(brand) ?? null,
+        products: products.filter((x) => x.brand === brand).length,
+        isDefault: !demoLeadTimes.has(brand),
+      })),
+    };
+  if (url === '/planning/suppliers' && m === 'PUT') {
+    const brand = String(body.brand ?? '');
+    const lt = body.leadTimeDays;
+    if (lt === null) demoLeadTimes.delete(brand);
+    else demoLeadTimes.set(brand, Number(lt));
+    return { brand, leadTimeDays: lt };
+  }
 
   // Alertas
   if (url === '/alerts') return alerts();

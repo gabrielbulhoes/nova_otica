@@ -885,3 +885,49 @@ th.num {
     display: none;
   }
 }
+
+/* ─── Planejamento: central de ações ("O que fazer hoje") ─────────────────── */
+
+.action-center {
+  margin-top: 4px;
+}
+.action-card {
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  border-left: 4px solid var(--border-strong, var(--border));
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.action-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+}
+.action-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.action-card .action-count {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+.action-card .action-label {
+  font-weight: 600;
+  font-size: 13.5px;
+  margin-top: 2px;
+}
+.action-card .hint {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+.action-card.red { border-left-color: var(--red); }
+.action-card.red .action-count { color: var(--red); }
+.action-card.green { border-left-color: var(--green); }
+.action-card.green .action-count { color: var(--green); }
+.action-card.blue { border-left-color: var(--accent); }
+.action-card.blue .action-count { color: var(--accent); }
+.action-card.amber { border-left-color: var(--amber); }
+.action-card.amber .action-count { color: var(--amber); }

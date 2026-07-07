@@ -304,6 +304,19 @@ model InventoryMovement {
   @@index([createdAt])
 }
 
+// ─── Planejamento & Compras ──────────────────────────────────────────────────
+
+/// Prazo de ressuprimento por fornecedor (mapeado pela marca do produto).
+/// Usado no planejamento para calcular o ponto de reposição e o prazo-limite
+/// do pedido de cada item ("pedir até"). Sem registro, vale o prazo padrão.
+model SupplierSetting {
+  id           String   @id @default(cuid())
+  brand        String   @unique
+  leadTimeDays Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 // ─── Auditoria de sincronização ──────────────────────────────────────────────
 
 enum SyncStatus {
