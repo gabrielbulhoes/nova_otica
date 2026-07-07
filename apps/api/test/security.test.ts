@@ -68,6 +68,28 @@ describe('scopedStoreId', () => {
   });
 });
 
+describe('canReceive (escopo dos eventos SSE)', async () => {
+  const { canReceive } = await import('../src/modules/stream/stream.routes.js');
+
+  it('ADMIN recebe eventos de qualquer loja', () => {
+    expect(canReceive({ type: 'movement.changed', storeId: 'loja-2' }, { role: 'ADMIN', storeId: null })).toBe(true);
+  });
+
+  it('STORE_MANAGER recebe só eventos da própria loja', () => {
+    const viewer = { role: 'STORE_MANAGER' as const, storeId: 'loja-1' };
+    expect(canReceive({ type: 'order.changed', storeId: 'loja-1' }, viewer)).toBe(true);
+    expect(canReceive({ type: 'order.changed', storeId: 'loja-2' }, viewer)).toBe(false);
+  });
+
+  it('eventos sem loja (sync) são globais', () => {
+    expect(canReceive({ type: 'sync.completed', ok: true }, { role: 'STORE_MANAGER', storeId: 'loja-1' })).toBe(true);
+  });
+
+  it('STORE_MANAGER sem loja não recebe eventos de loja (fail closed)', () => {
+    expect(canReceive({ type: 'movement.changed', storeId: 'loja-1' }, { role: 'STORE_MANAGER', storeId: null })).toBe(false);
+  });
+});
+
 describe('parseDays (janela limitada)', () => {
   it('aceita valores válidos e trunca decimais', () => {
     expect(parseDays('30')).toBe(30);

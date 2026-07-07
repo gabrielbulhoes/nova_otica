@@ -94,7 +94,24 @@ function assertActorMayCreate(input: CreateMovementInput, actor: Actor) {
   }
 }
 
-export async function createMovement(input: CreateMovementInput, actor: Actor, db: Db = prisma) {
+/**
+ * Serializa validações/gravações concorrentes na mesma posição de estoque
+ * (loja × produto) via advisory lock transacional do Postgres: o lock vale
+ * até o commit e faz o check-then-insert de saldo enxergar inserções
+ * concorrentes, evitando over-reservation.
+ */
+async function lockStockPosition(db: Db, storeId: string, productId: string): Promise<void> {
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${storeId} || ':' || ${productId}))`;
+}
+
+export async function createMovement(input: CreateMovementInput, actor: Actor, db?: Db) {
+  // A validação de saldo + criação precisam ser atômicas; sem transação
+  // externa, abre uma própria para o advisory lock ter efeito.
+  if (!db) return prisma.$transaction((tx) => createMovementIn(input, actor, tx));
+  return createMovementIn(input, actor, db);
+}
+
+async function createMovementIn(input: CreateMovementInput, actor: Actor, db: Db) {
   await ensureRefs(input, db);
   assertActorMayCreate(input, actor);
 
@@ -102,6 +119,7 @@ export async function createMovement(input: CreateMovementInput, actor: Actor, d
 
   // Só valida saldo quando a movimentação já vai reservar/efetivar agora.
   if (input.fromStoreId && status !== 'REQUESTED') {
+    await lockStockPosition(db, input.fromStoreId, input.productId);
     const available = await availableAt(input.fromStoreId, input.productId, db);
     if (input.quantity > available) {
       throw badRequest(
@@ -133,23 +151,31 @@ export async function createMovement(input: CreateMovementInput, actor: Actor, d
 /** ADMIN aprova uma solicitação (REQUESTED -> PENDING). Revalida o saldo. */
 export async function approveMovement(id: string, actor: Actor, note?: string) {
   if (actor.role !== 'ADMIN') throw new HttpError(403, 'Apenas a rede (ADMIN) aprova transferências.');
-  const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
-  if (!mov) throw notFound('Movimentação não encontrada');
-  if (mov.status !== 'REQUESTED') throw badRequest(`Movimentação não está em solicitação (${mov.status}).`);
 
-  if (mov.fromStoreId) {
-    const available = await availableAt(mov.fromStoreId, mov.productId);
-    if (mov.quantity > available) {
-      throw badRequest(`Saldo insuficiente na origem para aprovar (disponível: ${available}).`);
+  // Transação + lock da posição: a revalidação de saldo não pode correr em
+  // paralelo com outras reservas/aprovações do mesmo (loja, produto).
+  const { updated, fromStoreId } = await prisma.$transaction(async (tx) => {
+    const mov = await tx.inventoryMovement.findUnique({ where: { id } });
+    if (!mov) throw notFound('Movimentação não encontrada');
+    if (mov.status !== 'REQUESTED') throw badRequest(`Movimentação não está em solicitação (${mov.status}).`);
+
+    if (mov.fromStoreId) {
+      await lockStockPosition(tx, mov.fromStoreId, mov.productId);
+      const available = await availableAt(mov.fromStoreId, mov.productId, tx);
+      if (mov.quantity > available) {
+        throw badRequest(`Saldo insuficiente na origem para aprovar (disponível: ${available}).`);
+      }
     }
-  }
 
-  const updated = await prisma.inventoryMovement.update({
-    where: { id },
-    data: { status: 'PENDING', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
+    const row = await tx.inventoryMovement.update({
+      where: { id },
+      data: { status: 'PENDING', approvedBy: actor.id, approvedAt: new Date(), decisionNote: note ?? null },
+    });
+    await recomputeReserved(mov.fromStoreId, tx);
+    return { updated: row, fromStoreId: mov.fromStoreId };
   });
-  await recomputeReserved(mov.fromStoreId);
-  publish({ type: 'movement.changed', storeId: mov.fromStoreId, movementId: id });
+
+  publish({ type: 'movement.changed', storeId: fromStoreId, movementId: id });
   return updated;
 }
 
@@ -221,11 +247,19 @@ async function recomputeReserved(storeId?: string | null, db: Db = prisma) {
   const reservedByProduct = new Map(grouped.map((g) => [g.productId, g._sum.quantity ?? 0]));
 
   const items = await db.stockItem.findMany({ where: { storeId } });
+  const seen = new Set<string>();
   for (const item of items) {
+    seen.add(item.productId);
     const reserved = reservedByProduct.get(item.productId) ?? 0;
     if (reserved !== item.reserved) {
       await db.stockItem.update({ where: { id: item.id }, data: { reserved } });
     }
+  }
+  // Reservas de posições sem linha em StockItem (produto ainda não veio no
+  // sync desta loja) também precisam persistir, senão availableAt() as ignora.
+  for (const [productId, reserved] of reservedByProduct) {
+    if (seen.has(productId) || reserved === 0) continue;
+    await db.stockItem.create({ data: { storeId, productId, reserved } });
   }
 }
 

@@ -10,6 +10,9 @@ const boolish = z
   .pipe(z.enum(['true', 'false', '1', '0']))
   .transform((v) => v === 'true' || v === '1');
 
+// Segredo conhecido: aceitável apenas em desenvolvimento/teste.
+const DEV_JWT_SECRET = 'dev-secret-change-me';
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().positive().default(3333),
@@ -17,7 +20,7 @@ const schema = z.object({
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatório'),
 
-  JWT_SECRET: z.string().min(1).default('dev-secret-change-me'),
+  JWT_SECRET: z.string().min(1).default(DEV_JWT_SECRET),
   JWT_EXPIRES_IN: z.string().default('8h'),
   DEFAULT_MIN_STOCK: z.coerce.number().int().nonnegative().default(3),
   SEED_ADMIN_EMAIL: z.string().default('admin@novaotica.com'),
@@ -46,6 +49,19 @@ if (!parsed.success) {
   // eslint-disable-next-line no-console
   console.error(`Configuração inválida (.env):\n${issues}`);
   process.exit(1);
+}
+
+// Em produção, subir com o segredo default permitiria forjar tokens.
+if (parsed.data.NODE_ENV === 'production' && parsed.data.JWT_SECRET === DEV_JWT_SECRET) {
+  // eslint-disable-next-line no-console
+  console.error(
+    'Configuração inválida (.env): JWT_SECRET não pode usar o valor padrão de desenvolvimento em produção.',
+  );
+  process.exit(1);
+}
+if (parsed.data.NODE_ENV === 'development' && parsed.data.JWT_SECRET === DEV_JWT_SECRET) {
+  // eslint-disable-next-line no-console
+  console.warn('JWT_SECRET usando o valor padrão de desenvolvimento — troque antes de publicar.');
 }
 
 export const env = parsed.data;
