@@ -4,17 +4,20 @@ import {
   createMovement,
   formatBRL,
   getPlanningOverview,
+  getPurchaseOrders,
   getPurchaseSuggestions,
   getRebalancePlan,
   getStores,
   getSupplierSettings,
   setSupplierLeadTime,
   type MovementClass,
+  type PurchaseOrder,
   type Recommendation,
   type RebalanceSuggestion,
 } from '../api/client';
 import { PageHeader, Loading } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { downloadCsv, toCsv } from '../bi/csv';
 
 const recMeta: Record<Recommendation, { label: string; cls: string }> = {
   BUY: { label: 'Comprar', cls: 'green' },
@@ -60,6 +63,137 @@ function OrderBy({ inDays, leadTimeDays }: { inDays: number | null; leadTimeDays
     <span className={`badge ${cls}`} title={`Prazo do fornecedor: ${leadTimeDays} dias. Pedido deve ser feito ${inDays === 0 ? 'hoje' : `em até ${inDays} dias`} para não romper.`}>
       {label}
     </span>
+  );
+}
+
+const deadlineDate = (inDays: number) =>
+  new Date(Date.now() + inDays * 86400000).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+
+/** Linhas do CSV de uma ordem de compra (uma por item + total). */
+function orderCsv(order: PurchaseOrder): string {
+  type Row = {
+    fornecedor: string;
+    produto: string;
+    categoria: string;
+    quantidade: number | string;
+    custoUnit: string;
+    total: string;
+    pedirAte: string;
+    prazoEntregaDias: number | string;
+  };
+  const rows: Row[] = order.items.map((it) => ({
+    fornecedor: order.supplier,
+    produto: it.description,
+    categoria: it.category ?? '',
+    quantidade: it.quantity,
+    custoUnit: it.unitCost.toFixed(2).replace('.', ','),
+    total: it.total.toFixed(2).replace('.', ','),
+    pedirAte: it.orderByInDays === null ? '' : it.orderByInDays === 0 ? 'hoje' : deadlineDate(it.orderByInDays),
+    prazoEntregaDias: order.leadTimeDays,
+  }));
+  rows.push({
+    fornecedor: order.supplier,
+    produto: 'TOTAL DO PEDIDO',
+    categoria: '',
+    quantidade: order.units,
+    custoUnit: '',
+    total: order.total.toFixed(2).replace('.', ','),
+    pedirAte: order.orderByInDays === null ? '' : order.orderByInDays === 0 ? 'hoje' : deadlineDate(order.orderByInDays),
+    prazoEntregaDias: order.leadTimeDays,
+  });
+  return toCsv(rows, [
+    { key: 'fornecedor', label: 'Fornecedor' },
+    { key: 'produto', label: 'Produto' },
+    { key: 'categoria', label: 'Categoria' },
+    { key: 'quantidade', label: 'Quantidade' },
+    { key: 'custoUnit', label: 'Custo unit. (R$)' },
+    { key: 'total', label: 'Total (R$)' },
+    { key: 'pedirAte', label: 'Pedir até' },
+    { key: 'prazoEntregaDias', label: 'Prazo de entrega (dias)' },
+  ]);
+}
+
+const slug = (s: string) => s.toLowerCase().normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+
+/** Rascunho de ordem de compra de um fornecedor, com export CSV. */
+function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
+  const [open, setOpen] = useState(order.orderByInDays !== null && order.orderByInDays <= 7);
+  const urgency =
+    order.orderByInDays === null ? null : order.orderByInDays === 0 ? 'hoje' : `até ${deadlineDate(order.orderByInDays)}`;
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        style={{
+          all: 'unset',
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          width: '100%',
+          padding: '14px 18px',
+          cursor: 'pointer',
+        }}
+      >
+        <span style={{ fontSize: 12, color: 'var(--muted)', width: 14 }}>{open ? '▾' : '▸'}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600 }}>{order.supplier}</div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {order.items.length} {order.items.length === 1 ? 'item' : 'itens'} · {order.units} un. · entrega em{' '}
+            {order.leadTimeDays} dias
+            {order.stockoutInDays !== null && (
+              <span style={{ color: 'var(--red)' }}> · ruptura em ~{order.stockoutInDays}d se não pedir</span>
+            )}
+          </div>
+        </div>
+        {urgency && (
+          <span className={`badge ${order.orderByInDays === 0 ? 'red' : order.orderByInDays! <= 7 ? 'amber' : 'gray'}`}>
+            enviar {urgency}
+          </span>
+        )}
+        <strong style={{ whiteSpace: 'nowrap' }}>{formatBRL(order.total)}</strong>
+        <span
+          className="btn ghost sm"
+          role="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            downloadCsv(`pedido-${slug(order.supplier)}`, orderCsv(order));
+          }}
+        >
+          Exportar CSV
+        </span>
+      </button>
+      {open && (
+        <table>
+          <thead>
+            <tr>
+              <th>Produto</th>
+              <th>Categoria</th>
+              <th className="num">Qtde</th>
+              <th className="num">Custo unit.</th>
+              <th className="num">Total</th>
+              <th>Pedir até</th>
+            </tr>
+          </thead>
+          <tbody>
+            {order.items.map((it) => (
+              <tr key={it.productId}>
+                <td>{it.description}</td>
+                <td>{it.category ?? '—'}</td>
+                <td className="num">{it.quantity}</td>
+                <td className="num">{formatBRL(it.unitCost)}</td>
+                <td className="num">{formatBRL(it.total)}</td>
+                <td>
+                  <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 
@@ -193,6 +327,7 @@ export function Planning() {
   const [storeId, setStoreId] = useState('');
   const [filter, setFilter] = useState<Filter>('ALL');
   const rebalanceRef = useRef<HTMLDivElement>(null);
+  const ordersRef = useRef<HTMLDivElement>(null);
   const purchaseRef = useRef<HTMLDivElement>(null);
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
@@ -201,6 +336,7 @@ export function Planning() {
   const overview = useQuery({ queryKey: ['planning-overview', days, storeId], queryFn: () => getPlanningOverview(params) });
   const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId], queryFn: () => getPurchaseSuggestions(params) });
   const rebalance = useQuery({ queryKey: ['planning-rebalance', days], queryFn: () => getRebalancePlan({ days }) });
+  const orders = useQuery({ queryKey: ['planning-orders', days, storeId], queryFn: () => getPurchaseOrders(params) });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
   const filteredRows = useMemo(() => {
@@ -260,7 +396,7 @@ export function Planning() {
           <div className="action-label">Transferências sugeridas</div>
           <div className="hint">{reb ? `${reb.summary.units} un. já existem na rede — sem gastar nada` : 'cruzando vendas × estoque'}</div>
         </button>
-        <button className="card action-card green" onClick={() => goTo(purchaseRef, 'BUY')}>
+        <button className="card action-card green" onClick={() => goTo(ordersRef)}>
           <div className="action-count">{summary?.buy ?? '…'}</div>
           <div className="action-label">Pedidos a fazer</div>
           <div className="hint">
@@ -315,7 +451,46 @@ export function Planning() {
         )}
       </div>
 
-      {/* ── 2º: comprar o que falta, no prazo de cada fornecedor ── */}
+      {/* ── 2º: pedidos prontos por fornecedor, com total e data-limite ── */}
+      <div className="card" style={{ marginTop: 16 }} ref={ordersRef}>
+        <div className="row-between">
+          <div>
+            <div className="section-title" style={{ marginBottom: 2 }}>Pedidos por fornecedor (rascunho)</div>
+            <div className="muted" style={{ fontSize: 12.5 }}>
+              Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item
+              mais urgente define o prazo do pedido. Exporte e envie.
+            </div>
+          </div>
+          {orders.data && orders.data.orders.length > 0 && (
+            <button
+              className="btn ghost sm"
+              onClick={() => downloadCsv('pedidos-fornecedores', orders.data!.orders.map(orderCsv).join('\n\n'))}
+            >
+              Exportar tudo (CSV)
+            </button>
+          )}
+        </div>
+        {orders.isLoading ? (
+          <Loading />
+        ) : (orders.data?.orders.length ?? 0) === 0 ? (
+          <div className="empty">Nenhum pedido a fazer agora — estoque coberto para a demanda atual. 👏</div>
+        ) : (
+          <>
+            <div className="muted" style={{ fontSize: 12.5, margin: '10px 0' }}>
+              {orders.data!.summary.suppliers} fornecedor{orders.data!.summary.suppliers === 1 ? '' : 'es'} ·{' '}
+              {orders.data!.summary.items} itens · {orders.data!.summary.units} un. ·{' '}
+              <strong>{formatBRL(orders.data!.summary.total)}</strong>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {orders.data!.orders.map((o) => (
+                <PurchaseOrderCard key={o.supplier} order={o} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>
         <div className="row-between" style={{ marginTop: 22, marginBottom: 12 }}>
           <div className="section-title" style={{ margin: 0 }}>O que comprar (e o que não)</div>

@@ -5,6 +5,7 @@ import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import {
   listSupplierSettings,
   planningOverview,
+  purchaseOrders,
   purchaseSuggestions,
   rebalancePlan,
   setSupplierLeadTime,
@@ -30,6 +31,18 @@ planningRouter.get(
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     res.json(await purchaseSuggestions(days(req.query.days), storeId));
+  }),
+);
+
+/**
+ * GET /api/planning/purchase-orders — rascunhos de ordem de compra por
+ * fornecedor (marca), com total e data-limite do pedido.
+ */
+planningRouter.get(
+  '/purchase-orders',
+  asyncHandler(async (req, res) => {
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await purchaseOrders(days(req.query.days), storeId));
   }),
 );
 

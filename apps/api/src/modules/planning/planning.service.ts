@@ -4,6 +4,7 @@ import { badRequest, toNumber } from '../../http/helpers.js';
 import {
   analyzeProduct,
   buildOverview,
+  buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
@@ -97,6 +98,11 @@ export async function planningOverview(days: number, storeId?: string) {
 /** Recomendações de compra (comprar / manter / não comprar / liquidar). */
 export async function purchaseSuggestions(days: number, storeId?: string) {
   return buildSuggestions(await plans(days, storeId), days);
+}
+
+/** Rascunhos de ordem de compra agrupados por fornecedor (marca). */
+export async function purchaseOrders(days: number, storeId?: string) {
+  return buildPurchaseOrders(await plans(days, storeId), days);
 }
 
 /**

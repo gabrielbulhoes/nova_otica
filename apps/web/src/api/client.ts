@@ -366,6 +366,33 @@ export interface SupplierSetting {
   isDefault: boolean;
 }
 
+export interface PurchaseOrderItem {
+  productId: string;
+  description: string;
+  category: string | null;
+  quantity: number;
+  unitCost: number;
+  total: number;
+  orderByInDays: number | null;
+  stockoutInDays: number | null;
+}
+
+export interface PurchaseOrder {
+  supplier: string;
+  leadTimeDays: number;
+  items: PurchaseOrderItem[];
+  units: number;
+  total: number;
+  orderByInDays: number | null;
+  stockoutInDays: number | null;
+}
+
+export interface PurchaseOrdersPlan {
+  days: number;
+  summary: { suppliers: number; items: number; units: number; total: number };
+  orders: PurchaseOrder[];
+}
+
 type PlanParams = Record<string, string | number | undefined>;
 
 export const getPlanningOverview = (params: PlanParams) =>
@@ -374,6 +401,8 @@ export const getPurchaseSuggestions = (params: PlanParams) =>
   api.get<PurchaseSuggestions>('/planning/purchase-suggestions', { params }).then((r) => r.data);
 export const getRebalancePlan = (params: PlanParams) =>
   api.get<RebalancePlan>('/planning/rebalance', { params }).then((r) => r.data);
+export const getPurchaseOrders = (params: PlanParams) =>
+  api.get<PurchaseOrdersPlan>('/planning/purchase-orders', { params }).then((r) => r.data);
 export const getSupplierSettings = () =>
   api.get<{ defaultLeadTimeDays: number; rows: SupplierSetting[] }>('/planning/suppliers').then((r) => r.data);
 export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) =>

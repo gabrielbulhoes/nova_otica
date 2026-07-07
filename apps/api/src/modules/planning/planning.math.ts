@@ -521,3 +521,108 @@ export function buildRebalance(
     rows: out,
   };
 }
+
+// ─── Pedidos por fornecedor (rascunho de ordem de compra) ───────────────────
+
+export interface PurchaseOrderItem {
+  productId: string;
+  description: string;
+  category: string | null;
+  quantity: number;
+  unitCost: number;
+  total: number;
+  /** Dias restantes para pedir sem romper (0 = hoje). */
+  orderByInDays: number | null;
+  stockoutInDays: number | null;
+}
+
+export interface PurchaseOrder {
+  /** Fornecedor = marca do produto; itens sem marca ficam em "Sem marca". */
+  supplier: string;
+  leadTimeDays: number;
+  items: PurchaseOrderItem[];
+  units: number;
+  total: number;
+  /**
+   * Data-limite do pedido (dias): o item mais urgente define quando este
+   * pedido precisa ser enviado ao fornecedor. null = sem urgência definida.
+   */
+  orderByInDays: number | null;
+  /** Menor previsão de ruptura entre os itens (dias) — urgência do pedido. */
+  stockoutInDays: number | null;
+}
+
+export interface PurchaseOrdersPlan {
+  days: number;
+  summary: { suppliers: number; items: number; units: number; total: number };
+  orders: PurchaseOrder[];
+}
+
+const NO_BRAND = 'Sem marca';
+
+/**
+ * Consolida os itens com recomendação COMPRAR em rascunhos de ordem de
+ * compra, um por fornecedor (marca): quantidades, capital total e a
+ * data-limite (o item mais urgente manda). Fornecedores mais urgentes
+ * primeiro — é a fila de pedidos do dia.
+ */
+export function buildPurchaseOrders(plans: ProductPlan[], days: number): PurchaseOrdersPlan {
+  const bySupplier = new Map<string, PurchaseOrder>();
+
+  for (const p of plans) {
+    if (p.recommendation !== 'BUY' || p.suggestedQty <= 0) continue;
+    const supplier = p.brand ?? NO_BRAND;
+    const order =
+      bySupplier.get(supplier) ??
+      ({
+        supplier,
+        leadTimeDays: p.leadTimeDays,
+        items: [],
+        units: 0,
+        total: 0,
+        orderByInDays: null,
+        stockoutInDays: null,
+      } as PurchaseOrder);
+
+    order.items.push({
+      productId: p.productId,
+      description: p.description,
+      category: p.category,
+      quantity: p.suggestedQty,
+      unitCost: p.unitCost,
+      total: p.capital,
+      orderByInDays: p.orderByInDays,
+      stockoutInDays: p.stockoutInDays,
+    });
+    order.units += p.suggestedQty;
+    order.total = round2(order.total + p.capital);
+    if (p.orderByInDays !== null) {
+      order.orderByInDays =
+        order.orderByInDays === null ? p.orderByInDays : Math.min(order.orderByInDays, p.orderByInDays);
+    }
+    if (p.stockoutInDays !== null) {
+      order.stockoutInDays =
+        order.stockoutInDays === null ? p.stockoutInDays : Math.min(order.stockoutInDays, p.stockoutInDays);
+    }
+    bySupplier.set(supplier, order);
+  }
+
+  // Itens BUY estão sempre no/abaixo do ponto de reposição (prazo-limite
+  // "hoje"); quem desempata a urgência é a previsão de ruptura.
+  const orders = Array.from(bySupplier.values());
+  for (const o of orders) {
+    o.items.sort((a, b) => (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) || b.total - a.total);
+  }
+  orders.sort((a, b) => (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) || b.total - a.total);
+
+  return {
+    days,
+    summary: {
+      suppliers: orders.length,
+      items: orders.reduce((s, o) => s + o.items.length, 0),
+      units: orders.reduce((s, o) => s + o.units, 0),
+      total: round2(orders.reduce((s, o) => s + o.total, 0)),
+    },
+    orders,
+  };
+}

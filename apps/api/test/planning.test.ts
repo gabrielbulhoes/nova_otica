@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   analyzeProduct,
   buildOverview,
+  buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
@@ -179,5 +180,64 @@ describe('buildRebalance (redistribuição entre lojas)', () => {
   it('não transfere para loja sem vendas', () => {
     const plan = buildRebalance([mk('a', 'Loja A', 0, 0), mk('b', 'Loja B', 0, 18)], 90, () => cfg);
     expect(plan.rows).toHaveLength(0);
+  });
+});
+
+describe('buildPurchaseOrders (pedidos por fornecedor)', () => {
+  const mkPlan = (brand: string | null, leadTimeDays: number, unitsSold: number, currentStock: number, unitCost = 100) =>
+    analyzeProduct(
+      {
+        productId: `p-${brand}-${unitsSold}-${currentStock}`,
+        description: `Produto ${brand ?? 's/ marca'}`,
+        brand,
+        category: 'Armação',
+        unitsSold,
+        currentStock,
+        unitCost,
+        unitPrice: unitCost * 2,
+      },
+      90,
+      { ...DEFAULT_PLANNING_CONFIG, leadTimeDays },
+    );
+
+  it('agrupa itens BUY por fornecedor com total e data-limite do mais urgente', () => {
+    const plans = [
+      mkPlan('Ray-Ban', 30, 90, 20), // 1/dia, ponto 37 → BUY, pedir hoje (0d)
+      mkPlan('Ray-Ban', 30, 45, 25), // 0,5/dia, ponto 18,5 → HOLD? cobertura 50d ≤ alvo... currentStock 25 > 18.5 → HOLD
+      mkPlan('Ray-Ban', 30, 90, 30), // 1/dia, ponto 37 → BUY, 0d
+      mkPlan('Oakley', 7, 90, 20), // 1/dia, ponto 14 → folga 6d → BUY? 20 > 14 → HOLD
+      mkPlan('Oakley', 7, 90, 10), // 1/dia, ponto 14 → BUY, 0d
+    ];
+    const po = buildPurchaseOrders(plans, 90);
+    expect(po.summary.suppliers).toBe(2);
+    const rayban = po.orders.find((o) => o.supplier === 'Ray-Ban')!;
+    expect(rayban.items).toHaveLength(2);
+    expect(rayban.leadTimeDays).toBe(30);
+    expect(rayban.orderByInDays).toBe(0);
+    // total = soma dos capitais dos itens
+    expect(rayban.total).toBe(rayban.items.reduce((s, i) => s + i.total, 0));
+    expect(po.summary.total).toBe(po.orders.reduce((s, o) => s + o.total, 0));
+  });
+
+  it('ignora itens que não são BUY e usa "Sem marca" para brand null', () => {
+    const plans = [
+      mkPlan(null, 14, 90, 5), // BUY sem marca
+      mkPlan('Hoya', 14, 0, 10), // LIQUIDATE — fora do pedido
+    ];
+    const po = buildPurchaseOrders(plans, 90);
+    expect(po.orders).toHaveLength(1);
+    expect(po.orders[0].supplier).toBe('Sem marca');
+  });
+
+  it('ordena fornecedores pela ruptura mais próxima (itens BUY já estão no ponto)', () => {
+    const plans = [
+      mkPlan('Oakley', 7, 90, 12), // 1/dia, ponto 14 → BUY, ruptura em ~12d
+      mkPlan('Ray-Ban', 30, 90, 4), // 1/dia, ponto 37 → BUY, ruptura em ~4d — mais urgente
+    ];
+    const po = buildPurchaseOrders(plans, 90);
+    expect(po.orders.map((o) => o.supplier)).toEqual(['Ray-Ban', 'Oakley']);
+    expect(po.orders[0].stockoutInDays).toBe(4);
+    // BUY implica estar no/abaixo do ponto de reposição → prazo-limite é hoje.
+    expect(po.orders.every((o) => o.orderByInDays === 0)).toBe(true);
   });
 });

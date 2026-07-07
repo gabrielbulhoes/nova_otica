@@ -6,6 +6,7 @@
 import {
   analyzeProduct,
   buildOverview,
+  buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
@@ -409,6 +410,8 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/planning/overview') return buildOverview(planningPlans(planDays, params.storeId), planDays);
   if (url === '/planning/purchase-suggestions')
     return buildSuggestions(planningPlans(planDays, params.storeId), planDays);
+  if (url === '/planning/purchase-orders')
+    return buildPurchaseOrders(planningPlans(planDays, params.storeId), planDays);
   if (url === '/planning/rebalance') {
     const inputs: StoreProductInput[] = [];
     for (const s of stores)
