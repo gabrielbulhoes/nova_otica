@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
-import { scopedStoreId } from '../auth/auth.middleware.js';
+import { assertStoreAccess, scopedStoreId } from '../auth/auth.middleware.js';
 
 export const salesRouter = Router();
 
@@ -57,6 +57,7 @@ salesRouter.get(
       },
     });
     if (!sale) throw notFound('Venda não encontrada');
+    assertStoreAccess(req, sale.storeId);
     res.json(sale);
   }),
 );

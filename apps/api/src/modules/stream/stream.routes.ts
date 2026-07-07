@@ -1,26 +1,49 @@
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { subscribe } from '../../lib/eventBus.js';
-import { verifyToken } from '../auth/auth.service.js';
+import { requireAuth } from '../auth/auth.middleware.js';
 
 export const streamRouter = Router();
 
 /**
- * GET /api/stream — canal SSE de eventos em tempo real.
- *
- * O EventSource do navegador não envia cabeçalhos customizados, então o token
- * é validado via query string (`?token=`). Mantido fora do guard global de
- * auth por esse motivo. (Obs.: token em URL pode aparecer em logs — para
- * produção, avaliar cookie httpOnly ou WebSocket com handshake autenticado.)
+ * O EventSource do navegador não envia cabeçalhos customizados, então a
+ * conexão SSE é autorizada por um *ticket* efêmero de uso único: o cliente
+ * autenticado pede o ticket via POST (com Bearer no cabeçalho) e o consome
+ * na query string. O JWT nunca aparece em URL (histórico, logs, referrer).
  */
+const TICKET_TTL_MS = 60_000;
+const MAX_TICKETS = 1_000; // teto de segurança contra emissão em massa
+const tickets = new Map<string, number>(); // ticket -> expiresAt (epoch ms)
+
+function purgeExpiredTickets(): void {
+  const now = Date.now();
+  for (const [ticket, expiresAt] of tickets) {
+    if (expiresAt <= now) tickets.delete(ticket);
+  }
+}
+
+/** POST /api/stream/ticket — emite um ticket de conexão (autenticado). */
+streamRouter.post('/ticket', requireAuth, (_req, res) => {
+  purgeExpiredTickets();
+  if (tickets.size >= MAX_TICKETS) {
+    // Descarta o mais antigo para manter o mapa limitado.
+    const oldest = tickets.keys().next().value;
+    if (oldest) tickets.delete(oldest);
+  }
+  const ticket = randomUUID();
+  tickets.set(ticket, Date.now() + TICKET_TTL_MS);
+  res.status(201).json({ ticket, expiresInSeconds: TICKET_TTL_MS / 1000 });
+});
+
+/** GET /api/stream — canal SSE de eventos em tempo real (via ?ticket=). */
 streamRouter.get('/', (req, res) => {
-  const token = req.query.token as string | undefined;
-  try {
-    if (!token) throw new Error('sem token');
-    verifyToken(token);
-  } catch {
-    res.status(401).json({ error: 'Token inválido ou ausente' });
+  const ticket = req.query.ticket as string | undefined;
+  purgeExpiredTickets();
+  if (!ticket || !tickets.has(ticket)) {
+    res.status(401).json({ error: 'Ticket inválido ou expirado' });
     return;
   }
+  tickets.delete(ticket); // uso único
 
   res.set({
     'Content-Type': 'text/event-stream',

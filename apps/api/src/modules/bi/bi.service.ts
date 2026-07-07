@@ -13,6 +13,13 @@ import {
   type SankeyNode,
 } from './bi.math.js';
 
+/**
+ * Teto de linhas para as agregações feitas em memória: limita o uso de
+ * memória/tempo em bases grandes. Se o teto for atingido em produção,
+ * migrar a agregação para SQL (groupBy/materialized view).
+ */
+const MAX_AGG_ROWS = 50_000;
+
 function periodStart(days: number): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -41,6 +48,7 @@ export async function getKpis(days: number, storeId?: string): Promise<Kpis> {
     prisma.stockItem.findMany({
       where: stockWhere,
       select: { quantity: true, product: { select: { minStock: true } } },
+      take: MAX_AGG_ROWS,
     }),
     prisma.inventoryMovement.count({ where: movementWhere }),
   ]);
@@ -74,7 +82,11 @@ export async function getSalesTimeseries(
   const where: Prisma.SaleWhereInput = { saleDate: { gte: start } };
   if (storeId) where.storeId = storeId;
 
-  const sales = await prisma.sale.findMany({ where, select: { saleDate: true, total: true } });
+  const sales = await prisma.sale.findMany({
+    where,
+    select: { saleDate: true, total: true },
+    take: MAX_AGG_ROWS,
+  });
   const points = bucketSalesByDay(
     sales.map((s) => ({ saleDate: s.saleDate, total: toNumber(s.total) ?? 0 })),
     days,
@@ -137,6 +149,7 @@ export async function getSalesByDimension(
     const itemsSold = await prisma.saleItem.findMany({
       where: { sale: saleWhere },
       select: { total: true, product: { select: { category: true, brand: true } } },
+      take: MAX_AGG_ROWS,
     });
     const acc = new Map<string, { total: number; count: number }>();
     for (const it of itemsSold) {
@@ -175,6 +188,7 @@ export async function getSalesFlow(
       product: { select: { category: true } },
       sale: { select: { store: { select: { name: true } } } },
     },
+    take: MAX_AGG_ROWS,
   });
 
   const pairs = items.map((it) => ({
@@ -207,6 +221,7 @@ export async function getTransferFlow(
       fromStore: { select: { name: true } },
       toStore: { select: { name: true } },
     },
+    take: MAX_AGG_ROWS,
   });
 
   // Prefixos evitam ciclos no Sankey (A→B e B→A viram nós distintos).
@@ -232,6 +247,7 @@ export async function getHeatmap(
   const sales = await prisma.sale.findMany({
     where,
     select: { saleDate: true, total: true, store: { select: { name: true } } },
+    take: MAX_AGG_ROWS,
   });
 
   const yLabels = Array.from(new Set(sales.map((s) => s.store?.name ?? 'Sem loja'))).sort();

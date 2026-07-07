@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { asyncHandler, badRequest } from '../../http/helpers.js';
+import { asyncHandler, badRequest, parseDays } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
 import {
   getHeatmap,
@@ -12,11 +12,6 @@ import {
 } from './bi.service.js';
 
 export const biRouter = Router();
-
-const parseDays = (v: unknown, def = 30) => {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 && n <= 365 ? Math.trunc(n) : def;
-};
 
 const DIMENSIONS: Dimension[] = ['store', 'category', 'brand', 'payment'];
 

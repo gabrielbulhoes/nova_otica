@@ -9,10 +9,23 @@ function periodStart(days: number): Date {
   return d;
 }
 
-/** Produtos elegíveis ao provador: têm asset PUBLICADO e saldo em estoque. */
+/**
+ * Metadados de encaixe válidos são só pares chave → número finito; qualquer
+ * outra coisa gravada no JSON é descartada antes de servir ao provador.
+ */
+function sanitizeFit(fit: unknown): Record<string, number> | null {
+  if (fit === null || typeof fit !== 'object' || Array.isArray(fit)) return null;
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(fit as Record<string, unknown>)) {
+    if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** Produtos elegíveis ao provador: produto ativo, asset PUBLICADO e saldo. */
 export async function listArProducts() {
   const assets = await prisma.productAsset.findMany({
-    where: { status: 'PUBLISHED' },
+    where: { status: 'PUBLISHED', product: { active: true } },
     orderBy: { version: 'desc' },
     include: { product: true },
   });
@@ -43,10 +56,25 @@ export async function listArProducts() {
     .filter((p) => p.available > 0);
 }
 
-/** Asset de AR (modelo + metadados de encaixe) do produto. */
-export async function getAsset(productId: string) {
+export interface GetAssetOptions {
+  /** Negociação por capacidade do dispositivo (ex.: sem WebGL → OVERLAY_2D). */
+  type?: 'GLB_3D' | 'OVERLAY_2D';
+  /** Versão máxima suportada pelo cliente (pinning de compatibilidade). */
+  maxVersion?: number;
+}
+
+/** Asset de AR (modelo + metadados de encaixe) do produto, validado. */
+export async function getAsset(productId: string, opts: GetAssetOptions = {}) {
+  const where: Prisma.ProductAssetWhereInput = {
+    productId,
+    status: 'PUBLISHED',
+    product: { active: true },
+  };
+  if (opts.type) where.type = opts.type;
+  if (opts.maxVersion !== undefined) where.version = { lte: opts.maxVersion };
+
   const asset = await prisma.productAsset.findFirst({
-    where: { productId, status: 'PUBLISHED' },
+    where,
     orderBy: { version: 'desc' },
     include: { product: { select: { description: true, brand: true } } },
   });
@@ -55,7 +83,7 @@ export async function getAsset(productId: string) {
     productId,
     type: asset.type,
     url: asset.url,
-    fit: asset.fit,
+    fit: sanitizeFit(asset.fit),
     version: asset.version,
     product: asset.product,
   };
@@ -64,7 +92,7 @@ export async function getAsset(productId: string) {
 export interface UpsertAssetInput {
   type: 'GLB_3D' | 'OVERLAY_2D';
   url: string;
-  fit?: Record<string, unknown>;
+  fit?: Record<string, number>;
 }
 
 /** Cria uma nova versão de asset (ADMIN). */

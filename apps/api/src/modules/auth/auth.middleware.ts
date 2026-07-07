@@ -44,9 +44,13 @@ export function scopedStoreId(req: Request, requested?: string): string | undefi
   return requested;
 }
 
-/** Garante que o STORE_MANAGER só opere na própria loja. */
+/**
+ * Garante que o STORE_MANAGER só opere na própria loja. Falha fechado:
+ * gerente sem loja associada, ou recurso sem loja/de outra loja → negado.
+ */
 export function assertStoreAccess(req: Request, storeId?: string | null): void {
-  if (req.user?.role === 'STORE_MANAGER' && storeId && storeId !== req.user.storeId) {
+  if (req.user?.role !== 'STORE_MANAGER') return;
+  if (!req.user.storeId || !storeId || storeId !== req.user.storeId) {
     throw new HttpError(403, 'Você só pode operar na sua própria loja');
   }
 }

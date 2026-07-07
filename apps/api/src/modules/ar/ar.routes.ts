@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler } from '../../http/helpers.js';
+import { asyncHandler, parseDays } from '../../http/helpers.js';
 import { requireRole } from '../auth/auth.middleware.js';
 import { createAsset, getAsset, listArProducts, recordTryOn, tryOnStats } from './ar.service.js';
 
@@ -15,18 +15,26 @@ arRouter.get(
   }),
 );
 
+const assetQuerySchema = z.object({
+  // Negociação por capacidade do dispositivo e pinning de versão suportada.
+  type: z.enum(['GLB_3D', 'OVERLAY_2D']).optional(),
+  maxVersion: z.coerce.number().int().positive().optional(),
+});
+
 /** GET /api/ar/products/:id/asset — modelo + metadados de encaixe. */
 arRouter.get(
   '/products/:id/asset',
   asyncHandler(async (req, res) => {
-    res.json(await getAsset(req.params.id));
+    const opts = assetQuerySchema.parse(req.query);
+    res.json(await getAsset(req.params.id, opts));
   }),
 );
 
 const assetSchema = z.object({
   type: z.enum(['GLB_3D', 'OVERLAY_2D']),
   url: z.string().url(),
-  fit: z.record(z.unknown()).optional(),
+  // Encaixe: apenas medidas numéricas finitas (frameWidth, scale, ...).
+  fit: z.record(z.string().max(40), z.number().finite()).optional(),
 });
 
 /** POST /api/ar/products/:id/asset — publica uma nova versão do asset (ADMIN). */
@@ -60,7 +68,7 @@ arRouter.post(
 arRouter.get(
   '/stats',
   asyncHandler(async (req, res) => {
-    const days = Number(req.query.days) || 30;
+    const days = parseDays(req.query.days);
     res.json(await tryOnStats(days));
   }),
 );

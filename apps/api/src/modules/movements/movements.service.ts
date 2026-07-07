@@ -1,8 +1,11 @@
 import { z } from 'zod';
-import type { Role } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest, HttpError, notFound } from '../../http/helpers.js';
 import { publish } from '../../lib/eventBus.js';
+
+/** Cliente Prisma "normal" ou transacional — permite compor com $transaction. */
+export type Db = Prisma.TransactionClient | typeof prisma;
 
 /** Quem está executando a ação (vem de req.user). */
 export interface Actor {
@@ -38,28 +41,28 @@ export const createMovementSchema = z
 
 export type CreateMovementInput = z.infer<typeof createMovementSchema>;
 
-async function ensureRefs(input: CreateMovementInput) {
-  const product = await prisma.product.findUnique({ where: { id: input.productId } });
+async function ensureRefs(input: CreateMovementInput, db: Db = prisma) {
+  const product = await db.product.findUnique({ where: { id: input.productId } });
   if (!product) throw notFound('Produto não encontrado');
   for (const storeId of [input.fromStoreId, input.toStoreId].filter(Boolean) as string[]) {
-    const store = await prisma.store.findUnique({ where: { id: storeId } });
+    const store = await db.store.findUnique({ where: { id: storeId } });
     if (!store) throw notFound(`Loja não encontrada: ${storeId}`);
   }
 }
 
 /** Saldo disponível ao vivo na loja de origem (synced + delta confirmado - reservado). */
-export async function availableAt(storeId: string, productId: string): Promise<number> {
-  const item = await prisma.stockItem.findUnique({
+export async function availableAt(storeId: string, productId: string, db: Db = prisma): Promise<number> {
+  const item = await db.stockItem.findUnique({
     where: { storeId_productId: { storeId, productId } },
   });
   const synced = item?.quantity ?? 0;
   const reserved = item?.reserved ?? 0;
 
-  const inbound = await prisma.inventoryMovement.aggregate({
+  const inbound = await db.inventoryMovement.aggregate({
     where: { status: 'CONFIRMED', toStoreId: storeId, productId },
     _sum: { quantity: true },
   });
-  const outbound = await prisma.inventoryMovement.aggregate({
+  const outbound = await db.inventoryMovement.aggregate({
     where: { status: 'CONFIRMED', fromStoreId: storeId, productId },
     _sum: { quantity: true },
   });
@@ -91,15 +94,15 @@ function assertActorMayCreate(input: CreateMovementInput, actor: Actor) {
   }
 }
 
-export async function createMovement(input: CreateMovementInput, actor: Actor) {
-  await ensureRefs(input);
+export async function createMovement(input: CreateMovementInput, actor: Actor, db: Db = prisma) {
+  await ensureRefs(input, db);
   assertActorMayCreate(input, actor);
 
   const status = decideInitialStatus(input, actor);
 
   // Só valida saldo quando a movimentação já vai reservar/efetivar agora.
   if (input.fromStoreId && status !== 'REQUESTED') {
-    const available = await availableAt(input.fromStoreId, input.productId);
+    const available = await availableAt(input.fromStoreId, input.productId, db);
     if (input.quantity > available) {
       throw badRequest(
         `Saldo insuficiente na origem (disponível: ${available}, solicitado: ${input.quantity}).`,
@@ -107,7 +110,7 @@ export async function createMovement(input: CreateMovementInput, actor: Actor) {
     }
   }
 
-  const movement = await prisma.inventoryMovement.create({
+  const movement = await db.inventoryMovement.create({
     data: {
       type: input.type,
       status,
@@ -122,7 +125,7 @@ export async function createMovement(input: CreateMovementInput, actor: Actor) {
     },
   });
 
-  await recomputeReserved(input.fromStoreId);
+  await recomputeReserved(input.fromStoreId, db);
   publish({ type: 'movement.changed', storeId: input.fromStoreId ?? input.toStoreId, movementId: movement.id });
   return movement;
 }
@@ -166,34 +169,34 @@ export async function rejectMovement(id: string, actor: Actor, note?: string) {
 }
 
 /** Efetiva uma movimentação aprovada (PENDING -> CONFIRMED). */
-export async function confirmMovement(id: string, actor: Actor) {
-  const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
+export async function confirmMovement(id: string, actor: Actor, db: Db = prisma) {
+  const mov = await db.inventoryMovement.findUnique({ where: { id } });
   if (!mov) throw notFound('Movimentação não encontrada');
   if (mov.status !== 'PENDING') throw badRequest(`Movimentação não está pendente (${mov.status}).`);
   assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
-  const updated = await prisma.inventoryMovement.update({
+  const updated = await db.inventoryMovement.update({
     where: { id },
     data: { status: 'CONFIRMED', confirmedAt: new Date() },
   });
-  await recomputeReserved(mov.fromStoreId);
+  await recomputeReserved(mov.fromStoreId, db);
   publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
   return updated;
 }
 
 /** Cancela uma movimentação ainda não efetivada/reconciliada. */
-export async function cancelMovement(id: string, actor: Actor) {
-  const mov = await prisma.inventoryMovement.findUnique({ where: { id } });
+export async function cancelMovement(id: string, actor: Actor, db: Db = prisma) {
+  const mov = await db.inventoryMovement.findUnique({ where: { id } });
   if (!mov) throw notFound('Movimentação não encontrada');
   if (mov.status === 'RECONCILED' || mov.status === 'CONFIRMED')
     throw badRequest('Movimentação já efetivada/reconciliada não pode ser cancelada.');
   assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
-  const updated = await prisma.inventoryMovement.update({
+  const updated = await db.inventoryMovement.update({
     where: { id },
     data: { status: 'CANCELLED' },
   });
-  await recomputeReserved(mov.fromStoreId);
+  await recomputeReserved(mov.fromStoreId, db);
   publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
   return updated;
 }
@@ -208,20 +211,20 @@ function assertActorControls(fromStoreId: string | null, toStoreId: string | nul
 }
 
 /** Recalcula a reserva (saídas PENDING) de uma loja específica. */
-async function recomputeReserved(storeId?: string | null) {
+async function recomputeReserved(storeId?: string | null, db: Db = prisma) {
   if (!storeId) return;
-  const grouped = await prisma.inventoryMovement.groupBy({
+  const grouped = await db.inventoryMovement.groupBy({
     by: ['productId'],
     where: { status: 'PENDING', fromStoreId: storeId },
     _sum: { quantity: true },
   });
   const reservedByProduct = new Map(grouped.map((g) => [g.productId, g._sum.quantity ?? 0]));
 
-  const items = await prisma.stockItem.findMany({ where: { storeId } });
+  const items = await db.stockItem.findMany({ where: { storeId } });
   for (const item of items) {
     const reserved = reservedByProduct.get(item.productId) ?? 0;
     if (reserved !== item.reserved) {
-      await prisma.stockItem.update({ where: { id: item.id }, data: { reserved } });
+      await db.stockItem.update({ where: { id: item.id }, data: { reserved } });
     }
   }
 }

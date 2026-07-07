@@ -29,6 +29,12 @@ export function toNumber(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Janela de dias (?days=) limitada a [1, max] — evita períodos desmedidos. */
+export function parseDays(v: unknown, def = 30, max = 365): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n <= max ? Math.trunc(n) : def;
+}
+
 /** Paginação simples a partir de query string. */
 export function parsePaging(query: Record<string, unknown>, defLimit = 50, maxLimit = 200) {
   const limit = Math.min(Math.max(Number(query.limit) || defLimit, 1), maxLimit);
