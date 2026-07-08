@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Testes unitários + typecheck + build (sem banco).
+  build-test:
+    runs-on: ubuntu-latest
+    # Os testes unitários não conectam ao banco, mas a validação de env exige
+    # DATABASE_URL. URL fictícia satisfaz a validação sem qualquer conexão.
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Instalar dependências
+        run: npm ci
+      - name: Gerar Prisma Client
+        run: npm run prisma:generate --workspace=@nova-otica/api
+      - name: Typecheck (API + Web)
+        run: npm run typecheck
+      - name: Testes unitários (API)
+        run: npm run test --workspace=@nova-otica/api
+      - name: Testes (Web)
+        run: npm run test --workspace=@nova-otica/web
+      - name: Build (API + Web)
+        run: npm run build
+
+  # Valida as migrações versionadas + seed contra um PostgreSQL real.
+  db-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nova_otica
+          POSTGRES_PASSWORD: nova_otica
+          POSTGRES_DB: nova_otica
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nova_otica"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://nova_otica:nova_otica@localhost:5432/nova_otica?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Instalar dependências
+        run: npm ci
+      - name: Gerar Prisma Client
+        run: npm run prisma:generate --workspace=@nova-otica/api
+      - name: Aplicar migrações (migrate deploy)
+        run: npm run prisma:deploy --workspace=@nova-otica/api
+      - name: Semear dados de demonstração
+        run: npm run seed --workspace=@nova-otica/api
