@@ -241,3 +241,34 @@ describe('buildPurchaseOrders (pedidos por fornecedor)', () => {
     expect(po.orders.every((o) => o.orderByInDays === 0)).toBe(true);
   });
 });
+
+describe('posição de estoque com pedidos a caminho (onOrderQty)', () => {
+  const item = {
+    productId: 'p1',
+    description: 'Armação X',
+    brand: 'Ray-Ban',
+    category: 'Armação',
+    unitsSold: 90, // 1/dia
+    currentStock: 5, // abaixo do ponto (21)
+    unitCost: 100,
+    unitPrice: 200,
+  };
+
+  it('pedido em trânsito cobre a reposição e evita comprar duas vezes', () => {
+    const sem = analyzeProduct(item, 90);
+    expect(sem.recommendation).toBe('BUY');
+    expect(sem.suggestedQty).toBe(55); // alvo 60 − 5
+
+    const com = analyzeProduct({ ...item, onOrderQty: 55 }, 90);
+    expect(com.recommendation).toBe('HOLD');
+    expect(com.suggestedQty).toBe(0);
+    expect(com.onOrderQty).toBe(55);
+    expect(com.reason).toContain('a caminho');
+  });
+
+  it('pedido parcial reduz a quantidade sugerida', () => {
+    const parcial = analyzeProduct({ ...item, onOrderQty: 10 }, 90); // posição 15 ≤ 21 → ainda BUY
+    expect(parcial.recommendation).toBe('BUY');
+    expect(parcial.suggestedQty).toBe(45); // alvo 60 − posição 15
+  });
+});

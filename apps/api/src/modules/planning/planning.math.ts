@@ -51,6 +51,8 @@ export interface ProductMetricsInput {
   unitCost: number;
   /** Preço de venda unitário (R$). */
   unitPrice: number;
+  /** Unidades já pedidas ao fornecedor e ainda não recebidas (a caminho). */
+  onOrderQty?: number;
 }
 
 export interface ProductPlan {
@@ -80,6 +82,8 @@ export interface ProductPlan {
   /** Previsão de ruptura em dias, para itens em risco (senão null). */
   stockoutInDays: number | null;
   reason: string;
+  /** Unidades a caminho (pedidos enviados e não recebidos). */
+  onOrderQty: number;
   /** Prazo de ressuprimento aplicado (do fornecedor/marca ou padrão). */
   leadTimeDays: number;
   /**
@@ -103,6 +107,11 @@ export function analyzeProduct(
   const coverageDays = dailyDemand > 0 ? input.currentStock / dailyDemand : null;
   const reorderPoint = dailyDemand * (cfg.leadTimeDays + cfg.safetyDays);
   const targetStock = dailyDemand * cfg.targetCoverDays;
+
+  // Posição de estoque = físico + a caminho: decide a compra sem duplicar
+  // pedidos já enviados ao fornecedor.
+  const onOrder = Math.max(0, input.onOrderQty ?? 0);
+  const position = input.currentStock + onOrder;
 
   const stockValue = round2(input.currentStock * input.unitCost);
   const excessUnits = Math.max(0, input.currentStock - targetStock);
@@ -128,10 +137,13 @@ export function analyzeProduct(
       recommendation = 'DONT_BUY';
       reason = 'Sem giro e sem estoque — não repor.';
     }
-  } else if (input.currentStock <= reorderPoint) {
+  } else if (position <= reorderPoint) {
     recommendation = 'BUY';
-    suggestedQty = Math.max(1, Math.ceil(targetStock - input.currentStock));
+    suggestedQty = Math.max(1, Math.ceil(targetStock - position));
     reason = `Abaixo do ponto de reposição (${round1(reorderPoint)} un.); repor para ~${cfg.targetCoverDays} dias de cobertura.`;
+  } else if (input.currentStock <= reorderPoint && onOrder > 0) {
+    recommendation = 'HOLD';
+    reason = `No ponto de reposição, mas ${onOrder} un. a caminho cobrem a reposição.`;
   } else if ((coverageDays as number) > cfg.overstockDays) {
     recommendation = 'DONT_BUY';
     reason = `Excesso: ${Math.round(coverageDays as number)} dias de cobertura (acima de ${cfg.overstockDays}). Não comprar.`;
@@ -142,11 +154,12 @@ export function analyzeProduct(
 
   const capital = round2(suggestedQty * input.unitCost);
   const stockoutInDays =
-    dailyDemand > 0 && input.currentStock <= reorderPoint ? Math.floor(coverageDays as number) : null;
+    dailyDemand > 0 && position <= reorderPoint ? Math.floor(coverageDays as number) : null;
 
-  // Prazo-limite do pedido: dias até o estoque cair ao ponto de reposição.
+  // Prazo-limite do pedido: dias até a POSIÇÃO cair ao ponto de reposição
+  // (o que está a caminho adia a necessidade de um novo pedido).
   const orderByInDays =
-    dailyDemand > 0 ? Math.max(0, Math.floor((input.currentStock - reorderPoint) / dailyDemand)) : null;
+    dailyDemand > 0 ? Math.max(0, Math.floor((position - reorderPoint) / dailyDemand)) : null;
 
   return {
     productId: input.productId,
@@ -169,6 +182,7 @@ export function analyzeProduct(
     capital,
     stockoutInDays,
     reason,
+    onOrderQty: onOrder,
     leadTimeDays: cfg.leadTimeDays,
     orderByInDays,
   };

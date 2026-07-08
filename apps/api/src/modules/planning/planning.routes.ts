@@ -2,13 +2,17 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, parseDays } from '../../http/helpers.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
+import { publish } from '../../lib/eventBus.js';
 import {
   listSupplierSettings,
   planningOverview,
+  purchaseOrderHistory,
   purchaseOrders,
   purchaseSuggestions,
   rebalancePlan,
+  registerPurchaseOrder,
   setSupplierLeadTime,
+  settlePurchaseOrder,
 } from './planning.service.js';
 
 export const planningRouter = Router();
@@ -54,6 +58,57 @@ planningRouter.get(
   '/rebalance',
   asyncHandler(async (req, res) => {
     res.json(await rebalancePlan(days(req.query.days)));
+  }),
+);
+
+const orderItemSchema = z.object({
+  productId: z.string().min(1),
+  description: z.string().max(240).default(''),
+  quantity: z.number().int().min(1).max(100_000),
+  unitCost: z.number().nonnegative().default(0),
+  total: z.number().nonnegative().default(0),
+});
+
+const registerOrderSchema = z.object({
+  supplier: z.string().min(1).max(120),
+  leadTimeDays: z.number().int().min(1).max(365),
+  items: z.array(orderItemSchema).min(1).max(500),
+});
+
+/**
+ * POST /api/planning/purchase-orders — registra o pedido como ENVIADO ao
+ * fornecedor (1ª confirmação). Enquanto em trânsito, as quantidades são
+ * abatidas das próximas sugestões (posição = físico + a caminho).
+ */
+planningRouter.post(
+  '/purchase-orders',
+  asyncHandler(async (req, res) => {
+    const input = registerOrderSchema.parse(req.body);
+    const rec = await registerPurchaseOrder(input, req.user!.id);
+    publish({ type: 'purchase-order.changed', recordId: rec.id });
+    res.status(201).json(rec);
+  }),
+);
+
+/** GET /api/planning/purchase-orders/history — histórico enviado/recebido. */
+planningRouter.get(
+  '/purchase-orders/history',
+  asyncHandler(async (_req, res) => {
+    res.json(await purchaseOrderHistory());
+  }),
+);
+
+/**
+ * POST /api/planning/purchase-orders/:id/receive — confirma o recebimento
+ * (2ª confirmação do ciclo). /:id/cancel cancela um pedido em trânsito.
+ */
+planningRouter.post(
+  '/purchase-orders/:id/:action(receive|cancel)',
+  asyncHandler(async (req, res) => {
+    const action = req.params.action as 'receive' | 'cancel';
+    const rec = await settlePurchaseOrder(req.params.id, action, req.user!.id);
+    publish({ type: 'purchase-order.changed', recordId: rec.id });
+    res.json(rec);
   }),
 );
 

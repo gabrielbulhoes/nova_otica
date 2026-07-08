@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import {
   analyzeProduct,
@@ -64,10 +65,13 @@ export async function planningInputs(days: number, storeId?: string): Promise<Pr
   const stockBy = new Map(stock.map((s) => [s.productId, s._sum.quantity ?? 0]));
 
   const ids = Array.from(new Set([...soldBy.keys(), ...stockBy.keys()]));
-  const products = await prisma.product.findMany({
-    where: { id: { in: ids } },
-    select: { id: true, description: true, brand: true, category: true, price: true, cost: true },
-  });
+  const [products, onOrderBy] = await Promise.all([
+    prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, description: true, brand: true, category: true, price: true, cost: true },
+    }),
+    onOrderQuantities(),
+  ]);
 
   return products.map((p) => {
     const price = toNumber(p.price) ?? 0;
@@ -81,8 +85,34 @@ export async function planningInputs(days: number, storeId?: string): Promise<Pr
       currentStock: stockBy.get(p.id) ?? 0,
       unitCost: cost,
       unitPrice: price,
+      onOrderQty: onOrderBy.get(p.id) ?? 0,
     };
   });
+}
+
+/** Snapshot de item dentro do JSON de um pedido registrado. */
+interface RecordItem {
+  productId: string;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  total: number;
+}
+
+/** Unidades a caminho por produto (pedidos ENVIADOS e não recebidos). */
+async function onOrderQuantities(): Promise<Map<string, number>> {
+  const sent = await prisma.purchaseOrderRecord.findMany({
+    where: { status: 'SENT' },
+    select: { items: true },
+  });
+  const byProduct = new Map<string, number>();
+  for (const rec of sent) {
+    for (const it of (rec.items as unknown as RecordItem[]) ?? []) {
+      if (!it?.productId || !Number.isFinite(it.quantity)) continue;
+      byProduct.set(it.productId, (byProduct.get(it.productId) ?? 0) + it.quantity);
+    }
+  }
+  return byProduct;
 }
 
 async function plans(days: number, storeId?: string): Promise<ProductPlan[]> {
@@ -103,6 +133,23 @@ export async function purchaseSuggestions(days: number, storeId?: string) {
 /** Rascunhos de ordem de compra agrupados por fornecedor (marca). */
 export async function purchaseOrders(days: number, storeId?: string) {
   return buildPurchaseOrders(await plans(days, storeId), days);
+}
+
+/**
+ * Notificação proativa: após cada sincronização, publica um evento em tempo
+ * real quando há itens no ponto de reposição (pedir hoje) — o painel exibe
+ * o aviso sem o lojista precisar abrir o Planejamento.
+ */
+export async function publishPlanningAlert(days = 90): Promise<void> {
+  const po = await purchaseOrders(days);
+  if (po.summary.items > 0) {
+    publish({
+      type: 'planning.urgent',
+      items: po.summary.items,
+      suppliers: po.summary.suppliers,
+      total: po.summary.total,
+    });
+  }
 }
 
 /**
@@ -185,6 +232,66 @@ export async function listSupplierSettings() {
     }))
     .sort((a, b) => a.brand.localeCompare(b.brand));
   return { defaultLeadTimeDays: DEFAULT_PLANNING_CONFIG.leadTimeDays, rows };
+}
+
+// ─── Ciclo do pedido: enviado → recebido (com histórico) ─────────────────────
+
+export interface RegisterOrderInput {
+  supplier: string;
+  leadTimeDays: number;
+  items: RecordItem[];
+}
+
+/** Registra um pedido como ENVIADO ao fornecedor (1ª confirmação do ciclo). */
+export async function registerPurchaseOrder(input: RegisterOrderInput, actorId: string) {
+  const supplier = input.supplier.trim();
+  if (!supplier) throw badRequest('Informe o fornecedor.');
+  const items = (input.items ?? []).filter(
+    (it) => it.productId && Number.isInteger(it.quantity) && it.quantity > 0,
+  );
+  if (items.length === 0) throw badRequest('O pedido precisa de ao menos um item com quantidade.');
+
+  const units = items.reduce((s, it) => s + it.quantity, 0);
+  const total = round2(items.reduce((s, it) => s + (Number.isFinite(it.total) ? it.total : 0), 0));
+  const leadTimeDays = Number.isInteger(input.leadTimeDays) && input.leadTimeDays > 0 ? input.leadTimeDays : 14;
+
+  return prisma.purchaseOrderRecord.create({
+    data: {
+      supplier,
+      leadTimeDays,
+      status: 'SENT',
+      items: items as unknown as Prisma.InputJsonValue,
+      units,
+      total,
+      sentBy: actorId,
+      expectedAt: new Date(Date.now() + leadTimeDays * 86400000),
+    },
+  });
+}
+
+/** Confirma o recebimento (2ª confirmação) ou cancela um pedido em trânsito. */
+export async function settlePurchaseOrder(id: string, action: 'receive' | 'cancel', actorId: string) {
+  const rec = await prisma.purchaseOrderRecord.findUnique({ where: { id } });
+  if (!rec) throw badRequest('Pedido não encontrado.');
+  if (rec.status !== 'SENT') throw badRequest(`Pedido não está em trânsito (${rec.status}).`);
+  return prisma.purchaseOrderRecord.update({
+    where: { id },
+    data:
+      action === 'receive'
+        ? { status: 'RECEIVED', receivedBy: actorId, receivedAt: new Date() }
+        : { status: 'CANCELLED' },
+  });
+}
+
+/** Histórico de pedidos (mais recentes primeiro; em trânsito no topo). */
+export async function purchaseOrderHistory(limit = 50) {
+  const rows = await prisma.purchaseOrderRecord.findMany({
+    // A ordem do enum no Postgres segue a definição (SENT, RECEIVED,
+    // CANCELLED), então asc põe os em trânsito primeiro.
+    orderBy: [{ status: 'asc' }, { sentAt: 'desc' }],
+    take: limit,
+  });
+  return { total: rows.length, rows };
 }
 
 /** Define (ou remove, com null) o prazo de um fornecedor/marca. */

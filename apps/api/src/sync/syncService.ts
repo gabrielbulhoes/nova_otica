@@ -142,6 +142,18 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
 
   log.info('Sincronização concluída', { durationMs, totalRead, totalWritten, ok: !hadError });
   publish({ type: 'sync.completed', ok: !hadError });
+
+  // Notificação proativa: com a base recém-sincronizada, avisa o painel se
+  // há itens no ponto de reposição (sem depender de o lojista abrir a tela).
+  try {
+    const { publishPlanningAlert } = await import('../modules/planning/planning.service.js');
+    await publishPlanningAlert();
+  } catch (err) {
+    log.warn('Falha ao publicar alerta de planejamento pós-sync', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return { ok: !hadError, window: win.window, durationMs, entities };
 }
 

@@ -104,6 +104,25 @@ const demoLeadTimes = new Map<string, number>([
   [MARCAS[1], 7],
 ]);
 
+// Histórico de pedidos de compra (enviado/recebido) da demo
+interface DemoOrderRecord {
+  id: string;
+  supplier: string;
+  leadTimeDays: number;
+  status: 'SENT' | 'RECEIVED' | 'CANCELLED';
+  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  units: number;
+  total: number;
+  sentAt: string;
+  expectedAt: string | null;
+  receivedAt: string | null;
+}
+const purchaseRecords: DemoOrderRecord[] = [];
+const onOrderQty = (productId: string) =>
+  purchaseRecords
+    .filter((r) => r.status === 'SENT')
+    .reduce((s, r) => s + r.items.filter((i) => i.productId === productId).reduce((a, i) => a + i.quantity, 0), 0);
+
 // Produtos com provador (AR) — os de Armação / Óculos de Sol
 const arProductIds = products.filter((p) => p.category === 'Armação' || p.category === 'Óculos de Sol').map((p) => p.id);
 
@@ -400,6 +419,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           currentStock: scope.reduce((a, s) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
           unitCost: round2(prod.price * 0.55),
           unitPrice: prod.price,
+          onOrderQty: onOrderQty(prod.id),
         },
         period,
         cfgForBrand(prod.brand),
@@ -410,8 +430,48 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/planning/overview') return buildOverview(planningPlans(planDays, params.storeId), planDays);
   if (url === '/planning/purchase-suggestions')
     return buildSuggestions(planningPlans(planDays, params.storeId), planDays);
-  if (url === '/planning/purchase-orders')
+  if (url === '/planning/purchase-orders' && m === 'GET')
     return buildPurchaseOrders(planningPlans(planDays, params.storeId), planDays);
+  if (url === '/planning/purchase-orders' && m === 'POST') {
+    const items = (body.items ?? []) as DemoOrderRecord['items'];
+    const leadTimeDays = Number(body.leadTimeDays) || 14;
+    const rec: DemoOrderRecord = {
+      id: `po_${purchaseRecords.length + 1}`,
+      supplier: String(body.supplier ?? '—'),
+      leadTimeDays,
+      status: 'SENT',
+      items,
+      units: items.reduce((s, i) => s + i.quantity, 0),
+      total: round2(items.reduce((s, i) => s + i.total, 0)),
+      sentAt: new Date().toISOString(),
+      expectedAt: new Date(Date.now() + leadTimeDays * 86400000).toISOString(),
+      receivedAt: null,
+    };
+    purchaseRecords.unshift(rec);
+    return rec;
+  }
+  if (url === '/planning/purchase-orders/history') {
+    const rows = [...purchaseRecords].sort((a, b) => (a.status === 'SENT' ? -1 : 1) - (b.status === 'SENT' ? -1 : 1));
+    return { total: rows.length, rows };
+  }
+  mm = p(/^\/planning\/purchase-orders\/(.+)\/(receive|cancel)$/);
+  if (mm && m === 'POST') {
+    const rec = purchaseRecords.find((x) => x.id === mm![1]);
+    if (!rec) return { __status: 404, error: 'Pedido não encontrado' };
+    if (rec.status !== 'SENT') return { __status: 400, error: 'Pedido não está em trânsito.' };
+    if (mm[2] === 'receive') {
+      rec.status = 'RECEIVED';
+      rec.receivedAt = new Date().toISOString();
+      // Recebimento entra no estoque da 1ª loja (simplificação da demo).
+      for (const it of rec.items) {
+        const k = key(stores[0].id, it.productId);
+        stockQty.set(k, (stockQty.get(k) ?? 0) + it.quantity);
+      }
+    } else {
+      rec.status = 'CANCELLED';
+    }
+    return rec;
+  }
   if (url === '/planning/rebalance') {
     const inputs: StoreProductInput[] = [];
     for (const s of stores)

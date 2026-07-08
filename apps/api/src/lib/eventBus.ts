@@ -4,7 +4,10 @@ import { EventEmitter } from 'node:events';
 export type AppEvent =
   | { type: 'movement.changed'; storeId?: string | null; movementId?: string }
   | { type: 'sync.completed'; ok: boolean }
-  | { type: 'order.changed'; storeId?: string | null; orderId?: string };
+  | { type: 'order.changed'; storeId?: string | null; orderId?: string }
+  /** Notificação proativa do planejamento: itens no ponto de reposição. */
+  | { type: 'planning.urgent'; items: number; suppliers: number; total: number }
+  | { type: 'purchase-order.changed'; recordId?: string };
 
 const CHANNEL = 'app';
 const emitter = new EventEmitter();

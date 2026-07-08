@@ -17,6 +17,11 @@ const LIVE_KEYS = [
   'summary',
   'sales-by-store',
   'sync-status',
+  'planning-overview',
+  'planning-rebalance',
+  'planning-orders',
+  'planning-history',
+  'purchase-suggestions',
 ];
 
 const RECONNECT_DELAY_MS = 5_000;

@@ -4,14 +4,18 @@ import {
   createMovement,
   formatBRL,
   getPlanningOverview,
+  getPurchaseOrderHistory,
   getPurchaseOrders,
   getPurchaseSuggestions,
   getRebalancePlan,
   getStores,
   getSupplierSettings,
+  registerPurchaseOrder,
   setSupplierLeadTime,
+  settlePurchaseOrder,
   type MovementClass,
   type PurchaseOrder,
+  type PurchaseOrderRecord,
   type Recommendation,
   type RebalanceSuggestion,
 } from '../api/client';
@@ -69,6 +73,65 @@ function OrderBy({ inDays, leadTimeDays }: { inDays: number | null; leadTimeDays
 const deadlineDate = (inDays: number) =>
   new Date(Date.now() + inDays * 86400000).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 
+const shortDate = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '—';
+
+/**
+ * Ação em duas etapas (prevenção de erro): o 1º clique arma a confirmação
+ * ("Confirmar?"), o 2º executa — sem modal, mantendo o contexto na linha.
+ */
+function TwoStepButton({
+  label,
+  confirmLabel,
+  doneLabel,
+  onConfirm,
+  ghost,
+}: {
+  label: string;
+  confirmLabel: string;
+  doneLabel: string;
+  onConfirm: () => Promise<void>;
+  ghost?: boolean;
+}) {
+  const [state, setState] = useState<'idle' | 'armed' | 'loading' | 'done' | 'error'>('idle');
+
+  if (state === 'done') return <span className="badge green">{doneLabel}</span>;
+
+  if (state === 'armed' || state === 'loading') {
+    return (
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', whiteSpace: 'nowrap' }}>
+        <button
+          className="btn sm"
+          disabled={state === 'loading'}
+          onClick={async () => {
+            setState('loading');
+            try {
+              await onConfirm();
+              setState('done');
+            } catch {
+              setState('error');
+            }
+          }}
+        >
+          {state === 'loading' ? 'Aguarde…' : confirmLabel}
+        </button>
+        <button className="btn ghost sm" disabled={state === 'loading'} onClick={() => setState('idle')}>
+          Voltar
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+      <button className={`btn ${ghost ? 'ghost ' : ''}sm`} onClick={() => setState('armed')}>
+        {label}
+      </button>
+      {state === 'error' && <span style={{ fontSize: 11, color: 'var(--red)' }}>Falhou — tente de novo</span>}
+    </span>
+  );
+}
+
 /** Linhas do CSV de uma ordem de compra (uma por item + total). */
 function orderCsv(order: PurchaseOrder): string {
   type Row = {
@@ -115,20 +178,41 @@ function orderCsv(order: PurchaseOrder): string {
 
 const slug = (s: string) => s.toLowerCase().normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
 
-/** Rascunho de ordem de compra de um fornecedor, com export CSV. */
+/** Rascunho de ordem de compra de um fornecedor, com export CSV e envio. */
 function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
+  const qc = useQueryClient();
   const [open, setOpen] = useState(order.orderByInDays !== null && order.orderByInDays <= 7);
   const urgency =
     order.orderByInDays === null ? null : order.orderByInDays === 0 ? 'hoje' : `até ${deadlineDate(order.orderByInDays)}`;
 
+  const send = async () => {
+    await registerPurchaseOrder({
+      supplier: order.supplier,
+      leadTimeDays: order.leadTimeDays,
+      items: order.items.map((it) => ({
+        productId: it.productId,
+        description: it.description,
+        quantity: it.quantity,
+        unitCost: it.unitCost,
+        total: it.total,
+      })),
+    });
+    qc.invalidateQueries({ queryKey: ['planning-history'] });
+    qc.invalidateQueries({ queryKey: ['planning-orders'] });
+    qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+  };
+
   return (
     <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen(!open)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') setOpen(!open);
+        }}
         aria-expanded={open}
         style={{
-          all: 'unset',
-          boxSizing: 'border-box',
           display: 'flex',
           alignItems: 'center',
           gap: 10,
@@ -164,7 +248,15 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
         >
           Exportar CSV
         </span>
-      </button>
+        <span onClick={(e) => e.stopPropagation()}>
+          <TwoStepButton
+            label="Registrar envio"
+            confirmLabel={`Confirmar envio (${formatBRL(order.total)})`}
+            doneLabel="Enviado ✓"
+            onConfirm={send}
+          />
+        </span>
+      </div>
       {open && (
         <table>
           <thead>
@@ -187,6 +279,95 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
                 <td className="num">{formatBRL(it.total)}</td>
                 <td>
                   <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+const recordStatusMeta: Record<PurchaseOrderRecord['status'], { label: string; cls: string }> = {
+  SENT: { label: 'Em trânsito', cls: 'blue' },
+  RECEIVED: { label: 'Recebido', cls: 'green' },
+  CANCELLED: { label: 'Cancelado', cls: 'gray' },
+};
+
+/** Histórico do ciclo de compras: enviado → recebido (ou cancelado). */
+function OrderHistory() {
+  const qc = useQueryClient();
+  const history = useQuery({ queryKey: ['planning-history'], queryFn: getPurchaseOrderHistory });
+
+  const settle = async (id: string, action: 'receive' | 'cancel') => {
+    await settlePurchaseOrder(id, action);
+    qc.invalidateQueries({ queryKey: ['planning-history'] });
+    qc.invalidateQueries({ queryKey: ['planning-orders'] });
+    qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+    qc.invalidateQueries({ queryKey: ['stock'] });
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="section-title" style={{ marginBottom: 2 }}>Histórico de pedidos (enviado → recebido)</div>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
+        Pedidos em trânsito são abatidos das sugestões (não compra duas vezes). Confirme o recebimento quando a
+        mercadoria chegar e for conferida.
+      </div>
+      {history.isLoading ? (
+        <Loading />
+      ) : (history.data?.rows.length ?? 0) === 0 ? (
+        <div className="empty">Nenhum pedido registrado ainda — registre o envio de um rascunho acima.</div>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Fornecedor</th>
+              <th className="num">Itens</th>
+              <th className="num">Un.</th>
+              <th className="num">Total</th>
+              <th>Enviado em</th>
+              <th>Previsão de chegada</th>
+              <th>Status</th>
+              <th className="right">Ação</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.data!.rows.map((r) => (
+              <tr key={r.id}>
+                <td>{r.supplier}</td>
+                <td className="num">{r.items.length}</td>
+                <td className="num">{r.units}</td>
+                <td className="num">{formatBRL(r.total)}</td>
+                <td>{shortDate(r.sentAt)}</td>
+                <td>{shortDate(r.expectedAt)}</td>
+                <td>
+                  <span className={`badge ${recordStatusMeta[r.status].cls}`}>
+                    {recordStatusMeta[r.status].label}
+                    {r.status === 'RECEIVED' && r.receivedAt ? ` · ${shortDate(r.receivedAt)}` : ''}
+                  </span>
+                </td>
+                <td className="right" style={{ whiteSpace: 'nowrap' }}>
+                  {r.status === 'SENT' ? (
+                    <span style={{ display: 'inline-flex', gap: 6 }}>
+                      <TwoStepButton
+                        label="Confirmar recebimento"
+                        confirmLabel="Mercadoria conferida?"
+                        doneLabel="Recebido ✓"
+                        onConfirm={() => settle(r.id, 'receive')}
+                      />
+                      <TwoStepButton
+                        label="Cancelar"
+                        confirmLabel="Cancelar pedido?"
+                        doneLabel="Cancelado"
+                        onConfirm={() => settle(r.id, 'cancel')}
+                        ghost
+                      />
+                    </span>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -490,6 +671,9 @@ export function Planning() {
         )}
       </div>
 
+      {/* ── Ciclo: enviado → recebido, com pedidos em trânsito abatidos ── */}
+      <OrderHistory />
+
       {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>
         <div className="row-between" style={{ marginTop: 22, marginBottom: 12 }}>
@@ -538,7 +722,12 @@ export function Planning() {
                     <td>
                       <span className={`badge ${moveMeta[r.movementClass].cls}`}>{moveMeta[r.movementClass].label}</span>
                     </td>
-                    <td className="num">{r.currentStock}</td>
+                    <td className="num">
+                      {r.currentStock}
+                      {r.onOrderQty > 0 && (
+                        <div style={{ fontSize: 11, color: 'var(--accent)' }}>+{r.onOrderQty} a caminho</div>
+                      )}
+                    </td>
                     <td className="num">{r.dailyDemand}</td>
                     <td className="num">
                       {r.coverageDays === null ? '∞' : `${r.coverageDays}d`}

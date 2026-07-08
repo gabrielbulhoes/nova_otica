@@ -299,6 +299,8 @@ export interface ProductPlan {
   capital: number;
   stockoutInDays: number | null;
   reason: string;
+  /** Unidades a caminho (pedidos enviados e não recebidos). */
+  onOrderQty: number;
   /** Prazo de ressuprimento aplicado (do fornecedor/marca ou padrão). */
   leadTimeDays: number;
   /** Dias restantes para fazer o pedido sem romper (null = sem urgência). */
@@ -403,6 +405,31 @@ export const getRebalancePlan = (params: PlanParams) =>
   api.get<RebalancePlan>('/planning/rebalance', { params }).then((r) => r.data);
 export const getPurchaseOrders = (params: PlanParams) =>
   api.get<PurchaseOrdersPlan>('/planning/purchase-orders', { params }).then((r) => r.data);
+
+export type PurchaseOrderRecordStatus = 'SENT' | 'RECEIVED' | 'CANCELLED';
+
+export interface PurchaseOrderRecord {
+  id: string;
+  supplier: string;
+  leadTimeDays: number;
+  status: PurchaseOrderRecordStatus;
+  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  units: number;
+  total: string | number;
+  sentAt: string;
+  expectedAt: string | null;
+  receivedAt: string | null;
+}
+
+export const registerPurchaseOrder = (body: {
+  supplier: string;
+  leadTimeDays: number;
+  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+}) => api.post<PurchaseOrderRecord>('/planning/purchase-orders', body).then((r) => r.data);
+export const getPurchaseOrderHistory = () =>
+  api.get<{ total: number; rows: PurchaseOrderRecord[] }>('/planning/purchase-orders/history').then((r) => r.data);
+export const settlePurchaseOrder = (id: string, action: 'receive' | 'cancel') =>
+  api.post<PurchaseOrderRecord>(`/planning/purchase-orders/${id}/${action}`).then((r) => r.data);
 export const getSupplierSettings = () =>
   api.get<{ defaultLeadTimeDays: number; rows: SupplierSetting[] }>('/planning/suppliers').then((r) => r.data);
 export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) =>
