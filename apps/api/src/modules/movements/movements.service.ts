@@ -201,13 +201,17 @@ export async function confirmMovement(id: string, actor: Actor, db: Db = prisma)
   if (mov.status !== 'PENDING') throw badRequest(`Movimentação não está pendente (${mov.status}).`);
   assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
-  const updated = await db.inventoryMovement.update({
-    where: { id },
+  // Guarda de status atômica (updateMany condicional): duas confirmações
+  // concorrentes — ou confirmar × cancelar — não passam as duas.
+  const res = await db.inventoryMovement.updateMany({
+    where: { id, status: 'PENDING' },
     data: { status: 'CONFIRMED', confirmedAt: new Date() },
   });
+  if (res.count === 0) throw badRequest('Movimentação não está mais pendente (concorrência).');
+
   await recomputeReserved(mov.fromStoreId, db);
   publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
-  return updated;
+  return db.inventoryMovement.findUnique({ where: { id } });
 }
 
 /** Cancela uma movimentação ainda não efetivada/reconciliada. */
@@ -218,13 +222,16 @@ export async function cancelMovement(id: string, actor: Actor, db: Db = prisma) 
     throw badRequest('Movimentação já efetivada/reconciliada não pode ser cancelada.');
   assertActorControls(mov.fromStoreId, mov.toStoreId, actor);
 
-  const updated = await db.inventoryMovement.update({
-    where: { id },
+  // Guarda de status atômica: não cancela o que acabou de ser efetivado.
+  const res = await db.inventoryMovement.updateMany({
+    where: { id, status: { notIn: ['CONFIRMED', 'RECONCILED', 'CANCELLED'] } },
     data: { status: 'CANCELLED' },
   });
+  if (res.count === 0) throw badRequest('Movimentação não pode mais ser cancelada (concorrência).');
+
   await recomputeReserved(mov.fromStoreId, db);
   publish({ type: 'movement.changed', storeId: mov.fromStoreId ?? mov.toStoreId, movementId: id });
-  return updated;
+  return db.inventoryMovement.findUnique({ where: { id } });
 }
 
 /** STORE_MANAGER só controla movimentações que envolvem a sua loja. */

@@ -931,3 +931,61 @@ th.num {
 .action-card.blue .action-count { color: var(--accent); }
 .action-card.amber { border-left-color: var(--amber); }
 .action-card.amber .action-count { color: var(--amber); }
+/* ─── Selo de dados fictícios (demonstração) ─────────────────────────────────── */
+
+.demo-seal {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  pointer-events: auto;
+  cursor: help;
+  user-select: none;
+}
+.demo-seal strong {
+  font-weight: 700;
+}
+.demo-seal-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.22);
+  animation: demo-seal-pulse 2.4s ease-in-out infinite;
+}
+@keyframes demo-seal-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-color-scheme: dark) {
+  .demo-seal {
+    background: rgba(40, 40, 42, 0.72);
+  }
+}
+@media (max-width: 720px) {
+  .demo-seal {
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 10px;
+    font-size: 11px;
+    padding: 5px 10px;
+  }
+}
+@media print {
+  .demo-seal {
+    display: none;
+  }
+}

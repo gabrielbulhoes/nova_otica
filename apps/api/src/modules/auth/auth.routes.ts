@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, HttpError } from '../../http/helpers.js';
+import { rateLimit } from '../../http/rateLimit.js';
 import { requireAuth } from './auth.middleware.js';
 import { signToken, verifyPassword, type AuthUser } from './auth.service.js';
 
@@ -12,9 +13,18 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+// Anti força-bruta: no máx. 10 tentativas por IP+e-mail a cada 15 minutos.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Muitas tentativas de login. Aguarde alguns minutos e tente novamente.',
+  key: (req) => `${req.ip ?? 'ip'}:${String((req.body as { email?: string })?.email ?? '').toLowerCase()}`,
+});
+
 /** POST /api/auth/login — autentica e devolve o token + dados do usuário. */
 authRouter.post(
   '/login',
+  loginLimiter,
   asyncHandler(async (req, res) => {
     const { email, password } = loginSchema.parse(req.body);
     const user = await prisma.user.findUnique({

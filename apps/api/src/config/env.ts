@@ -17,6 +17,9 @@ const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().positive().default(3333),
   WEB_ORIGIN: z.string().default('http://localhost:5173'),
+  // Nº de proxies reversos confiáveis à frente da API (0 = nenhum). Necessário
+  // para que req.ip reflita o cliente real (rate-limit) atrás de Nginx/ELB.
+  TRUST_PROXY: z.coerce.number().int().nonnegative().default(0),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL é obrigatório'),
 
@@ -51,13 +54,27 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-// Em produção, subir com o segredo default permitiria forjar tokens.
-if (parsed.data.NODE_ENV === 'production' && parsed.data.JWT_SECRET === DEV_JWT_SECRET) {
-  // eslint-disable-next-line no-console
-  console.error(
-    'Configuração inválida (.env): JWT_SECRET não pode usar o valor padrão de desenvolvimento em produção.',
-  );
-  process.exit(1);
+// Em produção, subir com segredos/origens default seria comprometer o sistema
+// inteiro: tokens forjáveis, admin com senha conhecida e CORS aberto.
+if (parsed.data.NODE_ENV === 'production') {
+  const problems: string[] = [];
+  if (parsed.data.JWT_SECRET === DEV_JWT_SECRET || parsed.data.JWT_SECRET.length < 24) {
+    problems.push('JWT_SECRET deve ser forte (>= 24 caracteres, não o padrão de desenvolvimento).');
+  }
+  if (parsed.data.SEED_ADMIN_PASSWORD === 'admin123') {
+    problems.push('SEED_ADMIN_PASSWORD não pode usar o valor padrão em produção.');
+  }
+  if (parsed.data.WEB_ORIGIN.includes('*')) {
+    problems.push('WEB_ORIGIN deve listar origens explícitas em produção (sem "*").');
+  }
+  if (parsed.data.SELLBIE_MODE === 'live' && !parsed.data.SELLBIE_BASE_URL) {
+    problems.push('SELLBIE_MODE=live exige SELLBIE_BASE_URL configurada.');
+  }
+  if (problems.length > 0) {
+    // eslint-disable-next-line no-console
+    console.error(`Configuração inválida (.env):\n${problems.map((p) => `  - ${p}`).join('\n')}`);
+    process.exit(1);
+  }
 }
 if (parsed.data.NODE_ENV === 'development' && parsed.data.JWT_SECRET === DEV_JWT_SECRET) {
   // eslint-disable-next-line no-console
