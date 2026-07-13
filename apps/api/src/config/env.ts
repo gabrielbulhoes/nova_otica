@@ -30,12 +30,20 @@ const schema = z.object({
   SEED_ADMIN_PASSWORD: z.string().default('admin123'),
 
   SELLBIE_MODE: z.enum(['mock', 'live']).default('mock'),
+  // Base do conector CDS (ex.: http://<host>:<porta>/conectorCDS).
   SELLBIE_BASE_URL: z.string().optional().default(''),
+  // Autenticação da API CDS: três cabeçalhos (x_api_key / x_api_token /
+  // x_cliente_id). SELLBIE_API_KEY guarda o x_api_key.
   SELLBIE_API_KEY: z.string().optional().default(''),
+  SELLBIE_API_TOKEN: z.string().optional().default(''),
+  SELLBIE_CLIENT_ID: z.string().optional().default(''),
+  // Basic auth legado (não usado pela CDS; mantido por compatibilidade).
   SELLBIE_USERNAME: z.string().optional().default(''),
   SELLBIE_PASSWORD: z.string().optional().default(''),
   SELLBIE_WINDOW_START: z.string().regex(timeRegex).default('06:00'),
   SELLBIE_WINDOW_END: z.string().regex(timeRegex).default('07:00'),
+  // A doc da CDS não define janela de horário — em live, deixe true a menos
+  // que a CDS imponha uma janela de consumo.
   SELLBIE_IGNORE_WINDOW: boolish.default('false'),
 
   // Webhook genérico para alertas operacionais (falha do sync das 06h).
@@ -84,8 +92,15 @@ if (parsed.data.NODE_ENV === 'production') {
   if (parsed.data.WEB_ORIGIN.includes('*')) {
     problems.push('WEB_ORIGIN deve listar origens explícitas em produção (sem "*").');
   }
-  if (parsed.data.SELLBIE_MODE === 'live' && !parsed.data.SELLBIE_BASE_URL) {
-    problems.push('SELLBIE_MODE=live exige SELLBIE_BASE_URL configurada.');
+  if (parsed.data.SELLBIE_MODE === 'live') {
+    if (!parsed.data.SELLBIE_BASE_URL) {
+      problems.push('SELLBIE_MODE=live exige SELLBIE_BASE_URL configurada.');
+    }
+    if (!parsed.data.SELLBIE_API_KEY || !parsed.data.SELLBIE_API_TOKEN || !parsed.data.SELLBIE_CLIENT_ID) {
+      problems.push(
+        'SELLBIE_MODE=live exige SELLBIE_API_KEY, SELLBIE_API_TOKEN e SELLBIE_CLIENT_ID (cabeçalhos da CDS).',
+      );
+    }
   }
   if (parsed.data.PAYMENT_PROVIDER === 'mercadopago' && !parsed.data.MP_ACCESS_TOKEN) {
     problems.push('PAYMENT_PROVIDER=mercadopago exige MP_ACCESS_TOKEN.');

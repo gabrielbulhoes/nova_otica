@@ -16,6 +16,7 @@
     "prisma:push": "prisma db push",
     "seed": "tsx src/db/seed.ts",
     "sync:once": "tsx src/sync/runOnce.ts",
+    "cds:probe": "tsx src/integrations/sellbie/probe.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

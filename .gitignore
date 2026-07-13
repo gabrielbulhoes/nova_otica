@@ -37,3 +37,6 @@ coverage/
 *.local
 .cache/
 novaotica-demo-hostgator.zip
+
+# Amostras capturadas da CDS (podem conter dados de clientes) — nunca versionar
+apps/api/tmp/
