@@ -10,6 +10,11 @@ import { exportPaidOrdersToErp } from '../commerce/erpExport.service.js';
 
 export const syncRouter = Router();
 
+// Alçada única do módulo: sincronização e write-back movimentam o ERP real e
+// disparam alertas — só a rede (ADMIN) opera. Mesmo padrão de users/fiscal.
+// (As telas que consomem estas rotas já são exclusivas de ADMIN no painel.)
+syncRouter.use(requireRole('ADMIN'));
+
 /** GET /api/sync/status — estado da integração e da janela de uso. */
 syncRouter.get(
   '/status',
@@ -45,13 +50,22 @@ syncRouter.post(
 /**
  * POST /api/sync/export-orders — write-back manual: envia ao ERP os pedidos
  * online PAGOS ainda não exportados (POST /cds/inserirvenda), sem esperar o
- * próximo ciclo do sync. Idempotente por pedido (erpExportedAt).
+ * próximo ciclo do sync. Idempotente por pedido (claim atômico + carimbo).
+ * Corpo opcional: { "retryStuck": true } reprocessa envios interrompidos —
+ * use SOMENTE após conferir no ERP (pelo pedidoSite) que a venda não entrou.
  */
 syncRouter.post(
   '/export-orders',
-  requireRole('ADMIN'),
-  asyncHandler(async (_req, res) => {
-    const result = await exportPaidOrdersToErp(getSellbieClient());
+  asyncHandler(async (req, res) => {
+    // Fora do modo live não existe ERP real: carimbar erpExportedAt aqui
+    // excluiria os pedidos do write-back para sempre após a virada.
+    if (env.SELLBIE_MODE !== 'live') {
+      return res.status(400).json({
+        error: 'Write-back exige SELLBIE_MODE=live — em modo demonstração nada é exportado.',
+      });
+    }
+    const retryStuck = Boolean((req.body as { retryStuck?: boolean } | undefined)?.retryStuck);
+    const result = await exportPaidOrdersToErp(getSellbieClient(), { retryStuck });
     return res.json(result);
   }),
 );

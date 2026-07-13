@@ -7,6 +7,7 @@ import { HttpError } from '../http/helpers.js';
 import { getSellbieClient } from '../integrations/sellbie/index.js';
 import { checkWindow } from '../integrations/sellbie/window.js';
 import * as map from '../integrations/sellbie/mappers.js';
+import { exportPaidOrdersToErp } from '../modules/commerce/erpExport.service.js';
 
 const log = logger.child({ mod: 'sync' });
 
@@ -88,12 +89,17 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   const track = async (
     name: string,
     fn: () => Promise<{ read: number; written: number }>,
+    opts: { countTotals?: boolean } = {},
   ): Promise<void> => {
     try {
       const r = await fn();
-      entities[name] = r;
-      totalRead += r.read;
-      totalWritten += r.written;
+      entities[name] = { read: r.read, written: r.written };
+      if (opts.countTotals !== false) {
+        // recordsRead/recordsWritten do SyncRun contam apenas o fluxo
+        // ERP -> local (é o que o painel mostra como "registros").
+        totalRead += r.read;
+        totalWritten += r.written;
+      }
       log.info(`Entidade sincronizada: ${name}`, r);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -133,11 +139,12 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
 
   // 6) Write-back: exporta ao ERP os pedidos online pagos ainda não
   // enviados (POST /cds/inserirvenda). Só em modo live — no mock não há ERP
-  // real; a rota manual /api/sync/export-orders permite testar em qualquer
-  // modo. Falha aqui não bloqueia o restante do sync.
+  // real e carimbar erpExportedAt sem envio real excluiria o pedido do
+  // write-back para sempre. Falhas reais viram erro da entidade (alerta
+  // operacional); os contadores não entram no total do painel, que mede o
+  // fluxo ERP -> local.
   if (env.SELLBIE_MODE === 'live') {
-    const { exportPaidOrdersToErp } = await import('../modules/commerce/erpExport.service.js');
-    await track('erpExport', () => exportPaidOrdersToErp(client));
+    await track('erpExport', () => exportPaidOrdersToErp(client), { countTotals: false });
   }
 
   const hadError = Object.values(entities).some((e) => e.error);

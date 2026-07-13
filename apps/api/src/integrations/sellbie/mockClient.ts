@@ -221,6 +221,9 @@ function buildDataset(): MockDataset {
 
 const data = buildDataset();
 
+/** only_disp filtra pelo saldo DISPONÍVEL (líquido), não pelo físico. */
+const temDisponivel = (e: SellbieEstoque): boolean => Number(e.disponivel ?? e.quantidade ?? 0) > 0;
+
 /** Cliente Sellbie em modo mock — não acessa rede e ignora a janela de uso. */
 export class SellbieMockClient implements SellbieClient {
   async getLojas(): Promise<SellbieLoja[]> {
@@ -265,9 +268,7 @@ export class SellbieMockClient implements SellbieClient {
     if (query.cod_prod !== undefined && query.cod_prod !== '') {
       rows = rows.filter((e) => String(e.prodCodigo) === String(query.cod_prod));
     }
-    if (query.only_disp === 1) {
-      rows = rows.filter((e) => Number(e.quantidade ?? 0) > 0);
-    }
+    if (query.only_disp === 1) rows = rows.filter(temDisponivel);
     return rows;
   }
 
@@ -280,17 +281,31 @@ export class SellbieMockClient implements SellbieClient {
         .filter(Boolean);
     const prods = csv(query?.cod_prod);
     const lojas = csv(query?.cod_loja);
-    let rows: SellbieEstoqueGrade[] = data.estoque;
+    let rows = data.estoque;
     if (lojas.length > 0) rows = rows.filter((e) => lojas.includes(String(e.idFilial)));
     if (prods.length > 0) rows = rows.filter((e) => prods.includes(String(e.prodCodigo)));
-    if (query?.only_disp === 1) rows = rows.filter((e) => Number(e.quantidade ?? 0) > 0);
-    return rows;
+    if (query?.only_disp === 1) rows = rows.filter(temDisponivel);
+    // A grade difere do estoque simples por trazer a dimensão cor/tamanho.
+    const porCodigo = new Map(data.produtos.map((p) => [String(p.prodCodigo), p]));
+    return rows.map((e) => {
+      const prod = porCodigo.get(String(e.prodCodigo));
+      return { ...e, corCodigo: prod?.corCodigo, tamanhoCodigo: prod?.tamanhoCodigo };
+    });
   }
 
   async getContasPagar(query?: ContasPagarQuery): Promise<SellbieContaPagar[]> {
-    if (query?.situacao === 'abertos') return data.contasPagar.filter((c) => c.situacao === 'abertos');
-    if (query?.situacao === 'pagos') return data.contasPagar.filter((c) => c.situacao === 'pagos');
-    return data.contasPagar;
+    let rows = data.contasPagar;
+    if (query?.situacao) rows = rows.filter((c) => c.situacao === query.situacao);
+    if (query?.dataFiltro) {
+      // Regra documentada: abertos filtram por vencimento, pagos por
+      // pagamento; sem situação, a data vale para os dois campos.
+      rows = rows.filter((c) => {
+        if (c.situacao === 'pagos') return c.dataPagamento === query.dataFiltro;
+        if (c.situacao === 'abertos') return c.dataVencimento === query.dataFiltro;
+        return c.dataVencimento === query.dataFiltro || c.dataPagamento === query.dataFiltro;
+      });
+    }
+    return rows;
   }
 
   /** Vendas inseridas via mock (inspeção em testes/demonstrações). */

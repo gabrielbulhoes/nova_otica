@@ -426,10 +426,15 @@ model Order {
   updatedAt    DateTime    @updatedAt
   paidAt       DateTime?
 
-  // Write-back ao ERP (POST /cds/inserirvenda): quando o pedido pago foi
-  // exportado e, em caso de falha, o último erro. pedidoSite = number.
-  erpExportedAt  DateTime?
-  erpExportError String?
+  // Write-back ao ERP (POST /cds/inserirvenda) — semântica de outbox:
+  // attemptedAt marca o claim da tentativa (anti envio duplo concorrente);
+  // exportedAt marca sucesso; error guarda a última falha (retry até o teto
+  // de tentativas). attemptedAt sem exportedAt e sem error = envio
+  // interrompido: só reprocessa via retryStuck após conferir o ERP.
+  erpExportedAt       DateTime?
+  erpExportAttemptedAt DateTime?
+  erpExportAttempts   Int       @default(0)
+  erpExportError      String?
 
   store   Store          @relation(fields: [storeId], references: [id])
   items   OrderItem[]

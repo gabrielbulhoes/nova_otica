@@ -81,20 +81,30 @@ Pedidos **pagos** na loja online são enviados de volta à CDS pelo
 - automaticamente, como último passo de cada sincronização (`SELLBIE_MODE=live`);
 - ou sob demanda: `POST /api/sync/export-orders` (ADMIN).
 
-Regras de segurança do envio:
+Regras de segurança do envio (semântica de outbox):
 
-- **`pedidoSite` = número do pedido** (ex.: `NO-XXXX-000`) — é a referência de
-  deduplicação; o mesmo pedido nunca é reenviado após sucesso (`erpExportedAt`);
-- a rota de escrita **não faz retry automático**: a CDS não documenta
-  idempotência, e reenviar num timeout ambíguo poderia duplicar a venda. Falhas
-  ficam em `Order.erpExportError` e a nova tentativa ocorre no próximo ciclo;
+- **`pedidoSite` = número do pedido** (ex.: `NO-XXXX-000`) — referência de
+  deduplicação; sucesso carimba `erpExportedAt` e o pedido nunca é reenviado;
+- cada envio é **reservado atomicamente** antes do POST: o sync agendado e a
+  rota manual nunca enviam o mesmo pedido em duplicidade, mesmo em paralelo;
+- **falha com erro registrado** (`erpExportError`, com o corpo da resposta do
+  ERP) volta à fila automaticamente, até **5 tentativas** — depois disso o
+  pedido sai da fila (evita um pedido "veneno" tentando para sempre) e exige
+  correção manual;
+- **envio interrompido** (caiu entre o POST e o carimbo — estado ambíguo) NÃO é
+  reenviado automaticamente: confira no ERP pelo `pedidoSite` e, se a venda não
+  entrou, reprocesse com `POST /api/sync/export-orders {"retryStuck": true}`;
+- a rota manual exige `SELLBIE_MODE=live` (em demo/mock nada é exportado — e
+  nada é carimbado);
+- desconto/acréscimo são calculados pela diferença itens × total (a conta
+  fecha no ERP mesmo com cupom/frete);
 - o vendedor registrado é `SELLBIE_EXPORT_SELLER` (padrão `ECOMMERCE`) — crie
   esse funcionário no CDS para as vendas do site ficarem identificadas;
 - CPF/endereço vão vazios (consumidor final) até o checkout coletá-los.
 
 > Confirme com a CDS se o `inserirvenda` deduplica por `pedidoSite`. Se sim,
-> reenvios após falha ambígua são 100% seguros; se não, monitorem
-> `erpExportError` antes de reprocessar manualmente.
+> reenvios após falha ambígua são 100% seguros e o `retryStuck` pode virar
+> automático; se não, mantenham a conferência manual antes de reprocessar.
 
 ## Ainda pendente do cliente (fora da API)
 

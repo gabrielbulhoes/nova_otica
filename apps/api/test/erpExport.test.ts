@@ -53,4 +53,36 @@ describe('buildInserirVendaPayload', () => {
     const p = buildInserirVendaPayload(order);
     expect(p.funcionario).toBe('ECOMMERCE');
   });
+
+  it('pedido sem desconto fecha a conta: itens = pagamento, desconto/acréscimo zero', () => {
+    const p = buildInserirVendaPayload(order); // 399.60 + 2×49.95 = 499.50 = total
+    expect(p.finalizarVenda.descontoValor).toBe(0);
+    expect(p.finalizarVenda.acrescimo).toBe(0);
+    expect(p.finalizarVenda.motivoDesconto).toBeNull();
+  });
+
+  it('total menor que a soma dos itens vira descontoValor (conta fecha no ERP)', () => {
+    const p = buildInserirVendaPayload({ ...order, total: 449.5 }); // cupom de 50
+    expect(p.finalizarVenda.descontoValor).toBe(50);
+    expect(p.finalizarVenda.acrescimo).toBe(0);
+    expect(p.finalizarVenda.motivoDesconto).toBe('Desconto aplicado no pedido online');
+    expect(p.formasPagamento[0].valorForma).toBe(449.5);
+  });
+
+  it('total maior que a soma dos itens vira acréscimo (ex.: frete)', () => {
+    const p = buildInserirVendaPayload({ ...order, total: 519.5 }); // +20 de frete
+    expect(p.finalizarVenda.acrescimo).toBe(20);
+    expect(p.finalizarVenda.descontoValor).toBe(0);
+    expect(p.finalizarVenda.motivoDesconto).toBeNull();
+  });
+
+  it('desconto calculado em centavos — sem deriva de ponto flutuante', () => {
+    // 3 × 0.10 = 0.30000000000000004 em float; em centavos, fecha exato.
+    const p = buildInserirVendaPayload({
+      ...order,
+      total: 0.25,
+      items: [{ quantity: 3, unitPrice: 0.1, productExternalId: '1', productDescription: 'A' }],
+    });
+    expect(p.finalizarVenda.descontoValor).toBe(0.05);
+  });
 });
