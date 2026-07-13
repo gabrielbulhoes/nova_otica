@@ -82,7 +82,8 @@ function MinStockEditor({ alert }: { alert: StockAlert }) {
   const qc = useQueryClient();
   const [value, setValue] = useState(String(alert.threshold));
   const save = useMutation({
-    mutationFn: (v: number) => setMinStock(alert.productId, v),
+    // Editar numa linha de alerta define o mínimo DAQUELA loja (override).
+    mutationFn: (v: number) => setMinStock(alert.productId, v, alert.storeId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['alerts'] }),
   });
 
@@ -98,6 +99,7 @@ function MinStockEditor({ alert }: { alert: StockAlert }) {
       <button
         className="btn sm"
         disabled={save.isPending}
+        title="Define o mínimo desta loja para este produto"
         onClick={() => save.mutate(Number(value))}
       >
         OK

@@ -179,6 +179,7 @@ model StockItem {
   quantity  Int @default(0) // quantidade vinda do Sellbie na última sync
   available Int @default(0) // disponível (only_disp) na última sync
   reserved  Int @default(0) // reservado por movimentações internas pendentes
+  minStock  Int? // mínimo específico desta loja (sobrepõe o do produto/rede)
 
   syncedAt  DateTime?
   createdAt DateTime  @default(now())

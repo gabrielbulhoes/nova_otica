@@ -34,6 +34,8 @@ export interface StockRow {
   price: number | null;
   /** Estoque mínimo do produto (nulo = usa o padrão da rede). */
   minStock: number | null;
+  /** Mínimo específico desta loja (sobrepõe o do produto quando definido). */
+  storeMinStock: number | null;
   /** Quantidade da última sincronização da fonte. */
   synced: number;
   /** Reservado por movimentações internas pendentes. */
@@ -122,6 +124,7 @@ export async function listStock(filter: StockFilter): Promise<{ total: number; r
       category: it.product.category,
       price: toNumber(it.product.price),
       minStock: it.product.minStock,
+      storeMinStock: it.minStock,
       synced: it.quantity,
       reserved: it.reserved,
       pendingDelta,

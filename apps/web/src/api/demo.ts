@@ -77,6 +77,8 @@ const products: Product[] = Array.from({ length: 16 }, (_, i) => {
 const stockQty = new Map<string, number>();
 for (const st of stores) for (const p of products) stockQty.set(`${st.id}:${p.id}`, r() < 0.12 ? int(0, 2) : int(3, 30));
 const reserved = new Map<string, number>();
+// Overrides de estoque mínimo por loja (paridade com StockItem.minStock)
+const storeMinStock = new Map<string, number | null>();
 const key = (s: string, p: string) => `${s}:${p}`;
 
 // Vendas por loja×produto no período (base do planejamento/redistribuição)
@@ -187,7 +189,12 @@ function stockRows(params: Record<string, string | undefined>) {
 }
 
 function alerts() {
-  const rows = stockRows({}).filter((x) => (x.availableNow as number) <= (x.minStock as number));
+  const rows = stockRows({}).filter((x) => {
+    const override = storeMinStock.get(key(x.storeId as string, x.productId as string));
+    const threshold = override ?? (x.minStock as number);
+    (x as Record<string, unknown>).minStock = threshold;
+    return (x.availableNow as number) <= threshold;
+  });
   return {
     total: rows.length,
     out: rows.filter((x) => (x.availableNow as number) <= 0).length,
@@ -507,7 +514,16 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
 
   // Alertas
   if (url === '/alerts') return alerts();
-  if (url === '/alerts/min-stock' && m === 'PUT') { const prod = prodById(body.productId as string); if (prod) prod.minStock = Number(body.minStock ?? 3); return { id: prod?.id, minStock: prod?.minStock }; }
+  if (url === '/alerts/min-stock' && m === 'PUT') {
+    const prod = prodById(body.productId as string);
+    if (!prod) return { __status: 404, error: 'Produto não encontrado' };
+    if (body.storeId) {
+      storeMinStock.set(key(body.storeId as string, prod.id), body.minStock === null ? null : Number(body.minStock ?? 3));
+      return { storeId: body.storeId, productId: prod.id, minStock: body.minStock, scope: 'store' };
+    }
+    prod.minStock = Number(body.minStock ?? 3);
+    return { id: prod.id, minStock: prod.minStock, scope: 'product' };
+  }
 
   // AR
   if (url === '/ar/products')
