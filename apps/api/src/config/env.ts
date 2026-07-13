@@ -42,6 +42,15 @@ const schema = z.object({
   ALERT_WEBHOOK_URL: z.string().optional().default(''),
 
   PAYMENT_PROVIDER: z.enum(['mock', 'mercadopago']).default('mock'),
+
+  // Emissão fiscal (NFC-e/NF-e) via provider — mock por padrão.
+  FISCAL_PROVIDER: z.enum(['mock', 'focusnfe']).default('mock'),
+  FISCAL_ENV: z.enum(['homologacao', 'producao']).default('homologacao'),
+  FOCUS_NFE_TOKEN: z.string().optional().default(''),
+  FISCAL_CNPJ: z.string().optional().default('00000000000000'),
+  FISCAL_NCM_DEFAULT: z.string().default('90031100'), // armações de óculos
+  FISCAL_CFOP_NFCE: z.string().default('5102'),
+  FISCAL_CFOP_TRANSFER: z.string().default('5152'),
   MP_ACCESS_TOKEN: z.string().optional().default(''),
   MP_WEBHOOK_SECRET: z.string().optional().default(''),
   MP_PAYER_EMAIL: z.string().optional().default(''),
@@ -80,6 +89,9 @@ if (parsed.data.NODE_ENV === 'production') {
   }
   if (parsed.data.PAYMENT_PROVIDER === 'mercadopago' && !parsed.data.MP_ACCESS_TOKEN) {
     problems.push('PAYMENT_PROVIDER=mercadopago exige MP_ACCESS_TOKEN.');
+  }
+  if (parsed.data.FISCAL_PROVIDER === 'focusnfe' && !parsed.data.FOCUS_NFE_TOKEN) {
+    problems.push('FISCAL_PROVIDER=focusnfe exige FOCUS_NFE_TOKEN.');
   }
   if (problems.length > 0) {
     // eslint-disable-next-line no-console

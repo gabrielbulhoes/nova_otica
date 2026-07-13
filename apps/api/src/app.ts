@@ -25,6 +25,7 @@ import { cartRouter } from './modules/commerce/cart.routes.js';
 import { ordersRouter } from './modules/commerce/orders.routes.js';
 import { paymentsWebhookRouter } from './modules/commerce/payments.webhook.js';
 import { arRouter } from './modules/ar/ar.routes.js';
+import { fiscalRouter } from './modules/fiscal/fiscal.routes.js';
 import { syncRouter } from './modules/sync/sync.routes.js';
 
 export function createApp() {
@@ -75,6 +76,7 @@ export function createApp() {
   app.use('/api/cart', cartRouter);
   app.use('/api/orders', ordersRouter);
   app.use('/api/ar', arRouter);
+  app.use('/api/fiscal', fiscalRouter);
   app.use('/api/sync', syncRouter);
 
   // 404 apenas para rotas de API não encontradas.
