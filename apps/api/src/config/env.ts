@@ -38,6 +38,9 @@ const schema = z.object({
   SELLBIE_WINDOW_END: z.string().regex(timeRegex).default('07:00'),
   SELLBIE_IGNORE_WINDOW: boolish.default('false'),
 
+  // Webhook genérico para alertas operacionais (falha do sync das 06h).
+  ALERT_WEBHOOK_URL: z.string().optional().default(''),
+
   PAYMENT_PROVIDER: z.enum(['mock', 'mercadopago']).default('mock'),
   MP_ACCESS_TOKEN: z.string().optional().default(''),
   MP_WEBHOOK_SECRET: z.string().optional().default(''),

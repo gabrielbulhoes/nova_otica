@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { publish } from '../lib/eventBus.js';
+import { notifySyncFailure } from '../lib/opsAlert.js';
 import { HttpError } from '../http/helpers.js';
 import { getSellbieClient } from '../integrations/sellbie/index.js';
 import { checkWindow } from '../integrations/sellbie/window.js';
@@ -149,6 +150,11 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   });
 
   log.info('Sincronização concluída', { durationMs, totalRead, totalWritten, ok: !hadError });
+  if (hadError) {
+    // Falha do sync das 06h é o incidente mais crítico da operação: além do
+    // registro em SyncRun, notifica ativamente (webhook), sem travar o fluxo.
+    await notifySyncFailure({ trigger, window: win.window, durationMs, entities });
+  }
   publish({ type: 'sync.completed', ok: !hadError });
 
   // Notificação proativa: com a base recém-sincronizada, avisa o painel se
