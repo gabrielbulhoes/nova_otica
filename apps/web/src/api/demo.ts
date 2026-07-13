@@ -34,6 +34,16 @@ const money = (min: number, max: number) => Math.round((r() * (max - min) + min)
 const int = (min: number, max: number) => Math.floor(r() * (max - min + 1)) + min;
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/** Hash estável em [0,1) a partir de uma string (variação determinística). */
+function hash01(str: string) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 4294967296;
+}
+
 interface Store { id: string; externalId: string; name: string; city: string; state: string; active: boolean }
 interface Product {
   id: string; externalId: string; sku: string; description: string; brand: string;
@@ -413,6 +423,38 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     brand !== null && demoLeadTimes.has(brand)
       ? { ...DEFAULT_PLANNING_CONFIG, leadTimeDays: demoLeadTimes.get(brand)! }
       : DEFAULT_PLANNING_CONFIG;
+  /**
+   * Histórico fictício p/ a previsão: 12 buckets mensais determinísticos com
+   * sazonalidade — Óculos de Sol vendem mais no verão (dez–fev) e Armações
+   * têm leve alta em janeiro. A janela recente ganha a tendência do produto.
+   */
+  const demoDemandHistory = (prod: Product, scope: Store[], period: number) => {
+    const unitsSold = scope.reduce((a, s) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0);
+    const daily = period > 0 ? unitsSold / period : 0;
+    const recentDays = Math.min(30, period);
+    // tendência determinística: alguns produtos aquecendo, outros esfriando
+    const trend = 0.8 + hash01(`trend:${prod.externalId}`) * 0.5; // 0.8–1.3
+    const recentUnits = Math.min(unitsSold, Math.round(daily * recentDays * trend));
+    const seasonalOf = (month: number) => {
+      if (prod.category === 'Óculos de Sol') return month === 12 || month <= 2 ? 1.7 : 0.85;
+      if (prod.category === 'Armação') return month === 1 ? 1.3 : 0.97;
+      return 1;
+    };
+    const monthlyHistory = Array.from({ length: 12 }, (_, i) => {
+      const month = i + 1;
+      const base = Math.max(4, daily * 30);
+      return { month, units: Math.round(base * seasonalOf(month) * (0.9 + hash01(`m:${prod.externalId}:${month}`) * 0.2)) };
+    });
+    return {
+      recentUnits,
+      recentDays,
+      priorUnits: unitsSold - recentUnits,
+      priorDays: Math.max(0, period - recentDays),
+      monthlyHistory,
+      currentMonth: new Date().getMonth() + 1,
+    };
+  };
+
   const planningPlans = (period: number, storeId?: string) => {
     const scope = storeId ? stores.filter((s) => s.id === storeId) : stores;
     return products.map((prod) =>
@@ -427,6 +469,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           unitCost: round2(prod.price * 0.55),
           unitPrice: prod.price,
           onOrderQty: onOrderQty(prod.id),
+          demandHistory: demoDemandHistory(prod, scope, period),
         },
         period,
         cfgForBrand(prod.brand),

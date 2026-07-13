@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
@@ -10,6 +10,7 @@ import {
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
   type PlanningConfig,
+  type DemandHistory,
   type ProductMetricsInput,
   type ProductPlan,
   type StoreProductInput,
@@ -64,30 +65,93 @@ export async function planningInputs(days: number, storeId?: string): Promise<Pr
   });
   const stockBy = new Map(stock.map((s) => [s.productId, s._sum.quantity ?? 0]));
 
+  // Janela recente (até 30 dias) para a suavização com peso recente.
+  const recentDays = Math.min(30, days);
+  const recentFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(recentDays) } };
+  if (storeId) recentFilter.storeId = storeId;
+  const soldRecent = await prisma.saleItem.groupBy({
+    by: ['productId'],
+    where: { sale: recentFilter, productId: { not: null } },
+    _sum: { quantity: true },
+  });
+  const recentBy = new Map(soldRecent.map((r) => [r.productId as string, r._sum.quantity ?? 0]));
+
   const ids = Array.from(new Set([...soldBy.keys(), ...stockBy.keys()]));
-  const [products, onOrderBy] = await Promise.all([
+  const [products, onOrderBy, monthlyBy] = await Promise.all([
     prisma.product.findMany({
       where: { id: { in: ids } },
       select: { id: true, description: true, brand: true, category: true, price: true, cost: true },
     }),
     onOrderQuantities(),
+    monthlyHistoryByProduct(storeId),
   ]);
 
+  const currentMonth = new Date().getMonth() + 1;
   return products.map((p) => {
     const price = toNumber(p.price) ?? 0;
     const cost = toNumber(p.cost) ?? round2(price * 0.55);
+    const unitsSold = soldBy.get(p.id) ?? 0;
+    const recentUnits = Math.min(recentBy.get(p.id) ?? 0, unitsSold);
+    const demandHistory: DemandHistory = {
+      recentUnits,
+      recentDays,
+      priorUnits: unitsSold - recentUnits,
+      priorDays: Math.max(0, days - recentDays),
+      monthlyHistory: monthlyBy.get(p.id) ?? [],
+      currentMonth,
+    };
     return {
       productId: p.id,
       description: p.description,
       brand: p.brand,
       category: p.category,
-      unitsSold: soldBy.get(p.id) ?? 0,
+      unitsSold,
       currentStock: stockBy.get(p.id) ?? 0,
       unitCost: cost,
       unitPrice: price,
       onOrderQty: onOrderBy.get(p.id) ?? 0,
+      demandHistory,
     };
   });
+}
+
+/**
+ * Histórico mensal de vendas por produto (até 24 meses), para o índice
+ * sazonal: um bucket por (produto, ano-mês) com o mês calendário e as
+ * unidades vendidas.
+ */
+async function monthlyHistoryByProduct(
+  storeId?: string,
+): Promise<Map<string, { month: number; units: number }[]>> {
+  const rows = await prisma.$queryRaw<{ pid: string; month: number; units: number }[]>(
+    storeId
+      ? Prisma.sql`
+          SELECT si."productId" AS pid,
+                 EXTRACT(MONTH FROM s."saleDate")::int AS month,
+                 SUM(si.quantity)::int AS units
+          FROM "SaleItem" si
+          JOIN "Sale" s ON s.id = si."saleId"
+          WHERE si."productId" IS NOT NULL
+            AND s."saleDate" >= NOW() - INTERVAL '24 months'
+            AND s."storeId" = ${storeId}
+          GROUP BY pid, to_char(s."saleDate", 'YYYY-MM'), month`
+      : Prisma.sql`
+          SELECT si."productId" AS pid,
+                 EXTRACT(MONTH FROM s."saleDate")::int AS month,
+                 SUM(si.quantity)::int AS units
+          FROM "SaleItem" si
+          JOIN "Sale" s ON s.id = si."saleId"
+          WHERE si."productId" IS NOT NULL
+            AND s."saleDate" >= NOW() - INTERVAL '24 months'
+          GROUP BY pid, to_char(s."saleDate", 'YYYY-MM'), month`,
+  );
+  const byProduct = new Map<string, { month: number; units: number }[]>();
+  for (const r of rows) {
+    const list = byProduct.get(r.pid) ?? [];
+    list.push({ month: r.month, units: r.units });
+    byProduct.set(r.pid, list);
+  }
+  return byProduct;
 }
 
 /** Snapshot de item dentro do JSON de um pedido registrado. */

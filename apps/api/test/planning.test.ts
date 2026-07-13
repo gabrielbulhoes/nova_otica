@@ -6,6 +6,7 @@ import {
   buildRebalance,
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
+  forecastDemand,
   paretoSummary,
   type ProductMetricsInput,
 } from '../src/modules/planning/planning.math.js';
@@ -270,5 +271,82 @@ describe('posição de estoque com pedidos a caminho (onOrderQty)', () => {
     const parcial = analyzeProduct({ ...item, onOrderQty: 10 }, 90); // posição 15 ≤ 21 → ainda BUY
     expect(parcial.recommendation).toBe('BUY');
     expect(parcial.suggestedQty).toBe(45); // alvo 60 − posição 15
+  });
+});
+
+describe('forecastDemand (suavização + sazonalidade)', () => {
+  const flat12 = (units: number) => Array.from({ length: 12 }, (_, i) => ({ month: i + 1, units }));
+
+  it('sem janela anterior usa a taxa recente (média)', () => {
+    const f = forecastDemand(
+      { recentUnits: 30, recentDays: 30, priorUnits: 0, priorDays: 0, monthlyHistory: [], currentMonth: 6 },
+      14,
+    );
+    expect(f.dailyDemand).toBe(1);
+    expect(f.method).toBe('media');
+    expect(f.seasonalIndex).toBe(1);
+  });
+
+  it('produto acelerando pesa mais a janela recente (tendência)', () => {
+    // recente: 2/dia; anterior: 1/dia → base 0,65*2 + 0,35*1 = 1,65
+    const f = forecastDemand(
+      { recentUnits: 60, recentDays: 30, priorUnits: 60, priorDays: 60, monthlyHistory: [], currentMonth: 6 },
+      14,
+    );
+    expect(f.baseDaily).toBe(1.65);
+    expect(f.method).toBe('tendencia');
+  });
+
+  it('aplica índice sazonal do mês de CHEGADA do pedido (lead time)', () => {
+    // histórico: dezembro vende 2x a média; hoje é novembro, lead 30d → alvo dezembro
+    const history = flat12(10).map((b) => (b.month === 12 ? { ...b, units: 21 } : b));
+    const f = forecastDemand(
+      { recentUnits: 30, recentDays: 30, priorUnits: 60, priorDays: 60, monthlyHistory: history, currentMonth: 11 },
+      30,
+    );
+    expect(f.targetMonth).toBe(12);
+    expect(f.seasonalIndex).toBeGreaterThan(1.5);
+    expect(f.method).toBe('sazonal');
+    expect(f.dailyDemand).toBeGreaterThan(f.baseDaily);
+  });
+
+  it('degrada para índice 1 com histórico insuficiente (poucos meses ou pouco volume)', () => {
+    const poucosMeses = flat12(10).slice(0, 4);
+    const f1 = forecastDemand(
+      { recentUnits: 30, recentDays: 30, priorUnits: 0, priorDays: 0, monthlyHistory: poucosMeses, currentMonth: 1 },
+      14,
+    );
+    expect(f1.seasonalIndex).toBe(1);
+    const poucoVolume = flat12(1); // 12 meses mas só 12 unidades
+    const f2 = forecastDemand(
+      { recentUnits: 30, recentDays: 30, priorUnits: 0, priorDays: 0, monthlyHistory: poucoVolume, currentMonth: 1 },
+      14,
+    );
+    expect(f2.seasonalIndex).toBe(1);
+  });
+
+  it('índice sazonal é limitado (clamp) contra outliers', () => {
+    const history = flat12(10).map((b) => (b.month === 7 ? { ...b, units: 500 } : b));
+    const f = forecastDemand(
+      { recentUnits: 90, recentDays: 30, priorUnits: 0, priorDays: 0, monthlyHistory: history, currentMonth: 6 },
+      30,
+    );
+    expect(f.seasonalIndex).toBeLessThanOrEqual(2);
+  });
+
+  it('analyzeProduct usa a previsão no ponto de reposição', () => {
+    // média simples seria 1/dia; previsão sazonal dobra → ROP dobra
+    const history = {
+      recentUnits: 30, recentDays: 30, priorUnits: 60, priorDays: 60,
+      monthlyHistory: flat12(10).map((b) => (b.month === 12 ? { ...b, units: 20 } : b)),
+      currentMonth: 11,
+    };
+    const semForecast = analyzeProduct({ ...base, unitsSold: 90, currentStock: 30 }, 90);
+    const comForecast = analyzeProduct({ ...base, unitsSold: 90, currentStock: 30, demandHistory: history }, 90, {
+      ...DEFAULT_PLANNING_CONFIG,
+      leadTimeDays: 30,
+    });
+    expect(comForecast.forecast?.method).toBe('sazonal');
+    expect(comForecast.reorderPoint).toBeGreaterThan(semForecast.reorderPoint);
   });
 });

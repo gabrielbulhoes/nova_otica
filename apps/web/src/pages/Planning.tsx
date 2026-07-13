@@ -728,7 +728,21 @@ export function Planning() {
                         <div style={{ fontSize: 11, color: 'var(--accent)' }}>+{r.onOrderQty} a caminho</div>
                       )}
                     </td>
-                    <td className="num">{r.dailyDemand}</td>
+                    <td
+                      className="num"
+                      title={
+                        r.forecast
+                          ? `Previsão ${r.forecast.method} — base ${r.forecast.baseDaily}/dia × índice sazonal ${r.forecast.seasonalIndex} (mês ${r.forecast.targetMonth})`
+                          : 'Média simples do período'
+                      }
+                    >
+                      {r.dailyDemand}
+                      {r.forecast && r.forecast.method !== 'media' && (
+                        <span className="muted" style={{ marginLeft: 4, fontSize: 11 }}>
+                          {r.forecast.method === 'sazonal' ? '☀' : '↗'}
+                        </span>
+                      )}
+                    </td>
                     <td className="num">
                       {r.coverageDays === null ? '∞' : `${r.coverageDays}d`}
                       {r.stockoutInDays !== null && (
