@@ -426,6 +426,11 @@ model Order {
   updatedAt    DateTime    @updatedAt
   paidAt       DateTime?
 
+  // Write-back ao ERP (POST /cds/inserirvenda): quando o pedido pago foi
+  // exportado e, em caso de falha, o último erro. pedidoSite = number.
+  erpExportedAt  DateTime?
+  erpExportError String?
+
   store   Store          @relation(fields: [storeId], references: [id])
   items   OrderItem[]
   payment OnlinePayment?

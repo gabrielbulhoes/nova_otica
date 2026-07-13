@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { publish } from '../lib/eventBus.js';
 import { notifySyncFailure } from '../lib/opsAlert.js';
@@ -128,6 +129,15 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   } else {
     log.warn('Reconciliação pulada: sincronização de estoque falhou ou não ocorreu');
     entities.reconcile = { read: 0, written: 0, error: 'pulada: sync de estoque falhou' };
+  }
+
+  // 6) Write-back: exporta ao ERP os pedidos online pagos ainda não
+  // enviados (POST /cds/inserirvenda). Só em modo live — no mock não há ERP
+  // real; a rota manual /api/sync/export-orders permite testar em qualquer
+  // modo. Falha aqui não bloqueia o restante do sync.
+  if (env.SELLBIE_MODE === 'live') {
+    const { exportPaidOrdersToErp } = await import('../modules/commerce/erpExport.service.js');
+    await track('erpExport', () => exportPaidOrdersToErp(client));
   }
 
   const hadError = Object.values(entities).some((e) => e.error);

@@ -3,13 +3,19 @@ import { env } from '../../config/env.js';
 import { logger } from '../../lib/logger.js';
 import { assertWindow } from './window.js';
 import type {
+  CdsInserirVendaPayload,
+  CdsInserirVendaResult,
+  ContasPagarQuery,
+  EstoqueGradeQuery,
   EstoqueQuery,
   SellbieClient,
   SellbieCliente,
+  SellbieContaPagar,
   SellbieCor,
   SellbieDateRange,
   SellbieDetalheVenda,
   SellbieEstoque,
+  SellbieEstoqueGrade,
   SellbieLoja,
   SellbiePagamentoVenda,
   SellbieProduto,
@@ -139,5 +145,32 @@ export class SellbieHttpClient implements SellbieClient {
       cod_prod: query.cod_prod,
       only_disp: query.only_disp ?? 0,
     });
+  }
+
+  getEstoqueGrade(query?: EstoqueGradeQuery): Promise<SellbieEstoqueGrade[]> {
+    return this.get<SellbieEstoqueGrade>('cds/estoquegrade', query);
+  }
+
+  getContasPagar(query?: ContasPagarQuery): Promise<SellbieContaPagar[]> {
+    return this.get<SellbieContaPagar>('cds/contasPagar', query);
+  }
+
+  /**
+   * POST /cds/inserirvenda — SEM retry deliberadamente: a rota grava uma
+   * venda e a CDS não documenta idempotência. Reenviar num timeout ambíguo
+   * poderia duplicar a venda no ERP; em caso de falha o chamador registra o
+   * erro e a nova tentativa acontece num próximo ciclo, rastreada por
+   * pedidoSite.
+   */
+  async inserirVenda(payload: CdsInserirVendaPayload): Promise<CdsInserirVendaResult> {
+    assertWindow();
+    try {
+      const res = await this.http.post('cds/inserirvenda', payload);
+      return res.data;
+    } catch (err) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      log.error('Falha ao inserir venda na CDS', { pedidoSite: payload.pedidoSite, status });
+      throw err;
+    }
   }
 }

@@ -73,6 +73,29 @@ estoque. Em produção, o agendador (`SYNC_CRON`, padrão 06:00) roda sozinho;
 | `pagamentosVendas` | BI de formas de pagamento |
 | `clientes` | Base de clientes |
 
+## Write-back: vendas online entram no ERP
+
+Pedidos **pagos** na loja online são enviados de volta à CDS pelo
+`POST /cds/inserirvenda`:
+
+- automaticamente, como último passo de cada sincronização (`SELLBIE_MODE=live`);
+- ou sob demanda: `POST /api/sync/export-orders` (ADMIN).
+
+Regras de segurança do envio:
+
+- **`pedidoSite` = número do pedido** (ex.: `NO-XXXX-000`) — é a referência de
+  deduplicação; o mesmo pedido nunca é reenviado após sucesso (`erpExportedAt`);
+- a rota de escrita **não faz retry automático**: a CDS não documenta
+  idempotência, e reenviar num timeout ambíguo poderia duplicar a venda. Falhas
+  ficam em `Order.erpExportError` e a nova tentativa ocorre no próximo ciclo;
+- o vendedor registrado é `SELLBIE_EXPORT_SELLER` (padrão `ECOMMERCE`) — crie
+  esse funcionário no CDS para as vendas do site ficarem identificadas;
+- CPF/endereço vão vazios (consumidor final) até o checkout coletá-los.
+
+> Confirme com a CDS se o `inserirvenda` deduplica por `pedidoSite`. Se sim,
+> reenvios após falha ambígua são 100% seguros; se não, monitorem
+> `erpExportError` antes de reprocessar manualmente.
+
 ## Ainda pendente do cliente (fora da API)
 
 - **Prazos de fornecedores** (marca × dias de entrega): cadastrar em

@@ -1,11 +1,17 @@
 import type {
+  CdsInserirVendaPayload,
+  CdsInserirVendaResult,
+  ContasPagarQuery,
+  EstoqueGradeQuery,
   EstoqueQuery,
   SellbieClient,
   SellbieCliente,
+  SellbieContaPagar,
   SellbieCor,
   SellbieDateRange,
   SellbieDetalheVenda,
   SellbieEstoque,
+  SellbieEstoqueGrade,
   SellbieLoja,
   SellbiePagamentoVenda,
   SellbieProduto,
@@ -70,6 +76,7 @@ interface MockDataset {
   detalhes: SellbieDetalheVenda[];
   pagamentos: SellbiePagamentoVenda[];
   estoque: SellbieEstoque[];
+  contasPagar: SellbieContaPagar[];
 }
 
 /** Constrói o dataset completo de demonstração uma única vez. */
@@ -194,7 +201,22 @@ function buildDataset(): MockDataset {
     });
   }
 
-  return { lojas, vendedores, cores, tamanhos, produtos, clientes, vendas, detalhes, pagamentos, estoque };
+  // Contas a pagar dos últimos 30 dias (metade abertas, metade pagas).
+  const contasPagar: SellbieContaPagar[] = Array.from({ length: 12 }, (_, i) => {
+    const paga = i % 2 === 1;
+    const dia = isoDaysAgo(intBetween(rand, 0, 29));
+    return {
+      id: 900 + i,
+      fornecedor: pick(rand, MARCAS),
+      descricao: `Duplicata ${900 + i}`,
+      valor: money(rand, 300, 8000),
+      situacao: paga ? 'pagos' : 'abertos',
+      dataVencimento: dia,
+      dataPagamento: paga ? dia : undefined,
+    };
+  });
+
+  return { lojas, vendedores, cores, tamanhos, produtos, clientes, vendas, detalhes, pagamentos, estoque, contasPagar };
 }
 
 const data = buildDataset();
@@ -247,5 +269,35 @@ export class SellbieMockClient implements SellbieClient {
       rows = rows.filter((e) => Number(e.quantidade ?? 0) > 0);
     }
     return rows;
+  }
+
+  async getEstoqueGrade(query?: EstoqueGradeQuery): Promise<SellbieEstoqueGrade[]> {
+    // Listas CSV, como a CDS documenta ("10066,10101" / "1,3,5").
+    const csv = (v?: string) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const prods = csv(query?.cod_prod);
+    const lojas = csv(query?.cod_loja);
+    let rows: SellbieEstoqueGrade[] = data.estoque;
+    if (lojas.length > 0) rows = rows.filter((e) => lojas.includes(String(e.idFilial)));
+    if (prods.length > 0) rows = rows.filter((e) => prods.includes(String(e.prodCodigo)));
+    if (query?.only_disp === 1) rows = rows.filter((e) => Number(e.quantidade ?? 0) > 0);
+    return rows;
+  }
+
+  async getContasPagar(query?: ContasPagarQuery): Promise<SellbieContaPagar[]> {
+    if (query?.situacao === 'abertos') return data.contasPagar.filter((c) => c.situacao === 'abertos');
+    if (query?.situacao === 'pagos') return data.contasPagar.filter((c) => c.situacao === 'pagos');
+    return data.contasPagar;
+  }
+
+  /** Vendas inseridas via mock (inspeção em testes/demonstrações). */
+  readonly vendasInseridas: CdsInserirVendaPayload[] = [];
+
+  async inserirVenda(payload: CdsInserirVendaPayload): Promise<CdsInserirVendaResult> {
+    this.vendasInseridas.push(payload);
+    return { ok: true, pedidoSite: payload.pedidoSite };
   }
 }

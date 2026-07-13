@@ -120,6 +120,106 @@ export interface EstoqueQuery {
   only_disp?: 0 | 1;
 }
 
+/**
+ * GET /cds/estoquegrade — consulta em lote: cod_prod/cod_loja aceitam lista
+ * separada por vírgula (ex.: "10066,10101"). only_disp só documenta o valor 1.
+ */
+export interface EstoqueGradeQuery {
+  /** Lista de prodCodigo separada por vírgula. */
+  cod_prod?: string;
+  /** Lista de idFilial separada por vírgula. */
+  cod_loja?: string;
+  /** 1 = somente produtos com saldo. */
+  only_disp?: 1;
+}
+
+/** Linha da grade de estoque (formato tolerante — igual a SellbieEstoque). */
+export interface SellbieEstoqueGrade extends SellbieEstoque {
+  corCodigo?: number | string;
+  tamanhoCodigo?: number | string;
+}
+
+/**
+ * GET /cds/contasPagar — situacao abertos|pagos (vazio = ambas);
+ * dataFiltro (aaaa-mm-dd) filtra por vencimento (abertos) ou pagamento
+ * (pagos); sem dataFiltro retorna os últimos 30 dias.
+ */
+export interface ContasPagarQuery {
+  situacao?: 'abertos' | 'pagos';
+  /** aaaa-mm-dd */
+  dataFiltro?: string;
+}
+
+/** Conta a pagar (payload exato ainda não documentado — modelo tolerante). */
+export interface SellbieContaPagar {
+  id?: number | string;
+  fornecedor?: string;
+  descricao?: string;
+  valor?: number | string;
+  situacao?: string;
+  dataVencimento?: string;
+  dataPagamento?: string;
+}
+
+// ─── POST /cds/inserirvenda ──────────────────────────────────────────────────
+// Estrutura exatamente como na documentação oficial da CDS.
+
+export interface CdsFormaPagamento {
+  descricaoForma: string;
+  valorForma: number;
+  parcelasForma: number;
+  dataVenctoForma: string | null;
+  banco: string;
+  agencia: string;
+  numDoc: string;
+  nsu: string;
+  finalCartao: string;
+  descBandeira: string;
+  codCartao: string;
+  autorizacao: string;
+}
+
+export interface CdsDadosProduto {
+  codigoProduto: string;
+  descricaoProduto: string;
+  valorVendido: number;
+  quantidadeVendida: number;
+}
+
+export interface CdsInserirVendaPayload {
+  dadosCliente: {
+    cpfCnpj: string;
+    nomeCliente: string;
+    razaoSocial: string;
+    logradouro: string;
+    numero: string;
+    complemento: string;
+    bairro: string;
+    cidade: string;
+    UF: string;
+    cep: string;
+    celular: string;
+    email: string;
+    /** "1" = consumidor final. */
+    consumoFinal: string;
+  };
+  /** Nome/identificação do vendedor responsável. */
+  funcionario: string;
+  /** Identificador do pedido no sistema externo (nosso Order.number). */
+  pedidoSite: string;
+  formasPagamento: CdsFormaPagamento[];
+  dadosProdutos: CdsDadosProduto[];
+  finalizarVenda: {
+    descontoPerc: number;
+    descontoValor: number;
+    acrescimo: number;
+    motivoDesconto: string | null;
+  };
+}
+
+/** Resposta do inserirvenda (formato não documentado — devolvida crua). */
+export type CdsInserirVendaResult = unknown;
+
 export interface SellbieClient {
   getLojas(): Promise<SellbieLoja[]>;
   getVendedores(params?: SellbieDateRange & { seller?: string }): Promise<SellbieVendedor[]>;
@@ -131,4 +231,12 @@ export interface SellbieClient {
   getDetalhesVendas(params?: SellbieDateRange): Promise<SellbieDetalheVenda[]>;
   getPagamentosVendas(params?: SellbieDateRange): Promise<SellbiePagamentoVenda[]>;
   getEstoque(query: EstoqueQuery): Promise<SellbieEstoque[]>;
+  getEstoqueGrade(query?: EstoqueGradeQuery): Promise<SellbieEstoqueGrade[]>;
+  getContasPagar(query?: ContasPagarQuery): Promise<SellbieContaPagar[]>;
+  /**
+   * Insere uma venda no ERP. ATENÇÃO: escrita sem idempotência documentada —
+   * o chamador é responsável por não repetir o envio do mesmo pedido
+   * (usamos pedidoSite como referência de deduplicação).
+   */
+  inserirVenda(payload: CdsInserirVendaPayload): Promise<CdsInserirVendaResult>;
 }

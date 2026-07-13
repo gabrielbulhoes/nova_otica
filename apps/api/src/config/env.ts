@@ -40,6 +40,9 @@ const schema = z.object({
   // Basic auth legado (não usado pela CDS; mantido por compatibilidade).
   SELLBIE_USERNAME: z.string().optional().default(''),
   SELLBIE_PASSWORD: z.string().optional().default(''),
+  // Identificação do "vendedor" nas vendas online exportadas ao ERP
+  // (campo funcionario do POST /cds/inserirvenda).
+  SELLBIE_EXPORT_SELLER: z.string().default('ECOMMERCE'),
   SELLBIE_WINDOW_START: z.string().regex(timeRegex).default('06:00'),
   SELLBIE_WINDOW_END: z.string().regex(timeRegex).default('07:00'),
   // A doc da CDS não define janela de horário — em live, deixe true a menos

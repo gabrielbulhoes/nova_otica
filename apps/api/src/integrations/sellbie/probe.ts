@@ -101,6 +101,9 @@ async function main() {
   results.push(await probe(http, 'vendas', 'cds/vendas', range));
   results.push(await probe(http, 'detalhesVendas', 'cds/detalhesVendas', range));
   results.push(await probe(http, 'pagamentosVendas', 'cds/pagamentosVendas', range));
+  results.push(await probe(http, 'estoquegrade', 'cds/estoquegrade', { only_disp: 1 }));
+  results.push(await probe(http, 'contasPagar', 'cds/contasPagar', {}));
+  // POST /cds/inserirvenda NÃO é sondado de propósito: é escrita no ERP real.
 
   // Estoque exige cod_loja — usa a 1ª filial retornada em /lojas, se houver.
   const lojas = results.find((r) => r.route === 'cds/lojas');

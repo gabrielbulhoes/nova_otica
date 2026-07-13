@@ -92,6 +92,88 @@ describe('SellbieHttpClient (API CDS)', () => {
     expect(() => client.getEstoque({ cod_loja: '' })).toThrow(/cod_loja/);
   });
 
+  it('estoquegrade e contasPagar usam as rotas e filtros documentados', async () => {
+    const client = new SellbieHttpClient();
+    stub(client, []);
+    await client.getEstoqueGrade({ cod_prod: '10066,10101', cod_loja: '1,3', only_disp: 1 });
+    await client.getContasPagar({ situacao: 'abertos', dataFiltro: '2026-02-24' });
+
+    expect(requests[0].url).toBe('cds/estoquegrade');
+    expect(requests[0].params).toEqual({ cod_prod: '10066,10101', cod_loja: '1,3', only_disp: 1 });
+    expect(requests[1].url).toBe('cds/contasPagar');
+    expect(requests[1].params).toEqual({ situacao: 'abertos', dataFiltro: '2026-02-24' });
+  });
+
+  it('inserirvenda faz POST com o payload e os cabeçalhos da CDS', async () => {
+    const client = new SellbieHttpClient();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const http = (client as any).http;
+    const posts: { url: string; data: unknown; headers: Record<string, string> }[] = [];
+    http.defaults.adapter = async (config: Record<string, unknown>) => {
+      posts.push({
+        url: String(config.url),
+        data: typeof config.data === 'string' ? JSON.parse(config.data) : config.data,
+        headers: Object.fromEntries(
+          Object.entries((config.headers ?? {}) as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
+        ),
+      });
+      return { data: { ok: true }, status: 200, statusText: 'OK', headers: {}, config };
+    };
+
+    const payload = {
+      dadosCliente: {
+        cpfCnpj: '', nomeCliente: 'Marina S.', razaoSocial: '', logradouro: '', numero: '',
+        complemento: '', bairro: '', cidade: '', UF: '', cep: '', celular: '', email: '', consumoFinal: '1',
+      },
+      funcionario: 'ECOMMERCE',
+      pedidoSite: 'NO-TESTE-001',
+      formasPagamento: [{
+        descricaoForma: 'PIX', valorForma: 100, parcelasForma: 1, dataVenctoForma: null,
+        banco: '', agencia: '', numDoc: '', nsu: '', finalCartao: '', descBandeira: '', codCartao: '', autorizacao: '',
+      }],
+      dadosProdutos: [{ codigoProduto: '10', descricaoProduto: 'Produto A', valorVendido: 100, quantidadeVendida: 1 }],
+      finalizarVenda: { descontoPerc: 0, descontoValor: 0, acrescimo: 0, motivoDesconto: null },
+    };
+    await client.inserirVenda(payload);
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0].url).toBe('cds/inserirvenda');
+    expect(posts[0].headers.x_api_key).toBe('key-abc');
+    expect((posts[0].data as { pedidoSite: string }).pedidoSite).toBe('NO-TESTE-001');
+  });
+
+  it('inserirvenda NÃO faz retry em erro 5xx (rota de escrita sem idempotência)', async () => {
+    const client = new SellbieHttpClient();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const http = (client as any).http;
+    let calls = 0;
+    http.defaults.adapter = async (config: Record<string, unknown>) => {
+      calls += 1;
+      const error = new Error('Internal Server Error') as Error & {
+        isAxiosError: boolean; response: { status: number }; config: unknown;
+      };
+      error.isAxiosError = true;
+      error.response = { status: 500 };
+      error.config = config;
+      throw error;
+    };
+
+    await expect(
+      client.inserirVenda({
+        dadosCliente: {
+          cpfCnpj: '', nomeCliente: 'X', razaoSocial: '', logradouro: '', numero: '',
+          complemento: '', bairro: '', cidade: '', UF: '', cep: '', celular: '', email: '', consumoFinal: '1',
+        },
+        funcionario: 'ECOMMERCE',
+        pedidoSite: 'NO-TESTE-002',
+        formasPagamento: [],
+        dadosProdutos: [],
+        finalizarVenda: { descontoPerc: 0, descontoValor: 0, acrescimo: 0, motivoDesconto: null },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(1);
+  });
+
   it('desembrulha o envelope { data: [...] } da resposta', async () => {
     const client = new SellbieHttpClient();
     stub(client, { data: [{ prodCodigo: 10 }, { prodCodigo: 11 }] });
