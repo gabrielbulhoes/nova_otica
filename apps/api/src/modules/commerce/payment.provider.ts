@@ -1,3 +1,5 @@
+import { env } from '../../config/env.js';
+import { MercadoPagoProvider } from './mercadopago.provider.js';
 /**
  * Abstração do gateway de pagamento. O checkout fala apenas com esta
  * interface — trocar o provedor (Mercado Pago, Stripe, Pagar.me…) não afeta o
@@ -15,8 +17,11 @@ export interface PaymentIntent {
 export interface PaymentProvider {
   readonly name: string;
   createPayment(input: { orderNumber: string; amount: number; method?: PaymentMethod }): Promise<PaymentIntent>;
-  /** Confirma/captura um pagamento (simula o retorno do gateway/webhook). */
-  confirmPayment(externalId: string): Promise<{ status: 'APPROVED' | 'DECLINED' }>;
+  /**
+   * Consulta/captura um pagamento. PENDING = ainda aguardando o pagador
+   * (não cancela o pedido); DECLINED = recusado (libera as reservas).
+   */
+  confirmPayment(externalId: string): Promise<{ status: 'APPROVED' | 'DECLINED' | 'PENDING' }>;
 }
 
 /** Provedor de demonstração — aprova sempre e gera um "PIX" fake. */
@@ -33,15 +38,18 @@ export class MockPaymentProvider implements PaymentProvider {
     };
   }
 
-  async confirmPayment(_externalId: string): Promise<{ status: 'APPROVED' | 'DECLINED' }> {
+  async confirmPayment(_externalId: string): Promise<{ status: 'APPROVED' | 'DECLINED' | 'PENDING' }> {
     return { status: 'APPROVED' };
   }
 }
 
 let provider: PaymentProvider | null = null;
 
-/** Retorna o provedor configurado (hoje: mock; futuro: conforme env). */
+/** Retorna o provedor configurado via env PAYMENT_PROVIDER (mock padrão). */
 export function getPaymentProvider(): PaymentProvider {
-  if (!provider) provider = new MockPaymentProvider();
+  if (!provider) {
+    provider =
+      env.PAYMENT_PROVIDER === 'mercadopago' ? new MercadoPagoProvider() : new MockPaymentProvider();
+  }
   return provider;
 }

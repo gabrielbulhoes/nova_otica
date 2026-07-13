@@ -23,6 +23,7 @@ import { planningRouter } from './modules/planning/planning.routes.js';
 import { alertsRouter } from './modules/alerts/alerts.routes.js';
 import { cartRouter } from './modules/commerce/cart.routes.js';
 import { ordersRouter } from './modules/commerce/orders.routes.js';
+import { paymentsWebhookRouter } from './modules/commerce/payments.webhook.js';
 import { arRouter } from './modules/ar/ar.routes.js';
 import { syncRouter } from './modules/sync/sync.routes.js';
 
@@ -52,6 +53,9 @@ export function createApp() {
 
   // SSE: autentica via token de query (EventSource não envia cabeçalhos).
   app.use('/api/stream', streamRouter);
+
+  // Webhook de pagamento: público (gateway não usa JWT); valida x-signature.
+  app.use('/api/payments', paymentsWebhookRouter);
 
   // A partir daqui, toda a API exige autenticação.
   app.use('/api', requireAuth);

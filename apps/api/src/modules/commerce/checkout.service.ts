@@ -221,6 +221,11 @@ export async function confirmPayment(orderId: string, actor?: Actor) {
 
   const provider = getPaymentProvider();
   const result = await provider.confirmPayment(order.payment.externalId ?? '');
+  if (result.status === 'PENDING') {
+    // Ainda aguardando o pagador (PIX não pago, cartão em análise): não
+    // cancela nada — o webhook/nova consulta resolve depois.
+    throw badRequest('Pagamento ainda pendente no provedor. Tente novamente em instantes.');
+  }
   if (result.status !== 'APPROVED') {
     // Recusado: além de marcar DECLINED, libera as reservas e cancela o
     // pedido — sem isso o estoque ficaria retido para sempre (availableAt

@@ -38,6 +38,11 @@ const schema = z.object({
   SELLBIE_WINDOW_END: z.string().regex(timeRegex).default('07:00'),
   SELLBIE_IGNORE_WINDOW: boolish.default('false'),
 
+  PAYMENT_PROVIDER: z.enum(['mock', 'mercadopago']).default('mock'),
+  MP_ACCESS_TOKEN: z.string().optional().default(''),
+  MP_WEBHOOK_SECRET: z.string().optional().default(''),
+  MP_PAYER_EMAIL: z.string().optional().default(''),
+
   SYNC_CRON: z.string().default('0 6 * * *'),
   SYNC_TIMEZONE: z.string().default('America/Sao_Paulo'),
   SYNC_ON_BOOT: boolish.default('false'),
@@ -69,6 +74,9 @@ if (parsed.data.NODE_ENV === 'production') {
   }
   if (parsed.data.SELLBIE_MODE === 'live' && !parsed.data.SELLBIE_BASE_URL) {
     problems.push('SELLBIE_MODE=live exige SELLBIE_BASE_URL configurada.');
+  }
+  if (parsed.data.PAYMENT_PROVIDER === 'mercadopago' && !parsed.data.MP_ACCESS_TOKEN) {
+    problems.push('PAYMENT_PROVIDER=mercadopago exige MP_ACCESS_TOKEN.');
   }
   if (problems.length > 0) {
     // eslint-disable-next-line no-console
