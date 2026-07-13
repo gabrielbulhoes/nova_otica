@@ -35,8 +35,11 @@ function unwrap<T>(payload: unknown): T[] {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Cliente HTTP da API Sellbie/CDS (modo "live").
- * - Respeita a janela de uso (06:00–07:00) antes de cada chamada.
+ * Cliente HTTP da API CDS (modo "live").
+ * - Autentica com os três cabeçalhos da CDS: x_api_key, x_api_token e
+ *   x_cliente_id.
+ * - Rotas sob `/cds/*` (a base já inclui `/conectorCDS`).
+ * - Respeita a janela de uso, quando configurada, antes de cada chamada.
  * - Faz retry com backoff exponencial em erros de rede / 5xx / 429.
  */
 export class SellbieHttpClient implements SellbieClient {
@@ -44,13 +47,19 @@ export class SellbieHttpClient implements SellbieClient {
   private readonly maxRetries = 4;
 
   constructor() {
+    // A CDS autentica por três cabeçalhos fixos (nomes com underscore,
+    // conforme a documentação do conector).
     const headers: Record<string, string> = { Accept: 'application/json' };
-    if (env.SELLBIE_API_KEY) headers.Authorization = `Bearer ${env.SELLBIE_API_KEY}`;
+    if (env.SELLBIE_API_KEY) headers.x_api_key = env.SELLBIE_API_KEY;
+    if (env.SELLBIE_API_TOKEN) headers.x_api_token = env.SELLBIE_API_TOKEN;
+    if (env.SELLBIE_CLIENT_ID) headers.x_cliente_id = env.SELLBIE_CLIENT_ID;
 
     this.http = axios.create({
       baseURL: env.SELLBIE_BASE_URL,
       timeout: 30_000,
       headers,
+      // Basic auth legado: só é enviado se explicitamente configurado; a CDS
+      // não usa. Mantido para não quebrar integrações antigas.
       auth:
         env.SELLBIE_USERNAME || env.SELLBIE_PASSWORD
           ? { username: env.SELLBIE_USERNAME, password: env.SELLBIE_PASSWORD }
@@ -86,46 +95,46 @@ export class SellbieHttpClient implements SellbieClient {
   }
 
   getLojas(): Promise<SellbieLoja[]> {
-    return this.get<SellbieLoja>('sellbie/lojas');
+    return this.get<SellbieLoja>('cds/lojas');
   }
 
   getVendedores(params?: SellbieDateRange & { seller?: string }): Promise<SellbieVendedor[]> {
-    return this.get<SellbieVendedor>('sellbie/vendedores', params);
+    return this.get<SellbieVendedor>('cds/vendedores', params);
   }
 
   getCores(): Promise<SellbieCor[]> {
-    return this.get<SellbieCor>('sellbie/cores');
+    return this.get<SellbieCor>('cds/cores');
   }
 
   getTamanhos(): Promise<SellbieTamanho[]> {
-    return this.get<SellbieTamanho>('sellbie/tamanhos');
+    return this.get<SellbieTamanho>('cds/tamanhos');
   }
 
   getProdutos(params?: SellbieDateRange): Promise<SellbieProduto[]> {
-    return this.get<SellbieProduto>('sellbie/produtos', params);
+    return this.get<SellbieProduto>('cds/produtos', params);
   }
 
   getClientes(params?: SellbieDateRange & { cod_client?: string }): Promise<SellbieCliente[]> {
-    return this.get<SellbieCliente>('sellbie/clientes', params);
+    return this.get<SellbieCliente>('cds/clientes', params);
   }
 
   getVendas(params?: SellbieDateRange): Promise<SellbieVenda[]> {
-    return this.get<SellbieVenda>('sellbie/vendas', params);
+    return this.get<SellbieVenda>('cds/vendas', params);
   }
 
   getDetalhesVendas(params?: SellbieDateRange): Promise<SellbieDetalheVenda[]> {
-    return this.get<SellbieDetalheVenda>('sellbie/detalhesVendas', params);
+    return this.get<SellbieDetalheVenda>('cds/detalhesVendas', params);
   }
 
   getPagamentosVendas(params?: SellbieDateRange): Promise<SellbiePagamentoVenda[]> {
-    return this.get<SellbiePagamentoVenda>('sellbie/pagamentosVendas', params);
+    return this.get<SellbiePagamentoVenda>('cds/pagamentosVendas', params);
   }
 
   getEstoque(query: EstoqueQuery): Promise<SellbieEstoque[]> {
     if (query.cod_loja === undefined || query.cod_loja === null || query.cod_loja === '') {
       throw new Error('getEstoque: cod_loja (idFilial) é obrigatório.');
     }
-    return this.get<SellbieEstoque>('sellbie/estoque', {
+    return this.get<SellbieEstoque>('cds/estoque', {
       cod_loja: query.cod_loja,
       cod_prod: query.cod_prod,
       only_disp: query.only_disp ?? 0,
