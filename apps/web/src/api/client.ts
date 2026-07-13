@@ -270,8 +270,8 @@ export const getAlerts = (params: Record<string, string | undefined>) =>
   api
     .get<{ total: number; out: number; low: number; rows: StockAlert[] }>('/alerts', { params })
     .then((r) => r.data);
-export const setMinStock = (productId: string, minStock: number | null) =>
-  api.put('/alerts/min-stock', { productId, minStock }).then((r) => r.data);
+export const setMinStock = (productId: string, minStock: number | null, storeId?: string) =>
+  api.put('/alerts/min-stock', { productId, minStock, storeId }).then((r) => r.data);
 
 // ─── Planejamento & Compras (análise preditiva) ──────────────────────────────
 

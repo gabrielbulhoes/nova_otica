@@ -19,21 +19,40 @@ alertsRouter.get(
 const minStockSchema = z.object({
   productId: z.string().min(1),
   minStock: z.number().int().nonnegative().nullable(),
+  /** Com storeId, define o mínimo SÓ daquela loja (sobrepõe o do produto). */
+  storeId: z.string().min(1).optional(),
 });
 
-/** PUT /api/alerts/min-stock — define o estoque mínimo de um produto (ADMIN). */
+/**
+ * PUT /api/alerts/min-stock — define o estoque mínimo (ADMIN). Sem storeId,
+ * vale para o produto na rede toda; com storeId, só para aquela loja
+ * (minStock nulo remove o override e volta ao padrão do produto/rede).
+ */
 alertsRouter.put(
   '/min-stock',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
-    const { productId, minStock } = minStockSchema.parse(req.body);
+    const { productId, minStock, storeId } = minStockSchema.parse(req.body);
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product) throw notFound('Produto não encontrado');
+
+    if (storeId) {
+      const store = await prisma.store.findUnique({ where: { id: storeId } });
+      if (!store) throw notFound('Loja não encontrada');
+      const item = await prisma.stockItem.upsert({
+        where: { storeId_productId: { storeId, productId } },
+        create: { storeId, productId, minStock },
+        update: { minStock },
+        select: { storeId: true, productId: true, minStock: true },
+      });
+      return res.json({ ...item, description: product.description, scope: 'store' });
+    }
+
     const updated = await prisma.product.update({
       where: { id: productId },
       data: { minStock },
       select: { id: true, description: true, minStock: true },
     });
-    res.json(updated);
+    res.json({ ...updated, scope: 'product' });
   }),
 );
