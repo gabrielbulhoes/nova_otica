@@ -4,7 +4,7 @@ import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, HttpError } from '../../http/helpers.js';
 import { rateLimit } from '../../http/rateLimit.js';
 import { requireAuth } from './auth.middleware.js';
-import { signToken, verifyPassword, type AuthUser } from './auth.service.js';
+import { hashPassword, signToken, verifyPassword, type AuthUser } from './auth.service.js';
 
 export const authRouter = Router();
 
@@ -70,5 +70,28 @@ authRouter.get(
       storeId: user.storeId,
       storeName: user.store?.name ?? null,
     });
+  }),
+);
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(6),
+});
+
+/** PATCH /api/auth/password — o próprio usuário troca a senha. */
+authRouter.patch(
+  '/password',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { currentPassword, newPassword } = changePasswordSchema.parse(req.body);
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
+    if (!user) throw new HttpError(401, 'Usuário não encontrado');
+    const ok = await verifyPassword(currentPassword, user.passwordHash);
+    if (!ok) throw new HttpError(403, 'Senha atual incorreta');
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await hashPassword(newPassword) },
+    });
+    res.json({ ok: true });
   }),
 );
