@@ -66,3 +66,5 @@ jobs:
         run: npm run prisma:deploy --workspace=@nova-otica/api
       - name: Semear dados de demonstração
         run: npm run seed --workspace=@nova-otica/api
+      - name: Testes de concorrência (RUN_DB_TESTS)
+        run: RUN_DB_TESTS=1 npm run test --workspace=@nova-otica/api

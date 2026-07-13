@@ -5,6 +5,8 @@ import { StoreShell } from './components/StoreShell';
 import { useAuth } from './auth/AuthContext';
 import { Launcher } from './pages/Launcher';
 import { Login } from './pages/Login';
+import { DEMO } from './api/client';
+import { DemoBadge } from './components/DemoBadge';
 import { Dashboard } from './pages/Dashboard';
 import { Stock } from './pages/Stock';
 import { Products } from './pages/Products';
@@ -80,5 +82,14 @@ export function App() {
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+  );
+}
+
+export function AppRoot() {
+  return (
+    <>
+      <App />
+      {DEMO && <DemoBadge />}
+    </>
   );
 }

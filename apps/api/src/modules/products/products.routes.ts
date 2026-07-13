@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
+import { scopedStoreWhere } from '../auth/auth.middleware.js';
 
 export const productsRouter = Router();
 
@@ -52,13 +53,18 @@ productsRouter.get(
   }),
 );
 
-/** GET /api/products/:id — detalhe + posição de estoque por loja. */
+/** GET /api/products/:id — detalhe + posição de estoque por loja (escopada). */
 productsRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
+    // Gestor de loja só enxerga o estoque da própria loja; ADMIN vê todas.
     const product = await prisma.product.findUnique({
       where: { id: req.params.id },
-      include: { color: true, size: true, stockItems: { include: { store: true } } },
+      include: {
+        color: true,
+        size: true,
+        stockItems: { where: scopedStoreWhere(req), include: { store: true } },
+      },
     });
     if (!product) throw notFound('Produto não encontrado');
     res.json(product);

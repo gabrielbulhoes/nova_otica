@@ -83,6 +83,15 @@ export async function checkout(
   // Pedido + reservas + conversão do carrinho são um único passo atômico:
   // qualquer falha intermediária desfaz tudo (sem pedido órfão ou reserva solta).
   const order = await prisma.$transaction(async (tx) => {
+    // Claim atômico do carrinho (OPEN -> CONVERTED) como PRIMEIRO passo: dois
+    // checkouts concorrentes do mesmo carrinho (duplo-clique/duas abas) não
+    // geram pedido nem reserva duplicados — o segundo falha aqui.
+    const claim = await tx.cart.updateMany({
+      where: { id: cart.id, status: 'OPEN' },
+      data: { status: 'CONVERTED' },
+    });
+    if (claim.count === 0) throw badRequest('Carrinho já finalizado.');
+
     const created = await tx.order.create({
       data: {
         number: genOrderNumber(),
@@ -104,8 +113,11 @@ export async function checkout(
       include: { items: true },
     });
 
-    // Reserva de estoque por item (SALE PENDING). createMovement revalida o saldo.
-    for (const item of created.items) {
+    // Reserva por item (SALE PENDING), em ordem estável de produto para os
+    // advisory locks nunca serem adquiridos em ordens opostas (anti-deadlock
+    // entre checkouts concorrentes de carrinhos com produtos em comum).
+    const items = [...created.items].sort((a, b) => a.productId.localeCompare(b.productId));
+    for (const item of items) {
       const movement = await createMovement(
         {
           type: 'SALE',
@@ -121,7 +133,6 @@ export async function checkout(
       await tx.orderItem.update({ where: { id: item.id }, data: { movementId: movement.id } });
     }
 
-    await tx.cart.update({ where: { id: cart.id }, data: { status: 'CONVERTED' } });
     return created;
   });
 
@@ -150,19 +161,46 @@ export async function checkout(
   return getOrderView(order.id, actor);
 }
 
-/** Compensação do checkout: cancela reservas e pedido, reabre o carrinho. */
-async function cancelCheckout(orderId: string, cartId: string): Promise<void> {
-  const items = await prisma.orderItem.findMany({ where: { orderId }, select: { movementId: true } });
+/**
+ * Libera (cancela) as reservas PENDING de um pedido. Usa cancelMovement para
+ * manter a coluna denormalizada `reserved` consistente (availableAt depende
+ * dela). Reservas já efetivadas/canceladas são puladas (idempotência).
+ */
+async function releaseReservations(orderId: string, db: Prisma.TransactionClient | typeof prisma = prisma): Promise<void> {
+  const items = await db.orderItem.findMany({ where: { orderId }, select: { movementId: true } });
   for (const it of items) {
     if (!it.movementId) continue;
     try {
-      await cancelMovement(it.movementId, SYSTEM);
+      await cancelMovement(it.movementId, SYSTEM, db);
     } catch {
-      // reserva já cancelada — segue a compensação dos demais itens.
+      // reserva já cancelada/efetivada — segue com as demais.
     }
   }
+}
+
+/** Compensação do checkout: cancela reservas e pedido, reabre o carrinho. */
+async function cancelCheckout(orderId: string, cartId: string): Promise<void> {
+  await releaseReservations(orderId);
   await prisma.order.update({ where: { id: orderId }, data: { status: 'CANCELLED' } });
   await prisma.cart.update({ where: { id: cartId }, data: { status: 'OPEN' } });
+}
+
+/** Cancela um pedido ainda não pago e libera as reservas de estoque. Idempotente. */
+export async function cancelOrder(orderId: string, actor?: Actor) {
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { payment: true } });
+  if (!order) throw notFound('Pedido não encontrado');
+  if (actor) assertOrderAccess(order, actor);
+  if (order.status === 'CANCELLED') return getOrderView(orderId, actor);
+  if (order.status === 'PAID') throw badRequest('Pedido pago não pode ser cancelado.');
+
+  await prisma.$transaction(async (tx) => {
+    await releaseReservations(orderId, tx);
+    if (order.payment) await tx.onlinePayment.updateMany({ where: { orderId }, data: { status: 'DECLINED' } });
+    await tx.order.update({ where: { id: orderId }, data: { status: 'CANCELLED' } });
+  });
+
+  publish({ type: 'order.changed', storeId: order.storeId, orderId });
+  return getOrderView(orderId, actor);
 }
 
 /**
@@ -184,7 +222,15 @@ export async function confirmPayment(orderId: string, actor?: Actor) {
   const provider = getPaymentProvider();
   const result = await provider.confirmPayment(order.payment.externalId ?? '');
   if (result.status !== 'APPROVED') {
-    await prisma.onlinePayment.update({ where: { orderId }, data: { status: 'DECLINED' } });
+    // Recusado: além de marcar DECLINED, libera as reservas e cancela o
+    // pedido — sem isso o estoque ficaria retido para sempre (availableAt
+    // desconta as reservas PENDING via coluna `reserved`).
+    await prisma.$transaction(async (tx) => {
+      await tx.onlinePayment.update({ where: { orderId }, data: { status: 'DECLINED' } });
+      await releaseReservations(orderId, tx);
+      await tx.order.update({ where: { id: orderId }, data: { status: 'CANCELLED' } });
+    });
+    publish({ type: 'order.changed', storeId: order.storeId, orderId });
     throw badRequest('Pagamento recusado pelo provedor.');
   }
 

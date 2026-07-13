@@ -54,3 +54,14 @@ export function assertStoreAccess(req: Request, storeId?: string | null): void {
     throw new HttpError(403, 'Você só pode operar na sua própria loja');
   }
 }
+
+/**
+ * Filtro Prisma por loja para relações embutidas por loja (ex.: stockItems),
+ * respeitando o escopo do usuário: ADMIN → undefined (todas as lojas);
+ * STORE_MANAGER → { storeId: <sua loja> } (nunca vê dados de outra loja).
+ * Reaproveitável por qualquer detalhe que embuta dados por loja.
+ */
+export function scopedStoreWhere(req: Request): { storeId: string } | undefined {
+  const storeId = scopedStoreId(req);
+  return storeId ? { storeId } : undefined;
+}

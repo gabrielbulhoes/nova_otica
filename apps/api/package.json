@@ -12,6 +12,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
+    "prisma:resolve-init": "prisma migrate resolve --applied 0_init",
     "prisma:push": "prisma db push",
     "seed": "tsx src/db/seed.ts",
     "sync:once": "tsx src/sync/runOnce.ts",

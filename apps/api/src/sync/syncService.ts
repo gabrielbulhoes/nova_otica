@@ -118,8 +118,16 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   await track('saleItems', () => syncSaleItems(client));
   await track('payments', () => syncPayments(client));
 
-  // 5) Reconciliação das movimentações internas
-  await track('reconcile', () => reconcileMovements(reconcileCutoff));
+  // 5) Reconciliação das movimentações internas.
+  // Só reconcilia se o estoque foi sincronizado com sucesso — do contrário os
+  // deltas confirmados seriam descartados contra uma base de estoque velha,
+  // corrompendo o saldo ao vivo.
+  if (entities.stock && !entities.stock.error) {
+    await track('reconcile', () => reconcileMovements(reconcileCutoff));
+  } else {
+    log.warn('Reconciliação pulada: sincronização de estoque falhou ou não ocorreu');
+    entities.reconcile = { read: 0, written: 0, error: 'pulada: sync de estoque falhou' };
+  }
 
   const hadError = Object.values(entities).some((e) => e.error);
   const durationMs = Date.now() - startedAt;
