@@ -73,6 +73,40 @@ estoque. Em produção, o agendador (`SYNC_CRON`, padrão 06:00) roda sozinho;
 | `pagamentosVendas` | BI de formas de pagamento |
 | `clientes` | Base de clientes |
 
+## Write-back: vendas online entram no ERP
+
+Pedidos **pagos** na loja online são enviados de volta à CDS pelo
+`POST /cds/inserirvenda`:
+
+- automaticamente, como último passo de cada sincronização (`SELLBIE_MODE=live`);
+- ou sob demanda: `POST /api/sync/export-orders` (ADMIN).
+
+Regras de segurança do envio (semântica de outbox):
+
+- **`pedidoSite` = número do pedido** (ex.: `NO-XXXX-000`) — referência de
+  deduplicação; sucesso carimba `erpExportedAt` e o pedido nunca é reenviado;
+- cada envio é **reservado atomicamente** antes do POST: o sync agendado e a
+  rota manual nunca enviam o mesmo pedido em duplicidade, mesmo em paralelo;
+- **rejeição respondida pelo ERP** (`erpExportError` guarda o status e o corpo
+  da resposta) volta à fila automaticamente, até **5 tentativas** — depois o
+  pedido sai da fila (evita um pedido "veneno" tentando para sempre) e exige
+  correção manual;
+- **envio ambíguo** — timeout/queda de rede sem resposta, ou crash entre o
+  POST e o carimbo — NUNCA é reenviado automaticamente (a venda pode ter
+  entrado no ERP): confira pelo `pedidoSite` e, se não entrou, reprocesse com
+  `POST /api/sync/export-orders {"retryStuck": true}`;
+- a rota manual exige `SELLBIE_MODE=live` (em demo/mock nada é exportado — e
+  nada é carimbado);
+- desconto/acréscimo são calculados pela diferença itens × total (a conta
+  fecha no ERP mesmo com cupom/frete);
+- o vendedor registrado é `SELLBIE_EXPORT_SELLER` (padrão `ECOMMERCE`) — crie
+  esse funcionário no CDS para as vendas do site ficarem identificadas;
+- CPF/endereço vão vazios (consumidor final) até o checkout coletá-los.
+
+> Confirme com a CDS se o `inserirvenda` deduplica por `pedidoSite`. Se sim,
+> reenvios após falha ambígua são 100% seguros e o `retryStuck` pode virar
+> automático; se não, mantenham a conferência manual antes de reprocessar.
+
 ## Ainda pendente do cliente (fora da API)
 
 - **Prazos de fornecedores** (marca × dias de entrega): cadastrar em

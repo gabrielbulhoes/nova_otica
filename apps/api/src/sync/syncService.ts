@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { publish } from '../lib/eventBus.js';
 import { notifySyncFailure } from '../lib/opsAlert.js';
@@ -6,6 +7,7 @@ import { HttpError } from '../http/helpers.js';
 import { getSellbieClient } from '../integrations/sellbie/index.js';
 import { checkWindow } from '../integrations/sellbie/window.js';
 import * as map from '../integrations/sellbie/mappers.js';
+import { exportPaidOrdersToErp } from '../modules/commerce/erpExport.service.js';
 
 const log = logger.child({ mod: 'sync' });
 
@@ -86,13 +88,20 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   let totalWritten = 0;
   const track = async (
     name: string,
-    fn: () => Promise<{ read: number; written: number }>,
+    fn: () => Promise<{ read: number; written: number; error?: string }>,
+    opts: { countTotals?: boolean } = {},
   ): Promise<void> => {
     try {
       const r = await fn();
-      entities[name] = r;
-      totalRead += r.read;
-      totalWritten += r.written;
+      // Erro estruturado (ex.: write-back parcial) preserva os contadores de
+      // sucesso e ainda marca a entidade como falha (status PARTIAL + alerta).
+      entities[name] = { read: r.read, written: r.written, ...(r.error ? { error: r.error } : {}) };
+      if (opts.countTotals !== false) {
+        // recordsRead/recordsWritten do SyncRun contam apenas o fluxo
+        // ERP -> local (é o que o painel mostra como "registros").
+        totalRead += r.read;
+        totalWritten += r.written;
+      }
       log.info(`Entidade sincronizada: ${name}`, r);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -128,6 +137,16 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   } else {
     log.warn('Reconciliação pulada: sincronização de estoque falhou ou não ocorreu');
     entities.reconcile = { read: 0, written: 0, error: 'pulada: sync de estoque falhou' };
+  }
+
+  // 6) Write-back: exporta ao ERP os pedidos online pagos ainda não
+  // enviados (POST /cds/inserirvenda). Só em modo live — no mock não há ERP
+  // real e carimbar erpExportedAt sem envio real excluiria o pedido do
+  // write-back para sempre. Falhas reais viram erro da entidade (alerta
+  // operacional); os contadores não entram no total do painel, que mede o
+  // fluxo ERP -> local.
+  if (env.SELLBIE_MODE === 'live') {
+    await track('erpExport', () => exportPaidOrdersToErp(client), { countTotals: false });
   }
 
   const hadError = Object.values(entities).some((e) => e.error);
