@@ -5,6 +5,7 @@ import { StoreShell } from './components/StoreShell';
 import { useAuth } from './auth/AuthContext';
 import { Launcher } from './pages/Launcher';
 import { Login } from './pages/Login';
+import { Usuarios } from './pages/Usuarios';
 import { DEMO } from './api/client';
 import { DemoBadge } from './components/DemoBadge';
 import { Dashboard } from './pages/Dashboard';
@@ -62,6 +63,7 @@ export function App() {
         <Route path="relatorios" element={<Reports />} />
         <Route path="planejamento" element={<Planning />} />
         <Route path="vendas" element={<Sales />} />
+        <Route path="usuarios" element={<Usuarios />} />
         <Route path="lojas" element={<Stores />} />
         <Route path="sincronizacao" element={<Sync />} />
       </Route>

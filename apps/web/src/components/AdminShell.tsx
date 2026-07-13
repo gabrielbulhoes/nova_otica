@@ -29,6 +29,7 @@ const links: LinkDef[] = [
   { to: '/admin/relatorios', label: 'Relatórios' },
   { to: '/admin/planejamento', label: 'Planejamento & Compras' },
   { to: '/admin/vendas', label: 'Vendas' },
+  { to: '/admin/usuarios', label: 'Usuários', adminOnly: true },
   { to: '/admin/lojas', label: 'Lojas', adminOnly: true },
   { to: '/admin/sincronizacao', label: 'Sincronização', adminOnly: true },
 ];

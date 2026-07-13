@@ -329,6 +329,16 @@ function cartView() {
 
 const ADMIN_USER = { id: 'demo_admin', email: 'admin@novaotica.com', name: 'Administrador (Demo)', role: 'ADMIN', storeId: null, storeName: null };
 
+// Usuários fictícios para a tela de gestão (mutáveis na sessão)
+const demoUsers: Record<string, unknown>[] = [
+  { id: 'demo_admin', email: 'admin@novaotica.com', name: 'Administrador (Demo)', role: 'ADMIN', storeId: null, active: true, lastLoginAt: new Date().toISOString(), store: null },
+  ...stores.slice(0, 3).map((s, i) => ({
+    id: `demo_mgr_${i + 1}`, email: `loja${i + 1}@novaotica.com`, name: `Gestor ${s.city}`,
+    role: 'STORE_MANAGER', storeId: s.id, active: i !== 2, lastLoginAt: i === 0 ? new Date().toISOString() : null,
+    store: { name: s.name },
+  })),
+];
+
 // ─── Roteador ────────────────────────────────────────────────────────────────
 
 export interface DemoRequest {
@@ -346,6 +356,36 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   // Auth
   if (url === '/auth/login') return { token: 'demo-token', user: ADMIN_USER };
   if (url === '/auth/me') return ADMIN_USER;
+
+  // Usuários (gestão)
+  if (url === '/users' && m === 'GET') return { total: demoUsers.length, rows: demoUsers };
+  if (url === '/users' && m === 'POST') {
+    const st = body.storeId ? storeById(body.storeId as string) : null;
+    const u = {
+      id: `demo_u_${demoUsers.length + 1}`, email: String(body.email ?? '').toLowerCase(), name: body.name,
+      role: body.role, storeId: body.storeId ?? null, active: true, lastLoginAt: null,
+      store: st ? { name: st.name } : null,
+    };
+    demoUsers.push(u);
+    return u;
+  }
+  let mm = p(/^\/users\/(.+)\/reset-password$/);
+  if (mm && m === 'POST') return { ok: true };
+  mm = p(/^\/users\/(.+)$/);
+  if (mm && m === 'PATCH') {
+    const u = demoUsers.find((x) => x.id === mm![1]);
+    if (!u) return { __status: 404, error: 'Usuário não encontrado' };
+    if (u.id === ADMIN_USER.id && (body.role !== undefined || body.active !== undefined))
+      return { __status: 400, error: 'Você não pode alterar o próprio papel ou status.' };
+    for (const k of ['name', 'role', 'active'] as const) if (body[k] !== undefined) u[k] = body[k];
+    if (body.storeId !== undefined) {
+      u.storeId = body.storeId;
+      const st = body.storeId ? storeById(body.storeId as string) : null;
+      u.store = st ? { name: st.name } : null;
+    }
+    if (u.role === 'ADMIN') { u.storeId = null; u.store = null; }
+    return u;
+  }
 
   // Dashboard
   if (url === '/dashboard/summary')
@@ -372,7 +412,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     if (params.search) { const q = params.search.toLowerCase(); rows = rows.filter((x) => x.description.toLowerCase().includes(q) || x.brand.toLowerCase().includes(q)); }
     return { total: rows.length, page: 1, limit: 200, rows: rows.map((x) => ({ ...x, color: { name: x.color }, size: { name: x.size } })) };
   }
-  let mm = p(/^\/products\/(.+)$/);
+  mm = p(/^\/products\/(.+)$/);
   if (mm) {
     const prod = prodById(mm[1]);
     if (!prod) return { __status: 404, error: 'Produto não encontrado' };

@@ -254,6 +254,27 @@ export const approveMovement = (id: string, note?: string) =>
 export const rejectMovement = (id: string, note?: string) =>
   api.post<Movement>(`/movements/${id}/reject`, { note }).then((r) => r.data);
 
+// ─── Usuários (gestão, ADMIN) ────────────────────────────────────────────────
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  storeId: string | null;
+  active: boolean;
+  lastLoginAt: string | null;
+  store?: { name: string } | null;
+}
+
+export const getUsers = () => api.get<{ total: number; rows: AdminUser[] }>('/users').then((r) => r.data);
+export const createUser = (body: { email: string; name: string; password: string; role: Role; storeId?: string }) =>
+  api.post<AdminUser>('/users', body).then((r) => r.data);
+export const updateUser = (id: string, body: Partial<{ name: string; role: Role; storeId: string | null; active: boolean }>) =>
+  api.patch<AdminUser>(`/users/${id}`, body).then((r) => r.data);
+export const resetUserPassword = (id: string, password: string) =>
+  api.post(`/users/${id}/reset-password`, { password }).then((r) => r.data);
+
 // ─── Relatórios e alertas ────────────────────────────────────────────────────
 
 export const getAbc = (params: Record<string, string | number | undefined>) =>
