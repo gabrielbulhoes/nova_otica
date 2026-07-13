@@ -139,7 +139,9 @@ Todas as rotas `/api/*` exigem `Authorization: Bearer <token>`, exceto `/api/aut
 | ------ | --------------------------------- | ------------------------------------------ |
 | POST   | `/api/auth/login`                 | Autentica e devolve o token (público)      |
 | GET    | `/api/auth/me`                    | Dados do usuário autenticado               |
-| GET    | `/api/users` · POST `/api/users`  | Gestão de usuários (ADMIN)                 |
+| GET/POST | `/api/users` · PATCH `/api/users/:id` | Gestão de usuários: criar, editar, desativar (ADMIN) |
+| POST   | `/api/users/:id/reset-password`   | ADMIN redefine a senha de um usuário       |
+| PATCH  | `/api/auth/password`              | O próprio usuário troca a senha            |
 | GET    | `/api/dashboard/summary`          | Indicadores gerais da rede                 |
 | GET    | `/api/dashboard/sales-by-store`   | Vendas (30d) por loja                      |
 | GET    | `/api/stock`                      | Estoque consolidado (saldo ao vivo)        |
@@ -157,7 +159,13 @@ Todas as rotas `/api/*` exigem `Authorization: Bearer <token>`, exceto `/api/aut
 | GET    | `/api/reports/abc`                | Curva ABC por receita                      |
 | GET    | `/api/reports/turnover`           | Giro de estoque no período                 |
 | GET    | `/api/alerts`                     | Alertas de ruptura e estoque baixo         |
-| PUT    | `/api/alerts/min-stock`           | Define o estoque mínimo de um produto (ADMIN) |
+| PUT    | `/api/alerts/min-stock`           | Estoque mínimo do produto — ou de UMA loja via `storeId` (ADMIN) |
+| GET    | `/api/planning/*`                 | Planejamento: panorama, sugestões, pedidos por fornecedor, redistribuição |
+| POST   | `/api/planning/purchase-orders`   | Registra pedido ENVIADO (ciclo com dupla confirmação) |
+| GET/POST | `/api/cart` · `/api/orders`     | Carrinho e pedidos da loja online (checkout completo) |
+| POST   | `/api/orders/:id/cancel`          | Cancela o pedido e libera as reservas      |
+| POST   | `/api/payments/webhook`           | Webhook do gateway (público, assinatura x-signature) |
+| GET    | `/api/stream`                     | Tempo real (SSE) com ticket efêmero e escopo por loja |
 | GET    | `/api/sync/status`                | Estado da integração e da janela           |
 | POST   | `/api/sync/run`                   | Dispara sincronização manual               |
 
@@ -226,9 +234,39 @@ Defina `JWT_SECRET`, credenciais do Postgres e, para dados reais,
 
 ---
 
+## Pagamentos (gateway)
+
+O checkout fala com a interface `PaymentProvider`. Por padrão roda o **mock**
+(aprova sempre); para usar o **Mercado Pago (PIX)**:
+
+```env
+PAYMENT_PROVIDER=mercadopago
+MP_ACCESS_TOKEN=<token do painel (sandbox ou produção)>
+MP_WEBHOOK_SECRET=<segredo do webhook do painel>
+```
+
+O webhook (`POST /api/payments/webhook`) valida a assinatura `x-signature`
+(HMAC, anti-replay) e **reconsulta o status na API do MP** — o corpo da
+notificação é só um gatilho. Pagamento `PENDING` não cancela nada; `DECLINED`
+libera as reservas de estoque automaticamente.
+
+## Alertas operacionais
+
+Com `ALERT_WEBHOOK_URL` definida, qualquer falha na sincronização das 06:00
+dispara um POST JSON (compatível com Slack/Discord/n8n/Zapier) listando as
+entidades que falharam. Outras envs úteis: `TRUST_PROXY` (nº de proxies
+reversos à frente da API, para o rate-limit de login enxergar o IP real).
+
 ## Testes
 
-Testes unitários com Vitest cobrindo mappers, trava de janela, cálculo de
+**87 testes na API + 8 no web** (Vitest). Os unitários cobrem mappers, janela
+06h, estoque ao vivo, planejamento (ponto de reposição, Pareto, redistribuição,
+pedidos por fornecedor), guardas de usuários, assinatura de webhook e mais.
+Com `RUN_DB_TESTS=1` (e um Postgres apontado por `DATABASE_URL`), rodam também
+os **testes de concorrência reais**: oversell, dupla confirmação, duplo
+checkout e liberação de reserva — os mesmos que a CI executa.
+
+Cobertura unitária clássica: mappers, trava de janela, cálculo de
 estoque ao vivo e classificação ABC:
 
 ```bash
