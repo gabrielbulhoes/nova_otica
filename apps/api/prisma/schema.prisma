@@ -300,6 +300,7 @@ model InventoryMovement {
   fromStore Store?  @relation("MovementFromStore", fields: [fromStoreId], references: [id])
   toStore   Store?  @relation("MovementToStore", fields: [toStoreId], references: [id])
 
+  fiscalDocuments FiscalDocument[]
   @@index([status])
   @@index([productId])
   @@index([createdAt])
@@ -429,6 +430,7 @@ model Order {
   items   OrderItem[]
   payment OnlinePayment?
 
+  fiscalDocuments FiscalDocument[]
   @@index([status])
   @@index([storeId])
 }
@@ -518,4 +520,43 @@ model TryOnEvent {
 
   @@index([productId])
   @@index([createdAt])
+}
+
+/// Documento fiscal emitido a partir de um pedido (NFC-e) ou transferência (NF-e).
+enum FiscalDocType {
+  NFE
+  NFCE
+}
+
+enum FiscalDocStatus {
+  PROCESSING
+  AUTHORIZED
+  REJECTED
+  CANCELLED
+}
+
+model FiscalDocument {
+  id         String          @id @default(cuid())
+  type       FiscalDocType
+  status     FiscalDocStatus @default(PROCESSING)
+  /// Referência única no provedor — garante idempotência da emissão.
+  ref        String          @unique
+  orderId    String?
+  movementId String?
+  provider   String
+  accessKey  String? // chave de acesso (44 dígitos) quando autorizada
+  number     String?
+  series     String?
+  danfeUrl   String?
+  xmlUrl     String?
+  error      String?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  order    Order?             @relation(fields: [orderId], references: [id])
+  movement InventoryMovement? @relation(fields: [movementId], references: [id])
+
+  @@index([orderId])
+  @@index([movementId])
+  @@index([status])
 }
