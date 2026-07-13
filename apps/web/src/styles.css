@@ -76,7 +76,11 @@ a {
 .macos-window {
   display: grid;
   grid-template-columns: 244px 1fr;
+  /* Trava a única linha do grid na altura da janela: sem isso a linha cresce
+     com o conteúdo e o overflow:hidden corta a parte de baixo da página. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100vh;
+  height: 100dvh; /* barra dinâmica de navegadores móveis não corta o rodapé */
   background: var(--window-solid);
   overflow: hidden;
 }
@@ -87,6 +91,7 @@ a {
   }
   .macos-window {
     height: calc(100vh - 32px);
+    height: calc(100dvh - 32px);
     border-radius: 14px;
     box-shadow: var(--shadow-window);
     border: 1px solid rgba(255, 255, 255, 0.5);
@@ -103,6 +108,8 @@ a {
   flex-direction: column;
   padding: 10px 12px 14px;
   gap: 2px;
+  min-height: 0; /* em janelas baixas, rola em vez de cortar o card "Sair" */
+  overflow-y: auto;
 }
 
 /* Traffic lights */
@@ -163,6 +170,7 @@ a {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0; /* permite que .main role em vez de estourar a janela */
   background: var(--window-solid);
 }
 .titlebar {
@@ -183,7 +191,11 @@ a {
 }
 .main {
   flex: 1 1 auto;
+  min-height: 0; /* essencial p/ o scroll interno funcionar dentro do flex */
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  /* O respiro inferior precisa cobrir o dock flutuante (bottom 14px + ~62px
+     de altura), senão a última linha fica escondida atrás dele. */
   padding: 24px 28px 96px;
 }
 
@@ -239,8 +251,58 @@ a {
   }
 }
 @media (max-width: 720px) {
+  /* No mobile/tablet a "janela" deixa de ter altura fixa: o documento inteiro
+     rola normalmente (a sidebar empilha em cima e não corta o conteúdo). */
+  .macos-desktop {
+    padding: 0;
+  }
   .macos-window {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+    border-radius: 0;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    /* No mobile a navegação vira um cabeçalho que rola com a página (não fixo),
+       liberando toda a altura para o conteúdo. */
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+    padding: 10px 14px;
+    overflow-y: visible;
+  }
+  .sidebar .traffic {
+    display: none;
+  }
+  .sidebar .brand {
+    padding: 0 8px 0 0;
+    width: auto;
+    white-space: nowrap;
+  }
+  .sidebar .nav-link {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .sidebar > div[style] {
+    margin-top: 8px !important;
+    width: 100%;
+  }
+  .sidebar .card {
+    padding: 10px 12px !important;
+  }
+  .window-main {
+    min-height: 0;
+    overflow: visible;
+  }
+  .main {
+    overflow: visible;
+    padding: 18px 16px 40px;
   }
   .grid-4,
   .grid-3,
@@ -823,3 +885,49 @@ th.num {
     display: none;
   }
 }
+
+/* ─── Planejamento: central de ações ("O que fazer hoje") ─────────────────── */
+
+.action-center {
+  margin-top: 4px;
+}
+.action-card {
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  border-left: 4px solid var(--border-strong, var(--border));
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.action-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+}
+.action-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.action-card .action-count {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+.action-card .action-label {
+  font-weight: 600;
+  font-size: 13.5px;
+  margin-top: 2px;
+}
+.action-card .hint {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+.action-card.red { border-left-color: var(--red); }
+.action-card.red .action-count { color: var(--red); }
+.action-card.green { border-left-color: var(--green); }
+.action-card.green .action-count { color: var(--green); }
+.action-card.blue { border-left-color: var(--accent); }
+.action-card.blue .action-count { color: var(--accent); }
+.action-card.amber { border-left-color: var(--amber); }
+.action-card.amber .action-count { color: var(--amber); }

@@ -14,7 +14,11 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@planning": ["../api/src/modules/planning/planning.math.ts"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "../api/src/modules/planning/planning.math.ts"]
 }

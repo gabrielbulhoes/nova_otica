@@ -7,8 +7,6 @@ import { runFullSync } from '../../sync/syncService.js';
 
 export const syncRouter = Router();
 
-let manualRunning = false;
-
 /** GET /api/sync/status — estado da integração e da janela de uso. */
 syncRouter.get(
   '/status',
@@ -34,15 +32,9 @@ syncRouter.get(
 syncRouter.post(
   '/run',
   asyncHandler(async (_req, res) => {
-    if (manualRunning) {
-      return res.status(409).json({ error: 'Já existe uma sincronização em andamento.' });
-    }
-    manualRunning = true;
-    try {
-      const result = await runFullSync('manual');
-      return res.status(result.ok ? 200 : 207).json(result);
-    } finally {
-      manualRunning = false;
-    }
+    // Concorrência (scheduler × manual × outros processos) é tratada pela
+    // trava do runFullSync, que responde 409 via SyncInProgressError.
+    const result = await runFullSync('manual');
+    return res.status(result.ok ? 200 : 207).json(result);
   }),
 );

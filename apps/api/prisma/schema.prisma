@@ -304,6 +304,49 @@ model InventoryMovement {
   @@index([createdAt])
 }
 
+// ─── Planejamento & Compras ──────────────────────────────────────────────────
+
+/// Prazo de ressuprimento por fornecedor (mapeado pela marca do produto).
+/// Usado no planejamento para calcular o ponto de reposição e o prazo-limite
+/// do pedido de cada item ("pedir até"). Sem registro, vale o prazo padrão.
+model SupplierSetting {
+  id           String   @id @default(cuid())
+  brand        String   @unique
+  leadTimeDays Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+enum PurchaseOrderStatus {
+  SENT // enviado ao fornecedor (em trânsito)
+  RECEIVED // mercadoria conferida e recebida
+  CANCELLED
+}
+
+/// Pedido de compra registrado a partir do planejamento. O snapshot dos
+/// itens fica em JSON (o pedido é um documento histórico, imutável após o
+/// envio); enquanto SENT, as quantidades contam como "a caminho" e são
+/// abatidas das próximas sugestões de compra.
+model PurchaseOrderRecord {
+  id           String              @id @default(cuid())
+  supplier     String
+  leadTimeDays Int
+  status       PurchaseOrderStatus @default(SENT)
+  items        Json // [{ productId, description, quantity, unitCost, total }]
+  units        Int
+  total        Decimal             @db.Decimal(12, 2)
+  sentBy       String
+  sentAt       DateTime            @default(now())
+  expectedAt   DateTime? // sentAt + leadTimeDays
+  receivedBy   String?
+  receivedAt   DateTime?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([status])
+  @@index([supplier])
+}
+
 // ─── Auditoria de sincronização ──────────────────────────────────────────────
 
 enum SyncStatus {

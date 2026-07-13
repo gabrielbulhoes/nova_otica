@@ -18,6 +18,7 @@ import { movementsRouter } from './modules/movements/movements.routes.js';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes.js';
 import { biRouter } from './modules/bi/bi.routes.js';
 import { reportsRouter } from './modules/reports/reports.routes.js';
+import { planningRouter } from './modules/planning/planning.routes.js';
 import { alertsRouter } from './modules/alerts/alerts.routes.js';
 import { cartRouter } from './modules/commerce/cart.routes.js';
 import { ordersRouter } from './modules/commerce/orders.routes.js';
@@ -54,6 +55,7 @@ export function createApp() {
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/bi', biRouter);
   app.use('/api/reports', reportsRouter);
+  app.use('/api/planning', planningRouter);
   app.use('/api/alerts', alertsRouter);
   app.use('/api/cart', cartRouter);
   app.use('/api/orders', ordersRouter);

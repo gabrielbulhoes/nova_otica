@@ -1,23 +1,24 @@
 name: Publicar demo (GitHub Pages)
 
 # Publica o frontend em modo demonstração (dados fictícios, sem backend) no
-# GitHub Pages. Requer, uma única vez: Settings → Pages → Source: GitHub Actions.
+# GitHub Pages via branch `gh-pages` — o GitHub ativa o Pages automaticamente
+# quando esse branch existe, sem passo manual em Settings (o método com
+# actions/deploy-pages exige ativação manual, que o GITHUB_TOKEN não pode
+# fazer: "Resource not accessible by integration").
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write # push no branch gh-pages
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,18 +33,18 @@ jobs:
           VITE_DEMO: '1'
           VITE_BASE: /nova_otica/
         run: npm run build --workspace=@nova-otica/web
-      - name: SPA fallback (deep links)
-        run: cp apps/web/dist/index.html apps/web/dist/404.html
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: apps/web/dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: SPA fallback (deep links) e .nojekyll
+        run: |
+          cp apps/web/dist/index.html apps/web/dist/404.html
+          touch apps/web/dist/.nojekyll
+      - name: Publicar no branch gh-pages
+        run: |
+          cd apps/web/dist
+          git init -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Publica demo (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

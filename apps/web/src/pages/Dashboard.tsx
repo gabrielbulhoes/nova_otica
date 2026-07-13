@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getSummary, getSalesByStore, getSyncStatus, getAlerts, formatBRL } from '../api/client';
+import { getSummary, getSalesByStore, getSyncStatus, getAlerts, getPurchaseOrders, formatBRL } from '../api/client';
 import { StatCard, PageHeader, Loading } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 
@@ -10,6 +10,7 @@ export function Dashboard() {
   const byStore = useQuery({ queryKey: ['sales-by-store'], queryFn: getSalesByStore, enabled: isAdmin });
   const sync = useQuery({ queryKey: ['sync-status'], queryFn: getSyncStatus, enabled: isAdmin });
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
+  const orders = useQuery({ queryKey: ['planning-orders', '90', ''], queryFn: () => getPurchaseOrders({ days: '90' }) });
 
   const maxTotal = Math.max(1, ...(byStore.data ?? []).map((s) => s.total));
 
@@ -39,6 +40,20 @@ export function Dashboard() {
           <div>
             <strong>{alerts.data.out}</strong> ruptura(s) e <strong>{alerts.data.low}</strong> item(ns) com
             estoque baixo. <Link to="/admin/alertas" style={{ color: 'var(--accent)' }}>Ver alertas →</Link>
+          </div>
+        </div>
+      )}
+
+      {/* Notificação proativa do planejamento: itens no ponto de reposição.
+          Atualiza ao vivo (evento planning.urgent pós-sincronização). */}
+      {orders.data && orders.data.summary.items > 0 && (
+        <div className="banner warn">
+          <span className="dot amber" />
+          <div>
+            🛒 <strong>{orders.data.summary.items}</strong> item(ns) no ponto de reposição —{' '}
+            {orders.data.summary.suppliers} pedido(s) de fornecedor somando{' '}
+            <strong>{formatBRL(orders.data.summary.total)}</strong>.{' '}
+            <Link to="/admin/planejamento" style={{ color: 'var(--accent)' }}>Ver pedidos prontos →</Link>
           </div>
         </div>
       )}

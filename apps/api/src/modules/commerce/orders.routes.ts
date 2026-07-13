@@ -16,7 +16,7 @@ ordersRouter.post(
   '/',
   asyncHandler(async (req, res) => {
     const input = checkoutSchema.parse(req.body ?? {});
-    res.status(201).json(await checkout(req.user!.id, input));
+    res.status(201).json(await checkout(req.user!, input));
   }),
 );
 
@@ -31,11 +31,11 @@ ordersRouter.get(
   }),
 );
 
-/** GET /api/orders/:id — detalhe do pedido. */
+/** GET /api/orders/:id — detalhe do pedido (escopo: dono, loja ou ADMIN). */
 ordersRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
-    res.json(await getOrderView(req.params.id));
+    res.json(await getOrderView(req.params.id, req.user!));
   }),
 );
 
@@ -43,6 +43,6 @@ ordersRouter.get(
 ordersRouter.post(
   '/:id/pay',
   asyncHandler(async (req, res) => {
-    res.json(await confirmPayment(req.params.id));
+    res.json(await confirmPayment(req.params.id, req.user!));
   }),
 );

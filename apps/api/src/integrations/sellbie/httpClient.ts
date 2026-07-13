@@ -59,12 +59,14 @@ export class SellbieHttpClient implements SellbieClient {
   }
 
   private async get<T>(route: string, params?: object): Promise<T[]> {
-    assertWindow();
     const cfg: AxiosRequestConfig = { params };
 
     let attempt = 0;
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      // Revalida a janela a cada tentativa: o backoff pode atravessar o fim
+      // dela (ex.: 06:59:50 + 2s/4s/8s). WindowClosedError não é retryable.
+      assertWindow();
       try {
         const res = await this.http.get(route, cfg);
         return unwrap<T>(res.data);

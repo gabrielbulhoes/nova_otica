@@ -1,11 +1,30 @@
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { publish } from '../lib/eventBus.js';
+import { HttpError } from '../http/helpers.js';
 import { getSellbieClient } from '../integrations/sellbie/index.js';
 import { checkWindow } from '../integrations/sellbie/window.js';
 import * as map from '../integrations/sellbie/mappers.js';
 
 const log = logger.child({ mod: 'sync' });
+
+/** Erro lançado quando já existe uma sincronização em andamento. */
+export class SyncInProgressError extends HttpError {
+  constructor() {
+    super(409, 'Já existe uma sincronização em andamento.');
+  }
+}
+
+// Trava única para todos os gatilhos (schedule, boot, manual) no processo.
+let syncInFlight = false;
+
+// Um run RUNNING mais novo que isto bloqueia execuções em outros processos;
+// mais velho é considerado abandonado (processo caiu) e não bloqueia.
+const STALE_RUN_MS = 15 * 60_000;
+
+export function isSyncRunning(): boolean {
+  return syncInFlight;
+}
 
 export interface SyncResult {
   ok: boolean;
@@ -22,7 +41,27 @@ type Trigger = 'schedule' | 'boot' | 'manual';
  * Ao final, reconcilia as movimentações internas pendentes.
  */
 export async function runFullSync(trigger: Trigger = 'manual'): Promise<SyncResult> {
+  if (syncInFlight) throw new SyncInProgressError();
+  // Trava entre processos: um run RUNNING recente indica sync ativo em outra
+  // instância (scheduler × manual, ou múltiplas réplicas da API).
+  const activeRun = await prisma.syncRun.findFirst({
+    where: { status: 'RUNNING', startedAt: { gte: new Date(Date.now() - STALE_RUN_MS) } },
+  });
+  if (activeRun) throw new SyncInProgressError();
+
+  syncInFlight = true;
+  try {
+    return await runFullSyncLocked(trigger);
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   const startedAt = Date.now();
+  // Cutoff da reconciliação: movimentações confirmadas ANTES do início do
+  // sync. As confirmadas durante o run ainda não estão refletidas na fonte.
+  const reconcileCutoff = new Date(startedAt);
   const client = getSellbieClient();
   const win = checkWindow();
   const entities: SyncResult['entities'] = {};
@@ -80,7 +119,7 @@ export async function runFullSync(trigger: Trigger = 'manual'): Promise<SyncResu
   await track('payments', () => syncPayments(client));
 
   // 5) Reconciliação das movimentações internas
-  await track('reconcile', () => reconcileMovements());
+  await track('reconcile', () => reconcileMovements(reconcileCutoff));
 
   const hadError = Object.values(entities).some((e) => e.error);
   const durationMs = Date.now() - startedAt;
@@ -103,6 +142,18 @@ export async function runFullSync(trigger: Trigger = 'manual'): Promise<SyncResu
 
   log.info('Sincronização concluída', { durationMs, totalRead, totalWritten, ok: !hadError });
   publish({ type: 'sync.completed', ok: !hadError });
+
+  // Notificação proativa: com a base recém-sincronizada, avisa o painel se
+  // há itens no ponto de reposição (sem depender de o lojista abrir a tela).
+  try {
+    const { publishPlanningAlert } = await import('../modules/planning/planning.service.js');
+    await publishPlanningAlert();
+  } catch (err) {
+    log.warn('Falha ao publicar alerta de planejamento pós-sync', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return { ok: !hadError, window: win.window, durationMs, entities };
 }
 
@@ -369,11 +420,12 @@ async function syncPayments(client: Client) {
 
 /**
  * Marca como RECONCILED as movimentações internas confirmadas antes do início
- * desta sincronização: a partir de agora o saldo da fonte já as reflete, então
- * elas deixam de ser somadas ao estoque "ao vivo". Também zera as reservas.
+ * desta sincronização (`cutoff` = startedAt do run): a partir de agora o saldo
+ * da fonte já as reflete, então elas deixam de ser somadas ao estoque "ao
+ * vivo". Confirmações ocorridas DURANTE o run ficam para o próximo ciclo.
+ * Também recalcula as reservas.
  */
-async function reconcileMovements() {
-  const cutoff = new Date();
+async function reconcileMovements(cutoff: Date) {
   const pending = await prisma.inventoryMovement.findMany({
     where: { status: 'CONFIRMED', confirmedAt: { lt: cutoff } },
     select: { id: true },
@@ -384,7 +436,9 @@ async function reconcileMovements() {
       data: { status: 'RECONCILED', reconciledAt: cutoff },
     });
   }
-  // Recalcula reservas a partir das movimentações ainda pendentes.
+  // Recalcula reservas a partir das movimentações ainda pendentes. Upsert:
+  // reservas de posições sem linha em StockItem também precisam persistir,
+  // senão a disponibilidade fica superestimada.
   await prisma.stockItem.updateMany({ data: { reserved: 0 } });
   const reservations = await prisma.inventoryMovement.groupBy({
     by: ['fromStoreId', 'productId'],
@@ -393,9 +447,14 @@ async function reconcileMovements() {
   });
   for (const r of reservations) {
     if (!r.fromStoreId) continue;
-    await prisma.stockItem.updateMany({
-      where: { storeId: r.fromStoreId, productId: r.productId },
-      data: { reserved: r._sum.quantity ?? 0 },
+    await prisma.stockItem.upsert({
+      where: { storeId_productId: { storeId: r.fromStoreId, productId: r.productId } },
+      create: {
+        storeId: r.fromStoreId,
+        productId: r.productId,
+        reserved: r._sum.quantity ?? 0,
+      },
+      update: { reserved: r._sum.quantity ?? 0 },
     });
   }
   return { read: pending.length, written: pending.length + reservations.length };

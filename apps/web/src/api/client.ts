@@ -273,6 +273,168 @@ export const getAlerts = (params: Record<string, string | undefined>) =>
 export const setMinStock = (productId: string, minStock: number | null) =>
   api.put('/alerts/min-stock', { productId, minStock }).then((r) => r.data);
 
+// ─── Planejamento & Compras (análise preditiva) ──────────────────────────────
+
+export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
+export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
+
+export interface ProductPlan {
+  productId: string;
+  description: string;
+  brand: string | null;
+  category: string | null;
+  currentStock: number;
+  unitsSold: number;
+  dailyDemand: number;
+  coverageDays: number | null;
+  reorderPoint: number;
+  targetStock: number;
+  unitCost: number;
+  stockValue: number;
+  excessValue: number;
+  revenue: number;
+  movementClass: MovementClass;
+  recommendation: Recommendation;
+  suggestedQty: number;
+  capital: number;
+  stockoutInDays: number | null;
+  reason: string;
+  /** Unidades a caminho (pedidos enviados e não recebidos). */
+  onOrderQty: number;
+  /** Prazo de ressuprimento aplicado (do fornecedor/marca ou padrão). */
+  leadTimeDays: number;
+  /** Dias restantes para fazer o pedido sem romper (null = sem urgência). */
+  orderByInDays: number | null;
+}
+
+export interface PlanningOverview {
+  days: number;
+  currency: 'BRL';
+  capital: { total: number; idle: number; parked: number; excess: number; healthy: number; idlePct: number };
+  movement: { dead: number; slow: number; healthy: number; fast: number };
+  pareto: {
+    totalRevenue: number;
+    totalProducts: number;
+    classAProducts: number;
+    classAShareOfSkus: number;
+    classARevenueShare: number;
+  };
+  topIdle: Array<{
+    productId: string;
+    description: string;
+    category: string | null;
+    currentStock: number;
+    unitCost: number;
+    idleValue: number;
+    coverageDays: number | null;
+    movementClass: MovementClass;
+  }>;
+  byCategory: Array<{ category: string; capital: number; idle: number; units: number }>;
+}
+
+export interface PurchaseSuggestions {
+  days: number;
+  summary: { buy: number; hold: number; dontBuy: number; liquidate: number; buyCapital: number; avoidedCapital: number };
+  rows: ProductPlan[];
+}
+
+export interface RebalanceSuggestion {
+  productId: string;
+  description: string;
+  brand: string | null;
+  fromStoreId: string;
+  fromStoreName: string;
+  toStoreId: string;
+  toStoreName: string;
+  quantity: number;
+  /** Cobertura (dias) na origem e no destino antes da transferência. */
+  fromCoverageDays: number | null;
+  toCoverageDays: number | null;
+  /** Previsão de ruptura no destino (dias), quando houver. */
+  stockoutInDays: number | null;
+  reason: string;
+}
+
+export interface RebalancePlan {
+  days: number;
+  summary: { suggestions: number; units: number; storesInvolved: number };
+  rows: RebalanceSuggestion[];
+}
+
+export interface SupplierSetting {
+  brand: string;
+  leadTimeDays: number | null;
+  products: number;
+  isDefault: boolean;
+}
+
+export interface PurchaseOrderItem {
+  productId: string;
+  description: string;
+  category: string | null;
+  quantity: number;
+  unitCost: number;
+  total: number;
+  orderByInDays: number | null;
+  stockoutInDays: number | null;
+}
+
+export interface PurchaseOrder {
+  supplier: string;
+  leadTimeDays: number;
+  items: PurchaseOrderItem[];
+  units: number;
+  total: number;
+  orderByInDays: number | null;
+  stockoutInDays: number | null;
+}
+
+export interface PurchaseOrdersPlan {
+  days: number;
+  summary: { suppliers: number; items: number; units: number; total: number };
+  orders: PurchaseOrder[];
+}
+
+type PlanParams = Record<string, string | number | undefined>;
+
+export const getPlanningOverview = (params: PlanParams) =>
+  api.get<PlanningOverview>('/planning/overview', { params }).then((r) => r.data);
+export const getPurchaseSuggestions = (params: PlanParams) =>
+  api.get<PurchaseSuggestions>('/planning/purchase-suggestions', { params }).then((r) => r.data);
+export const getRebalancePlan = (params: PlanParams) =>
+  api.get<RebalancePlan>('/planning/rebalance', { params }).then((r) => r.data);
+export const getPurchaseOrders = (params: PlanParams) =>
+  api.get<PurchaseOrdersPlan>('/planning/purchase-orders', { params }).then((r) => r.data);
+
+export type PurchaseOrderRecordStatus = 'SENT' | 'RECEIVED' | 'CANCELLED';
+
+export interface PurchaseOrderRecord {
+  id: string;
+  supplier: string;
+  leadTimeDays: number;
+  status: PurchaseOrderRecordStatus;
+  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  units: number;
+  total: string | number;
+  sentAt: string;
+  expectedAt: string | null;
+  receivedAt: string | null;
+}
+
+export const registerPurchaseOrder = (body: {
+  supplier: string;
+  leadTimeDays: number;
+  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+}) => api.post<PurchaseOrderRecord>('/planning/purchase-orders', body).then((r) => r.data);
+export const getPurchaseOrderHistory = () =>
+  api.get<{ total: number; rows: PurchaseOrderRecord[] }>('/planning/purchase-orders/history').then((r) => r.data);
+export const settlePurchaseOrder = (id: string, action: 'receive' | 'cancel') =>
+  api.post<PurchaseOrderRecord>(`/planning/purchase-orders/${id}/${action}`).then((r) => r.data);
+export const getSupplierSettings = () =>
+  api.get<{ defaultLeadTimeDays: number; rows: SupplierSetting[] }>('/planning/suppliers').then((r) => r.data);
+export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) =>
+  api.put('/planning/suppliers', { brand, leadTimeDays }).then((r) => r.data);
+
 // ─── BI ──────────────────────────────────────────────────────────────────────
 
 export interface BiKpis {

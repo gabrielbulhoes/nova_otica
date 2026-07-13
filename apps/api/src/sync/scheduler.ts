@@ -1,28 +1,27 @@
 import cron from 'node-cron';
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
-import { runFullSync } from './syncService.js';
+import { runFullSync, SyncInProgressError } from './syncService.js';
 
 const log = logger.child({ mod: 'scheduler' });
 
 let task: cron.ScheduledTask | null = null;
-let running = false;
 
-/** Executa um sync evitando sobreposição de execuções concorrentes. */
+/**
+ * Executa um sync. A exclusão mútua (scheduler × boot × manual, inclusive
+ * entre processos) é garantida pela trava dentro de runFullSync.
+ */
 async function safeRun(trigger: 'schedule' | 'boot'): Promise<void> {
-  if (running) {
-    log.warn('Sync já em execução; ignorando gatilho', { trigger });
-    return;
-  }
-  running = true;
   try {
     await runFullSync(trigger);
   } catch (err) {
+    if (err instanceof SyncInProgressError) {
+      log.warn('Sync já em execução; ignorando gatilho', { trigger });
+      return;
+    }
     log.error('Erro não tratado no sync agendado', {
       error: err instanceof Error ? err.message : String(err),
     });
-  } finally {
-    running = false;
   }
 }
 
