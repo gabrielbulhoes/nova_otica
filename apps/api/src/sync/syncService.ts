@@ -88,12 +88,14 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   let totalWritten = 0;
   const track = async (
     name: string,
-    fn: () => Promise<{ read: number; written: number }>,
+    fn: () => Promise<{ read: number; written: number; error?: string }>,
     opts: { countTotals?: boolean } = {},
   ): Promise<void> => {
     try {
       const r = await fn();
-      entities[name] = { read: r.read, written: r.written };
+      // Erro estruturado (ex.: write-back parcial) preserva os contadores de
+      // sucesso e ainda marca a entidade como falha (status PARTIAL + alerta).
+      entities[name] = { read: r.read, written: r.written, ...(r.error ? { error: r.error } : {}) };
       if (opts.countTotals !== false) {
         // recordsRead/recordsWritten do SyncRun contam apenas o fluxo
         // ERP -> local (é o que o painel mostra como "registros").

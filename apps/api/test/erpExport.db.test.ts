@@ -38,10 +38,11 @@ describe.skipIf(!RUN)('write-back ao ERP (outbox contra Postgres)', () => {
     storeId = store.id;
     productId = product.id;
     // Blindagem: pedidos PAGOS pré-existentes (seed/outros testes) saem da
-    // fila para os contadores deste teste serem determinísticos.
+    // fila para os contadores deste teste serem determinísticos. Sentinela
+    // = epoch; a restauração é o inverso exato (não toca erro/tentativas).
     await prisma.order.updateMany({
       where: { status: 'PAID', erpExportedAt: null },
-      data: { erpExportedAt: new Date(0), erpExportError: 'excluído pelo teste de outbox' },
+      data: { erpExportedAt: new Date(0) },
     });
   });
 
@@ -49,8 +50,8 @@ describe.skipIf(!RUN)('write-back ao ERP (outbox contra Postgres)', () => {
     await prisma.orderItem.deleteMany({ where: { orderId: { in: created } } });
     await prisma.order.deleteMany({ where: { id: { in: created } } });
     await prisma.order.updateMany({
-      where: { erpExportError: 'excluído pelo teste de outbox' },
-      data: { erpExportedAt: null, erpExportError: null },
+      where: { erpExportedAt: new Date(0) },
+      data: { erpExportedAt: null },
     });
     await prisma.$disconnect();
   });
@@ -89,25 +90,52 @@ describe.skipIf(!RUN)('write-back ao ERP (outbox contra Postgres)', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('falha registrada permite retry; sucesso posterior limpa o erro', async () => {
+  it('rejeição respondida permite retry; sucesso posterior limpa o erro', async () => {
     const id = await paidOrder('TB-FAIL-001');
     const { client: bad } = fakeClient(async () => {
       throw new Error('ERP recusou: funcionario inexistente');
     });
 
-    await expect(exportPaidOrdersToErp(bad)).rejects.toThrow(/1 pedido\(s\) falharam/);
+    const r1 = await exportPaidOrdersToErp(bad);
+    expect(r1.failed).toBe(1);
+    expect(r1.error).toMatch(/1 pedido\(s\) falharam/);
     let row = await prisma.order.findUniqueOrThrow({ where: { id } });
     expect(row.erpExportedAt).toBeNull();
     expect(row.erpExportError).toContain('funcionario inexistente');
     expect(row.erpExportAttempts).toBe(1);
 
     const { client: good } = fakeClient(async () => ({ ok: true }));
-    const r = await exportPaidOrdersToErp(good);
-    expect(r.written).toBe(1);
+    const r2 = await exportPaidOrdersToErp(good);
+    expect(r2.written).toBe(1);
     row = await prisma.order.findUniqueOrThrow({ where: { id } });
     expect(row.erpExportedAt).not.toBeNull();
     expect(row.erpExportError).toBeNull();
     expect(row.erpExportAttempts).toBe(2);
+  });
+
+  it('timeout SEM resposta é ambíguo: vira interrompido e não reenvia sozinho', async () => {
+    const id = await paidOrder('TB-TIMEOUT-001');
+    const { client: flaky } = fakeClient(async () => {
+      // Erro no formato do axios sem response — request enviada, resposta perdida.
+      const err = new Error('timeout of 30000ms exceeded') as Error & { isAxiosError: boolean };
+      err.isAxiosError = true;
+      throw err;
+    });
+
+    const r1 = await exportPaidOrdersToErp(flaky);
+    expect(r1.failed).toBe(1); // visível no alerta…
+    const row = await prisma.order.findUniqueOrThrow({ where: { id } });
+    expect(row.erpExportError).toBeNull(); // …mas SEM erro gravado: estado interrompido
+    expect(row.erpExportAttemptedAt).not.toBeNull();
+    expect(row.erpExportedAt).toBeNull();
+
+    const { client: good, sent } = fakeClient(async () => ({ ok: true }));
+    const auto = await exportPaidOrdersToErp(good);
+    expect(auto.read).toBe(0); // fila automática não o reenvia
+    expect(sent).toHaveLength(0);
+
+    const manual = await exportPaidOrdersToErp(good, { retryStuck: true });
+    expect(manual.written).toBe(1); // só após decisão humana
   });
 
   it('envio interrompido (claim sem desfecho) NÃO reenvia sozinho — só com retryStuck', async () => {

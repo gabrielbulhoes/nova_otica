@@ -87,13 +87,14 @@ Regras de segurança do envio (semântica de outbox):
   deduplicação; sucesso carimba `erpExportedAt` e o pedido nunca é reenviado;
 - cada envio é **reservado atomicamente** antes do POST: o sync agendado e a
   rota manual nunca enviam o mesmo pedido em duplicidade, mesmo em paralelo;
-- **falha com erro registrado** (`erpExportError`, com o corpo da resposta do
-  ERP) volta à fila automaticamente, até **5 tentativas** — depois disso o
+- **rejeição respondida pelo ERP** (`erpExportError` guarda o status e o corpo
+  da resposta) volta à fila automaticamente, até **5 tentativas** — depois o
   pedido sai da fila (evita um pedido "veneno" tentando para sempre) e exige
   correção manual;
-- **envio interrompido** (caiu entre o POST e o carimbo — estado ambíguo) NÃO é
-  reenviado automaticamente: confira no ERP pelo `pedidoSite` e, se a venda não
-  entrou, reprocesse com `POST /api/sync/export-orders {"retryStuck": true}`;
+- **envio ambíguo** — timeout/queda de rede sem resposta, ou crash entre o
+  POST e o carimbo — NUNCA é reenviado automaticamente (a venda pode ter
+  entrado no ERP): confira pelo `pedidoSite` e, se não entrou, reprocesse com
+  `POST /api/sync/export-orders {"retryStuck": true}`;
 - a rota manual exige `SELLBIE_MODE=live` (em demo/mock nada é exportado — e
   nada é carimbado);
 - desconto/acréscimo são calculados pela diferença itens × total (a conta

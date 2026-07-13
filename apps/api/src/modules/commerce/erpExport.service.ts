@@ -130,6 +130,8 @@ export interface ErpExportResult {
   written: number;
   failed: number;
   skipped: number;
+  /** Presente quando houve falhas — vira erro da entidade no sync (alerta). */
+  error?: string;
 }
 
 /**
@@ -141,16 +143,18 @@ export interface ErpExportResult {
  *   enviam o mesmo pedido duas vezes;
  * - sucesso grava `erpExportedAt` (nunca reexporta); falha grava
  *   `erpExportError` detalhado e o pedido volta à fila até MAX_ATTEMPTS;
- * - claim sem desfecho registrado (crash entre o POST e o carimbo) deixa o
- *   pedido em estado "interrompido" (attemptedAt ≠ null, sem erro, sem
- *   sucesso): ele NÃO é reenviado automaticamente — como a CDS não documenta
- *   idempotência, reenviar um envio ambíguo poderia duplicar a venda.
- *   Verifique no ERP (pelo pedidoSite) e reprocesse com `retryStuck`;
- * - a janela da CDS é verificada a cada pedido; fechou, o lote para sem
- *   marcar erro nos pedidos restantes.
+ * - sucesso grava `erpExportedAt`; FALHA RESPONDIDA pelo ERP (rejeição) grava
+ *   `erpExportError` e volta à fila até MAX_ATTEMPTS;
+ * - envio AMBÍGUO — sem resposta (timeout/queda) ou crash entre o POST e o
+ *   carimbo — fica "interrompido" (attemptedAt ≠ null, sem erro, sem
+ *   sucesso) e NÃO é reenviado automaticamente: como a CDS não documenta
+ *   idempotência, reenviar poderia duplicar a venda. Verifique no ERP (pelo
+ *   pedidoSite) e reprocesse com `retryStuck`;
+ * - a janela da CDS é verificada a cada pedido; fechou, o lote para, e um
+ *   fechamento no meio do envio reverte o claim (não queima tentativa).
  *
- * Lança erro ao final se houver falhas reais (track() do sync transforma em
- * alerta operacional); janela fechada não conta como falha.
+ * Falhas reais voltam no campo `error` do resultado (o sync as transforma em
+ * erro da entidade + alerta operacional, preservando os contadores).
  */
 export async function exportPaidOrdersToErp(
   client: SellbieClient,
@@ -206,7 +210,10 @@ export async function exportPaidOrdersToErp(
         order.erpExportAttemptedAt === null
           ? { erpExportAttemptedAt: null }
           : order.erpExportError !== null
-            ? { erpExportError: { not: null } }
+            ? // Fixado no erro EXATO lido: se outro exportador reprocessou e
+              // gravou um erro novo nesse meio-tempo, esta condição não casa
+              // mais (evita duplo-claim na janela entre leitura e claim).
+              { erpExportError: order.erpExportError }
             : { erpExportAttemptedAt: order.erpExportAttemptedAt, erpExportError: null };
       const claim = await prisma.order.updateMany({
         where: { id: order.id, erpExportedAt: null, ...claimGuard },
@@ -253,30 +260,60 @@ export async function exportPaidOrdersToErp(
         written += 1;
         log.info('Pedido exportado ao ERP', { pedidoSite: order.number });
       } catch (err) {
-        const message = detailError(err);
-        await prisma.order.update({
-          where: { id: order.id },
-          data: { erpExportError: message },
-        });
         if (err instanceof WindowClosedError) {
-          // Janela fechou entre o pré-check e o POST: estado fica retryável
-          // e o lote para — sem espalhar erro pelos pedidos restantes.
+          // Janela fechou entre o pré-check e o POST: nada foi enviado.
+          // Reverte o claim (devolve tentativa e estado originais) e para o
+          // lote — janela não é falha do pedido.
+          await prisma.order.update({
+            where: { id: order.id },
+            data: {
+              erpExportAttemptedAt: order.erpExportAttemptedAt,
+              erpExportError: order.erpExportError,
+              erpExportAttempts: { decrement: 1 },
+            },
+          });
           windowClosed = true;
           break;
         }
+
+        const message = detailError(err);
         failed += 1;
         lastError = message;
-        log.error('Falha ao exportar pedido ao ERP', { pedidoSite: order.number, error: message });
+        // Sem resposta do ERP (timeout/queda de rede) o envio é AMBÍGUO: a
+        // venda pode ter entrado. Não gravamos erro — o pedido fica no estado
+        // "interrompido" (tentativa sem desfecho) e NÃO volta à fila
+        // automática; conferir no ERP e reprocessar com retryStuck.
+        const ambiguous = axios.isAxiosError(err) && !err.response;
+        if (ambiguous) {
+          log.error('Envio ao ERP sem resposta (ambíguo) — pedido retido para conferência manual', {
+            pedidoSite: order.number,
+            error: message,
+          });
+          lastError = `envio sem resposta do ERP (ambíguo) — conferir pedidoSite ${order.number} e usar retryStuck`;
+        } else {
+          // O ERP respondeu (rejeição) ou a falha é local: retry automático
+          // é seguro; o erro detalhado orienta a correção.
+          await prisma.order.update({
+            where: { id: order.id },
+            data: { erpExportError: message },
+          });
+          log.error('Falha ao exportar pedido ao ERP', { pedidoSite: order.number, error: message });
+        }
       }
     }
   }
 
   if (failed > 0) {
-    // Visível na operação: track() do sync grava o erro da entidade e o
-    // alerta de falha dispara — um ERP fora do ar não passa em silêncio.
-    throw new Error(
-      `${failed} pedido(s) falharam no envio ao ERP (${written} exportados neste ciclo). Último erro: ${lastError}`,
-    );
+    // Erro estruturado (sem throw): o sync preserva os contadores de sucesso
+    // parciais E registra o erro da entidade — o alerta operacional dispara,
+    // e um ERP fora do ar não passa em silêncio.
+    return {
+      read,
+      written,
+      failed,
+      skipped,
+      error: `${failed} pedido(s) falharam no envio ao ERP (${written} exportados neste ciclo). Último erro: ${lastError}`,
+    };
   }
   return { read, written, failed, skipped };
 }
