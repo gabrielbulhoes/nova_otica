@@ -305,6 +305,8 @@ export interface ProductPlan {
   leadTimeDays: number;
   /** Dias restantes para fazer o pedido sem romper (null = sem urgência). */
   orderByInDays: number | null;
+  /** Detalhe da previsão de demanda usada (ausente = média simples). */
+  forecast?: { baseDaily: number; seasonalIndex: number; targetMonth: number; method: 'media' | 'tendencia' | 'sazonal' };
 }
 
 export interface PlanningOverview {

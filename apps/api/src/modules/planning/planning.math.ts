@@ -38,6 +38,95 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
 export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
 
+// ─── Previsão de demanda (suavização + sazonalidade) ────────────────────────
+
+/** Um bucket mensal do histórico de vendas (mês calendário 1–12). */
+export interface MonthlyDemandPoint {
+  month: number;
+  units: number;
+}
+
+export interface DemandHistory {
+  /** Janela recente (ex.: últimos 30 dias) — pesa mais na previsão. */
+  recentUnits: number;
+  recentDays: number;
+  /** Janela anterior (restante do período analisado). */
+  priorUnits: number;
+  priorDays: number;
+  /** Histórico mensal (até 24 buckets) para o índice sazonal. */
+  monthlyHistory: MonthlyDemandPoint[];
+  /** Mês calendário atual (1–12) — âncora para achar o mês-alvo do pedido. */
+  currentMonth: number;
+}
+
+export interface DemandForecast {
+  /** Demanda diária prevista (base × índice sazonal). */
+  dailyDemand: number;
+  /** Demanda suavizada, antes da sazonalidade. */
+  baseDaily: number;
+  /** Índice sazonal aplicado (1 = sem ajuste). */
+  seasonalIndex: number;
+  /** Mês (1–12) que a previsão mira (chegada do pedido). */
+  targetMonth: number;
+  method: 'media' | 'tendencia' | 'sazonal';
+}
+
+/** Peso da janela recente na suavização (o restante vai para a anterior). */
+const RECENT_WEIGHT = 0.65;
+/** Sazonalidade só é aplicada com sinal suficiente (evita ruído virar índice). */
+const SEASONAL_MIN_MONTHS = 6;
+const SEASONAL_MIN_UNITS = 30;
+const SEASONAL_CLAMP: [number, number] = [0.5, 2];
+
+/**
+ * Prevê a demanda diária combinando:
+ * 1. suavização com peso recente — reage a tendência (produto acelerando ou
+ *    esfriando) sem abandonar a base histórica;
+ * 2. índice sazonal mensal — com >= 6 meses e volume mínimo de histórico,
+ *    ajusta para o mês em que o pedido vai chegar (targetMonth); com pouco
+ *    histórico, degrada com segurança para a média (índice 1).
+ */
+export function forecastDemand(history: DemandHistory, leadTimeDays: number): DemandForecast {
+  const recentRate = history.recentDays > 0 ? history.recentUnits / history.recentDays : 0;
+  const priorRate = history.priorDays > 0 ? history.priorUnits / history.priorDays : 0;
+
+  let baseDaily: number;
+  let method: DemandForecast['method'] = 'media';
+  if (history.recentDays > 0 && history.priorDays > 0) {
+    baseDaily = RECENT_WEIGHT * recentRate + (1 - RECENT_WEIGHT) * priorRate;
+    const max = Math.max(recentRate, priorRate);
+    if (max > 0 && Math.abs(recentRate - priorRate) / max > 0.1) method = 'tendencia';
+  } else {
+    baseDaily = history.recentDays > 0 ? recentRate : priorRate;
+  }
+
+  // Mês em que o pedido feito hoje chega (âncora da sazonalidade).
+  const monthsAhead = Math.round(leadTimeDays / 30);
+  const targetMonth = ((history.currentMonth - 1 + monthsAhead) % 12) + 1;
+
+  let seasonalIndex = 1;
+  const buckets = history.monthlyHistory;
+  const distinctMonths = new Set(buckets.map((b) => b.month)).size;
+  const totalUnits = buckets.reduce((a, b) => a + b.units, 0);
+  if (distinctMonths >= SEASONAL_MIN_MONTHS && totalUnits >= SEASONAL_MIN_UNITS) {
+    const overallAvg = totalUnits / buckets.length;
+    const target = buckets.filter((b) => b.month === targetMonth);
+    if (overallAvg > 0 && target.length > 0) {
+      const targetAvg = target.reduce((a, b) => a + b.units, 0) / target.length;
+      seasonalIndex = Math.min(SEASONAL_CLAMP[1], Math.max(SEASONAL_CLAMP[0], targetAvg / overallAvg));
+      if (Math.abs(seasonalIndex - 1) > 0.05) method = 'sazonal';
+    }
+  }
+
+  return {
+    dailyDemand: round2(baseDaily * seasonalIndex),
+    baseDaily: round2(baseDaily),
+    seasonalIndex: round2(seasonalIndex),
+    targetMonth,
+    method,
+  };
+}
+
 export interface ProductMetricsInput {
   productId: string;
   description: string;
@@ -53,6 +142,8 @@ export interface ProductMetricsInput {
   unitPrice: number;
   /** Unidades já pedidas ao fornecedor e ainda não recebidas (a caminho). */
   onOrderQty?: number;
+  /** Histórico para previsão; ausente = média simples (unitsSold/days). */
+  demandHistory?: DemandHistory;
 }
 
 export interface ProductPlan {
@@ -92,6 +183,8 @@ export interface ProductPlan {
    * 0 = pedir agora (já está no/abaixo do ponto); null = sem giro.
    */
   orderByInDays: number | null;
+  /** Detalhe da previsão de demanda usada (ausente = média simples). */
+  forecast?: { baseDaily: number; seasonalIndex: number; targetMonth: number; method: 'media' | 'tendencia' | 'sazonal' };
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -103,7 +196,10 @@ export function analyzeProduct(
   days: number,
   cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
 ): ProductPlan {
-  const dailyDemand = days > 0 ? input.unitsSold / days : 0;
+  // Com histórico, a demanda vem da previsão (tendência + sazonalidade no mês
+  // de chegada do pedido, dado o lead time); sem histórico, média simples.
+  const forecast = input.demandHistory ? forecastDemand(input.demandHistory, cfg.leadTimeDays) : null;
+  const dailyDemand = forecast ? forecast.dailyDemand : days > 0 ? input.unitsSold / days : 0;
   const coverageDays = dailyDemand > 0 ? input.currentStock / dailyDemand : null;
   const reorderPoint = dailyDemand * (cfg.leadTimeDays + cfg.safetyDays);
   const targetStock = dailyDemand * cfg.targetCoverDays;
@@ -185,6 +281,14 @@ export function analyzeProduct(
     onOrderQty: onOrder,
     leadTimeDays: cfg.leadTimeDays,
     orderByInDays,
+    forecast: forecast
+      ? {
+          baseDaily: forecast.baseDaily,
+          seasonalIndex: forecast.seasonalIndex,
+          targetMonth: forecast.targetMonth,
+          method: forecast.method,
+        }
+      : undefined,
   };
 }
 
