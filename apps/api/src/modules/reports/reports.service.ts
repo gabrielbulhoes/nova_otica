@@ -1,6 +1,24 @@
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { toNumber } from '../../http/helpers.js';
+import {
+  abcFromItems,
+  computeCoverage,
+  type AbcDimension,
+  type AbcResult,
+  type CoverageRow,
+} from '../planning/planning.math.js';
+
+// A matemática pura da curva ABC vive em planning.math.ts (compartilhada com
+// a demo via @planning); reexportada aqui para rotas e testes.
+export {
+  abcFromItems,
+  classifyABC,
+  type AbcDimension,
+  type AbcItem,
+  type AbcResult,
+  type AbcRow,
+} from '../planning/planning.math.js';
 
 function periodStart(days: number): Date {
   const d = new Date();
@@ -8,86 +26,233 @@ function periodStart(days: number): Date {
   return d;
 }
 
-/** Classificação ABC de um item a partir do % acumulado de receita. */
-export function classifyABC(cumulativePct: number): 'A' | 'B' | 'C' {
-  if (cumulativePct <= 80) return 'A';
-  if (cumulativePct <= 95) return 'B';
-  return 'C';
-}
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export interface AbcRow {
-  productId: string;
-  description: string;
-  brand: string | null;
-  category: string | null;
-  revenue: number;
-  units: number;
-  revenuePct: number;
-  cumulativePct: number;
-  class: 'A' | 'B' | 'C';
-}
-
-/** Curva ABC por receita no período (opcionalmente por loja). */
-export async function abcCurve(days: number, storeId?: string): Promise<{
-  days: number;
-  totalRevenue: number;
-  summary: Record<'A' | 'B' | 'C', { products: number; revenue: number }>;
-  rows: AbcRow[];
-}> {
+/** Curva ABC por receita no período — por SKU ou por MARCA (opcionalmente por loja). */
+export async function abcCurve(
+  days: number,
+  storeId?: string,
+  dimension: AbcDimension = 'product',
+): Promise<AbcResult> {
   const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) } };
   if (storeId) saleFilter.storeId = storeId;
+
+  if (dimension === 'brand') {
+    // LEFT JOIN: item sem produto vinculado cai em "Sem marca" em vez de
+    // sumir — os totais fecham com as outras dimensões.
+    const grouped = await prisma.$queryRaw<{ brand: string | null; revenue: number; units: bigint }[]>(
+      Prisma.sql`
+        SELECT p.brand AS brand, COALESCE(SUM(si.total), 0)::float AS revenue,
+               COALESCE(SUM(si.quantity), 0)::bigint AS units
+        FROM "SaleItem" si
+        JOIN "Sale" s ON s.id = si."saleId"
+        LEFT JOIN "Product" p ON p.id = si."productId"
+        WHERE s."saleDate" >= ${periodStart(days)}
+        ${storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty}
+        GROUP BY p.brand
+      `,
+    );
+    return abcFromItems(
+      grouped.map((g) => ({
+        key: g.brand ?? '—',
+        label: g.brand ?? 'Sem marca',
+        brand: null,
+        category: null,
+        revenue: g.revenue,
+        units: Number(g.units),
+      })),
+      days,
+      dimension,
+    );
+  }
 
   const grouped = await prisma.saleItem.groupBy({
     by: ['productId'],
     where: { sale: saleFilter, productId: { not: null } },
     _sum: { total: true, quantity: true },
   });
-
-  const items = grouped
-    .map((g) => ({
-      productId: g.productId as string,
-      revenue: toNumber(g._sum.total) ?? 0,
-      units: g._sum.quantity ?? 0,
-    }))
-    .filter((i) => i.revenue > 0)
-    .sort((a, b) => b.revenue - a.revenue);
-
-  const totalRevenue = items.reduce((s, i) => s + i.revenue, 0);
-
   const products = await prisma.product.findMany({
-    where: { id: { in: items.map((i) => i.productId) } },
+    where: { id: { in: grouped.map((g) => g.productId as string) } },
     select: { id: true, description: true, brand: true, category: true },
   });
   const byId = new Map(products.map((p) => [p.id, p]));
 
-  const summary = {
-    A: { products: 0, revenue: 0 },
-    B: { products: 0, revenue: 0 },
-    C: { products: 0, revenue: 0 },
+  return abcFromItems(
+    grouped.map((g) => {
+      const p = byId.get(g.productId as string);
+      return {
+        key: g.productId as string,
+        label: p?.description ?? '—',
+        brand: p?.brand ?? null,
+        category: p?.category ?? null,
+        revenue: toNumber(g._sum.total) ?? 0,
+        units: g._sum.quantity ?? 0,
+      };
+    }),
+    days,
+    dimension,
+  );
+}
+
+// ─── Cobertura de estoque geral e por marca (feedback 06) ────────────────────
+
+export interface BrandCoverageResult {
+  days: number;
+  /** Linha "GERAL": rede/loja inteira somada. */
+  total: CoverageRow;
+  rows: CoverageRow[];
+}
+
+/**
+ * Cobertura por marca: unidades em estoque ÷ média mensal vendida, agregadas
+ * pela marca do produto. Produtos sem marca caem no balde "Sem marca" (a
+ * grade do CDS não traz fornecedor; o backfill do sistema vivo preenche).
+ */
+export async function coverageByBrand(days: number, storeId?: string): Promise<BrandCoverageResult> {
+  const [stockRows, soldRows] = await Promise.all([
+    prisma.$queryRaw<{ brand: string | null; units: bigint }[]>(Prisma.sql`
+      SELECT p.brand AS brand, COALESCE(SUM(st.quantity), 0)::bigint AS units
+      FROM "StockItem" st
+      JOIN "Product" p ON p.id = st."productId"
+      ${storeId ? Prisma.sql`WHERE st."storeId" = ${storeId}` : Prisma.empty}
+      GROUP BY p.brand
+    `),
+    prisma.$queryRaw<{ brand: string | null; units: bigint }[]>(Prisma.sql`
+      SELECT p.brand AS brand, COALESCE(SUM(si.quantity), 0)::bigint AS units
+      FROM "SaleItem" si
+      JOIN "Sale" s ON s.id = si."saleId"
+      LEFT JOIN "Product" p ON p.id = si."productId"
+      WHERE s."saleDate" >= ${periodStart(days)}
+      ${storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty}
+      GROUP BY p.brand
+    `),
+  ]);
+
+  const byBrand = new Map<string, { stockUnits: number; unitsSold: number }>();
+  const bucket = (brand: string | null) => {
+    const k = brand ?? 'Sem marca';
+    const cur = byBrand.get(k) ?? { stockUnits: 0, unitsSold: 0 };
+    byBrand.set(k, cur);
+    return cur;
   };
+  for (const r of stockRows) bucket(r.brand).stockUnits += Number(r.units);
+  for (const r of soldRows) bucket(r.brand).unitsSold += Number(r.units);
 
-  let cumulative = 0;
-  const rows: AbcRow[] = items.map((i) => {
-    const revenuePct = totalRevenue > 0 ? (i.revenue / totalRevenue) * 100 : 0;
-    cumulative += revenuePct;
-    const klass = classifyABC(cumulative);
-    summary[klass].products += 1;
-    summary[klass].revenue += i.revenue;
-    const p = byId.get(i.productId);
+  const rows = computeCoverage(
+    [...byBrand.entries()].map(([label, v]) => ({ key: label, label, ...v })),
+    days,
+  );
+  const [total] = computeCoverage(
+    [
+      {
+        key: '__total__',
+        label: 'GERAL',
+        stockUnits: rows.reduce((a, r) => a + r.stockUnits, 0),
+        unitsSold: rows.reduce((a, r) => a + r.unitsSold, 0),
+      },
+    ],
+    days,
+  );
+  return { days, total, rows };
+}
+
+// ─── Análise de vendas por dimensão (feedback 10) ────────────────────────────
+
+export type AnalysisDimension = 'brand' | 'category' | 'product' | 'store' | 'seller';
+
+export interface AnalysisRow {
+  key: string;
+  label: string;
+  units: number;
+  revenue: number;
+}
+
+/** Maior nº de linhas devolvidas (SKUs passam de mil; o front mostra o topo). */
+const ANALYSIS_LIMIT = 500;
+
+/**
+ * Vendas do período agregadas por marca, grupo (categoria), SKU, loja ou
+ * vendedor — SEMPRE com unidades e receita juntas (o front alterna a métrica
+ * sem nova consulta). Base = itens de venda (mesma régua em toda dimensão).
+ */
+export async function salesAnalysis(
+  days: number,
+  by: AnalysisDimension,
+  storeId?: string,
+): Promise<{ days: number; by: AnalysisDimension; rows: AnalysisRow[] }> {
+  const since = periodStart(days);
+  const storeCond = storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty;
+
+  // SKU agrupa pelo ID do produto (descrições colidem entre modelos).
+  if (by === 'product') {
+    const grouped = await prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) }, productId: { not: null } },
+      _sum: { quantity: true, total: true },
+      orderBy: { _sum: { quantity: 'desc' } },
+      take: ANALYSIS_LIMIT,
+    });
+    const products = await prisma.product.findMany({
+      where: { id: { in: grouped.map((g) => g.productId as string) } },
+      select: { id: true, description: true, sku: true },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
     return {
-      productId: i.productId,
-      description: p?.description ?? '—',
-      brand: p?.brand ?? null,
-      category: p?.category ?? null,
-      revenue: Math.round(i.revenue * 100) / 100,
-      units: i.units,
-      revenuePct: Math.round(revenuePct * 100) / 100,
-      cumulativePct: Math.round(cumulative * 100) / 100,
-      class: klass,
+      days,
+      by,
+      rows: grouped.map((g) => {
+        const p = byId.get(g.productId as string);
+        return {
+          key: g.productId as string,
+          label: p ? `${p.description}${p.sku ? ` (${p.sku})` : ''}` : '—',
+          units: g._sum.quantity ?? 0,
+          revenue: round2(toNumber(g._sum.total) ?? 0),
+        };
+      }),
     };
-  });
+  }
 
-  return { days, totalRevenue: Math.round(totalRevenue * 100) / 100, summary, rows };
+  const select = {
+    brand: Prisma.sql`p.brand`,
+    category: Prisma.sql`p.category`,
+    store: Prisma.sql`lo.name`,
+    seller: Prisma.sql`se.name`,
+  }[by];
+  // LEFT JOIN em todas: item sem produto/loja/vendedor vira "Não informado"
+  // em vez de sumir — a MESMA base de itens em toda dimensão (totais fecham).
+  const join = {
+    brand: Prisma.sql`LEFT JOIN "Product" p ON p.id = si."productId"`,
+    category: Prisma.sql`LEFT JOIN "Product" p ON p.id = si."productId"`,
+    store: Prisma.sql`LEFT JOIN "Store" lo ON lo.id = s."storeId"`,
+    seller: Prisma.sql`LEFT JOIN "Seller" se ON se.id = s."sellerId"`,
+  }[by];
+
+  const grouped = await prisma.$queryRaw<{ label: string | null; units: bigint; revenue: number }[]>(
+    Prisma.sql`
+      SELECT ${select} AS label,
+             COALESCE(SUM(si.quantity), 0)::bigint AS units,
+             COALESCE(SUM(si.total), 0)::float AS revenue
+      FROM "SaleItem" si
+      JOIN "Sale" s ON s.id = si."saleId"
+      ${join}
+      WHERE s."saleDate" >= ${since}
+      ${storeCond}
+      GROUP BY ${select}
+      ORDER BY units DESC
+      LIMIT ${ANALYSIS_LIMIT}
+    `,
+  );
+
+  return {
+    days,
+    by,
+    rows: grouped.map((g) => ({
+      key: g.label ?? '—',
+      label: g.label ?? 'Não informado',
+      units: Number(g.units),
+      revenue: round2(g.revenue),
+    })),
+  };
 }
 
 export interface TurnoverRow {

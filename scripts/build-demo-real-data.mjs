@@ -7,7 +7,9 @@
  * PRIVACIDADE (por construção):
  * - clientes.json NUNCA é lido; nenhum CPF/nome/contato de cliente entra;
  * - de vendas, só entram agregados (por loja/dia/produto/forma de pagamento);
- * - vendedores não entram.
+ * - de vendedores entra APENAS o ranking agregado (nome + vendas do período,
+ *   feedback 10 do Galbe — dado de equipe para a própria gestão; nada de CPF,
+ *   admissão ou contato).
  * O JSON gerado é GITIGNORADO: contém dados de negócio reais (estoque,
  * faturamento) e só deve existir no build destinado à rede — publique com
  * proteção de acesso (.htaccess) por conter números comerciais.
@@ -121,11 +123,17 @@ for (const d of detalhes) {
   productSales.set(prod, ps);
 }
 
-// Unidades vendidas por loja — rede inteira (todos os itens válidos do período).
+// Unidades e receita (de itens) vendidas por loja — rede inteira.
 const soldUnitsByStore = new Map(); // lojaExt -> unidades
 for (const [k, qty] of soldByStoreProduct) {
   const st = k.split('|')[0];
   soldUnitsByStore.set(st, (soldUnitsByStore.get(st) ?? 0) + qty);
+}
+const soldRevenueByStore = new Map(); // lojaExt -> receita (valor_liquido dos itens)
+for (const d of detalhes) {
+  const st = trim(d.codigo_loja);
+  if (!st) continue;
+  soldRevenueByStore.set(st, round2((soldRevenueByStore.get(st) ?? 0) + num(d.valor_liquido)));
 }
 
 const byPayment = new Map(); // forma -> {total,count}
@@ -136,6 +144,55 @@ for (const p of pagamentos) {
   b.count += 1;
   byPayment.set(forma, b);
 }
+
+// Vendas por VENDEDOR (top 40 por receita) — dados de equipe, uso interno da
+// gestão (o site é protegido por senha de diretório). A venda traz o
+// codigo_vendedor; o nome vem do cadastro /vendedores. Receita pela venda;
+// unidades pelos itens (join loja+venda -> vendedor).
+const vendedores = load('vendedores');
+const nomeVendedor = new Map(vendedores.map((v) => [trim(v.codigo_vendedor), trim(v.nome)]));
+const vendaVendedor = new Map(); // "loja-venda" -> nome do vendedor
+const sellerAgg = new Map(); // nome -> {units, revenue, sales}
+for (const v of vendas) {
+  const cod = trim(v.codigo_vendedor);
+  const nome = nomeVendedor.get(cod) || cod;
+  if (!nome) continue;
+  vendaVendedor.set(`${trim(v.codigo_loja)}-${trim(v.codigo_venda)}`, nome);
+  const s = sellerAgg.get(nome) ?? { units: 0, revenue: 0, sales: 0 };
+  s.revenue = round2(s.revenue + num(v.valor_pago));
+  s.sales += 1;
+  sellerAgg.set(nome, s);
+}
+for (const d of detalhes) {
+  const nome = vendaVendedor.get(`${trim(d.codigo_loja)}-${trim(d.codigo_venda)}`);
+  if (!nome) continue;
+  const s = sellerAgg.get(nome);
+  if (s) s.units += Math.max(1, Math.trunc(num(d.quantidade)));
+}
+const bySeller = [...sellerAgg.entries()]
+  .map(([label, v]) => ({ label, ...v }))
+  .sort((a, b) => b.revenue - a.revenue)
+  .slice(0, 40);
+
+// Cobertura por MARCA (rede inteira): estoque da grade + vendas do período,
+// com marca vinda de /produtos (grade não traz fornecedor -> "Sem marca").
+const brandByExt = new Map(); // ext -> marca
+for (const p of produtos) {
+  const ext = trim(p.codigo_base);
+  const marca = trim(p.nome_fornecedor);
+  if (ext && marca) brandByExt.set(ext, marca);
+}
+const brandCoverageMap = new Map(); // marca -> {stockUnits, soldUnits}
+const brandBucket = (ext) => {
+  const marca = brandByExt.get(ext) || 'Sem marca';
+  const cur = brandCoverageMap.get(marca) ?? { stockUnits: 0, soldUnits: 0 };
+  brandCoverageMap.set(marca, cur);
+  return cur;
+};
+for (const [ext, per] of stockByProduct)
+  brandBucket(ext).stockUnits += [...per.values()].reduce((a, b) => a + b, 0);
+for (const [ext, ps] of productSales) brandBucket(ext).soldUnits += ps.units;
+const brandCoverage = [...brandCoverageMap.entries()].map(([label, v]) => ({ label, ...v }));
 
 // ─── Catálogo amostrado ──────────────────────────────────────────────────────
 const catalog = new Map(); // ext -> product
@@ -235,7 +292,10 @@ const out = {
     externalId: s.externalId,
     stockUnits: stockUnitsByStore.get(s.externalId) ?? 0,
     soldUnits: soldUnitsByStore.get(s.externalId) ?? 0,
+    soldRevenue: soldRevenueByStore.get(s.externalId) ?? 0,
   })),
+  bySeller,
+  brandCoverage,
   dailySales: [...daily.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, v]) => ({ date, ...v })),
   byPayment: [...byPayment.entries()].map(([label, v]) => ({ label, ...v })),
   byBrand: [...byBrand.entries()].map(([label, v]) => ({ label, ...v })),

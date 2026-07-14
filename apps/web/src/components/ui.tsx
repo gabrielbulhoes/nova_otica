@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import type { CoverageLevel } from '../api/client';
+import { toCsv, downloadCsv, type CsvColumn } from '../bi/csv';
 
 export function StatCard({
   label,
@@ -56,3 +58,43 @@ const movementType: Record<string, string> = {
   RETURN: 'Devolução',
 };
 export const movementTypeLabel = (t: string) => movementType[t] ?? t;
+
+// ─── Cobertura de estoque (Dashboard e Relatórios usam o mesmo selo) ─────────
+
+const coverageMeta: Record<CoverageLevel, { label: string; cls: string }> = {
+  CRITICAL: { label: 'crítica', cls: 'red' },
+  HEALTHY: { label: 'saudável', cls: 'green' },
+  HIGH: { label: 'alta', cls: 'amber' },
+  EXCESS: { label: 'excesso', cls: 'red' },
+};
+
+export const fmtMonths = (m: number | null) =>
+  m === null ? 'sem venda' : `${m.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} meses`;
+
+/** Selo "X meses · nível" da cobertura (crítica <1 · saudável ≤6 · alta ≤12 · excesso >12). */
+export function CoverageBadge({ months, level }: { months: number | null; level: CoverageLevel }) {
+  const meta = coverageMeta[level];
+  return (
+    <span className={`badge ${meta.cls}`}>
+      {fmtMonths(months)} · {meta.label}
+    </span>
+  );
+}
+
+/** Botão "Exportar CSV" padronizado dos relatórios. */
+export function ExportCsv<T>({
+  rows,
+  columns,
+  filename,
+}: {
+  rows: T[] | undefined;
+  columns: CsvColumn<T>[];
+  filename: string;
+}) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <button className="btn ghost" onClick={() => downloadCsv(filename, toCsv(rows, columns))}>
+      ⬇︎ Exportar CSV ({rows.length})
+    </button>
+  );
+}

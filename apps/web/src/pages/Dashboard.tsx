@@ -8,21 +8,9 @@ import {
   getAlerts,
   getPurchaseOrders,
   formatBRL,
-  type CoverageLevel,
 } from '../api/client';
-import { StatCard, PageHeader, Loading } from '../components/ui';
+import { StatCard, PageHeader, Loading, CoverageBadge, fmtMonths } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
-
-/** Rótulo/cor da cobertura: <1 mês crítica, ≤6 saudável, ≤12 alta, >12 excesso. */
-const COVERAGE_BADGE: Record<CoverageLevel, { label: string; cls: string }> = {
-  CRITICAL: { label: 'crítica', cls: 'red' },
-  HEALTHY: { label: 'saudável', cls: 'green' },
-  HIGH: { label: 'alta', cls: 'amber' },
-  EXCESS: { label: 'excesso', cls: 'red' },
-};
-
-const fmtMonths = (m: number | null) =>
-  m === null ? 'sem venda' : `${m.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} meses`;
 
 export function Dashboard() {
   const { isAdmin } = useAuth();
@@ -163,9 +151,7 @@ export function Dashboard() {
                       <td className="num">{r.stockUnits.toLocaleString('pt-BR')}</td>
                       <td className="num">{r.monthlyUnits.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}</td>
                       <td className="num">
-                        <span className={`badge ${COVERAGE_BADGE[r.level].cls}`}>
-                          {fmtMonths(r.coverageMonths)} · {COVERAGE_BADGE[r.level].label}
-                        </span>
+                        <CoverageBadge months={r.coverageMonths} level={r.level} />
                       </td>
                       <td>
                         <div

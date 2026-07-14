@@ -745,20 +745,20 @@ export function buildPurchaseOrders(plans: ProductPlan[], days: number): Purchas
   };
 }
 
-// ─── Cobertura de estoque por loja ───────────────────────────────────────────
-
-export interface StoreCoverageInput {
-  storeId: string;
-  storeName: string;
-  /** Unidades em estoque na loja (rede inteira do catálogo, não amostra). */
-  stockUnits: number;
-  /** Unidades vendidas pela loja no período analisado. */
-  unitsSold: number;
-}
+// ─── Cobertura de estoque (por loja, por marca, geral…) ─────────────────────
 
 export type CoverageLevel = 'CRITICAL' | 'HEALTHY' | 'HIGH' | 'EXCESS';
 
-export interface StoreCoverageRow extends StoreCoverageInput {
+export interface CoverageInput {
+  key: string;
+  label: string;
+  /** Unidades em estoque no recorte (rede inteira do catálogo, não amostra). */
+  stockUnits: number;
+  /** Unidades vendidas no recorte durante o período analisado. */
+  unitsSold: number;
+}
+
+export interface CoverageRow extends CoverageInput {
   /** Média mensal de unidades vendidas (normalizada do período para 30 dias). */
   monthlyUnits: number;
   /** Estoque para quantos meses no ritmo atual (null = sem venda no período). */
@@ -775,12 +775,15 @@ export function classifyCoverage(months: number | null): CoverageLevel {
 }
 
 /**
- * Cobertura por loja: X unidades em estoque ÷ média mensal vendida = estoque
- * para X meses. Lojas com menos fôlego primeiro (sem venda por último).
- * Loja vazia (sem estoque e sem venda) é CRITICAL — não tem o que vender —,
- * nunca "excesso".
+ * Cobertura genérica: X unidades em estoque ÷ média mensal vendida = estoque
+ * para X meses, por qualquer recorte (loja, marca…). Menos fôlego primeiro
+ * (sem venda por último). Recorte vazio (sem estoque e sem venda) é CRITICAL
+ * — não tem o que vender —, nunca "excesso".
  */
-export function computeStoreCoverage(rows: StoreCoverageInput[], days: number): StoreCoverageRow[] {
+export function computeCoverage<T extends CoverageInput>(
+  rows: T[],
+  days: number,
+): (T & Pick<CoverageRow, 'monthlyUnits' | 'coverageMonths' | 'level'>)[] {
   const factor = days > 0 ? 30 / days : 0;
   return rows
     .map((r) => {
@@ -793,6 +796,97 @@ export function computeStoreCoverage(rows: StoreCoverageInput[], days: number): 
     .sort(
       (a, b) =>
         (a.coverageMonths ?? Infinity) - (b.coverageMonths ?? Infinity) ||
-        a.storeName.localeCompare(b.storeName, 'pt-BR'),
+        a.label.localeCompare(b.label, 'pt-BR'),
     );
+}
+
+// Recorte por loja (dashboard) — mesma matemática, com nomes de campo de loja.
+
+export interface StoreCoverageInput {
+  storeId: string;
+  storeName: string;
+  stockUnits: number;
+  unitsSold: number;
+}
+
+export interface StoreCoverageRow extends StoreCoverageInput {
+  monthlyUnits: number;
+  coverageMonths: number | null;
+  level: CoverageLevel;
+}
+
+export function computeStoreCoverage(rows: StoreCoverageInput[], days: number): StoreCoverageRow[] {
+  return computeCoverage(
+    rows.map((r) => ({ key: r.storeId, label: r.storeName, ...r })),
+    days,
+  ).map(({ key, label, ...rest }) => rest);
+}
+
+// ─── Curva ABC (por SKU, por marca…) ─────────────────────────────────────────
+
+/** Classificação ABC de um item a partir do % acumulado de receita. */
+export function classifyABC(cumulativePct: number): 'A' | 'B' | 'C' {
+  if (cumulativePct <= 80) return 'A';
+  if (cumulativePct <= 95) return 'B';
+  return 'C';
+}
+
+export type AbcDimension = 'product' | 'brand';
+
+export interface AbcItem {
+  key: string;
+  label: string;
+  /** Detalhes exibidos sob o rótulo (marca/categoria do SKU; vazio p/ marca). */
+  brand: string | null;
+  category: string | null;
+  revenue: number;
+  units: number;
+}
+
+export interface AbcRow extends AbcItem {
+  revenuePct: number;
+  cumulativePct: number;
+  class: 'A' | 'B' | 'C';
+}
+
+export interface AbcResult {
+  days: number;
+  dimension: AbcDimension;
+  totalRevenue: number;
+  summary: Record<'A' | 'B' | 'C', { items: number; revenue: number }>;
+  rows: AbcRow[];
+}
+
+/**
+ * Classificação ABC pura sobre itens já agregados (SKUs, marcas…): ordena por
+ * receita, acumula o % e corta em A ≤80, B ≤95, C >95 — avaliando o PONTO
+ * MÉDIO da faixa que o item ocupa na curva. Com itens pequenos (SKUs) dá o
+ * mesmo resultado do corte clássico; com um item dominante (uma marca com
+ * 80%+ da receita) evita o absurdo de a classe A ficar vazia.
+ */
+export function abcFromItems(items: AbcItem[], days: number, dimension: AbcDimension): AbcResult {
+  const sorted = items.filter((i) => i.revenue > 0).sort((a, b) => b.revenue - a.revenue);
+  const totalRevenue = sorted.reduce((s, i) => s + i.revenue, 0);
+  const summary = {
+    A: { items: 0, revenue: 0 },
+    B: { items: 0, revenue: 0 },
+    C: { items: 0, revenue: 0 },
+  };
+  let cumulative = 0;
+  const rows: AbcRow[] = sorted.map((i) => {
+    const revenuePct = totalRevenue > 0 ? (i.revenue / totalRevenue) * 100 : 0;
+    const midpoint = cumulative + revenuePct / 2;
+    cumulative += revenuePct;
+    const klass = classifyABC(midpoint);
+    summary[klass].items += 1;
+    summary[klass].revenue = round2(summary[klass].revenue + i.revenue);
+    return {
+      ...i,
+      revenue: round2(i.revenue),
+      revenuePct: round2(revenuePct),
+      cumulativePct: round2(cumulative),
+      class: klass,
+    };
+  });
+  return { days, dimension, totalRevenue: round2(totalRevenue), summary, rows };
 }
