@@ -41,10 +41,12 @@ primeiro registro** de cada rota. As respostas brutas ficam em
 `apps/api/tmp/cds-fixtures/*.json` (pasta ignorada pelo Git).
 
 - **Tudo ✅:** a conexão e a autenticação estão corretas.
-- **Se algum campo do resumo divergir** do que os normalizadores esperam
-  (`apps/api/src/integrations/sellbie/types.ts` / `mappers.ts`): envie os
-  arquivos de `cds-fixtures/` (ou o resumo do console) que ajustamos os
-  normalizadores — é a única parte que depende do formato exato da resposta.
+- **Os normalizadores já estão calibrados com amostras reais** (sonda de
+  13/07/2026): rotas em snake_case, `estoquegrade` em MAIÚSCULAS com estoque
+  aninhado por filial, datas com placeholder `1900-01-01`, typo `categora`,
+  `codigo_venda` repetido entre lojas (identidade composta loja-venda) e
+  `contasPagar` exigindo `situacao` na prática. Se uma nova sonda mostrar
+  campo divergente, envie os fixtures que ajustamos com teste.
 
 ## 3. Importar o histórico e sincronizar
 
@@ -58,9 +60,13 @@ Isso lê a CDS, faz upsert por `externalId` (idempotente) e reconcilia o
 estoque. Em produção, o agendador (`SYNC_CRON`, padrão 06:00) roda sozinho;
 `SYNC_ON_BOOT=true` dispara uma sincronização ao subir a API.
 
-> **Histórico de 12 meses:** as rotas de venda aceitam `date_start`/`date_end`
-> (aaaa-mm-dd). Para a primeira carga, uma sincronização por faixas mensais
-> alimenta as previsões de demanda do Planejamento.
+> **Histórico para a previsão de demanda:** após o primeiro sync completo,
+> rode a carga histórica por faixas mensais (idempotente — pode repetir):
+>
+> ```bash
+> npm run sync:backfill --workspace=@nova-otica/api        # 24 meses
+> npm run sync:backfill --workspace=@nova-otica/api -- 12  # 12 meses
+> ```
 
 ## Como os dados alimentam a plataforma
 
@@ -68,7 +74,7 @@ estoque. Em produção, o agendador (`SYNC_CRON`, padrão 06:00) roda sozinho;
 | --- | --- |
 | `lojas`, `vendedores`, `cores`, `tamanhos` | Cadastros base |
 | `produtos` (com `precoCusto`) | Catálogo + custo do capital imobilizado |
-| `estoque` (por `cod_loja`) | Saldo por loja (redistribuição inteligente) |
+| `estoquegrade` (1 chamada, rede inteira) | Saldo por loja (redistribuição inteligente) |
 | `vendas` + `detalhesVendas` | Demanda por loja (sugestões de compra e giro) |
 | `pagamentosVendas` | BI de formas de pagamento |
 | `clientes` | Base de clientes |
@@ -112,5 +118,5 @@ Regras de segurança do envio (semântica de outbox):
 - **Prazos de fornecedores** (marca × dias de entrega): cadastrar em
   Planejamento & Compras → Prazos dos fornecedores. Sem isso, vale o padrão
   de 14 dias.
-- **Custo dos produtos**, se não vier em `precoCusto`: sem custo real, o
-  sistema estima 55% do preço de venda.
+- ~~Custo dos produtos~~ **resolvido**: o conector envia `valor_compra` real
+  por produto — o custo do capital imobilizado usa o valor verdadeiro.
