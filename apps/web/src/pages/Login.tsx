@@ -68,7 +68,13 @@ export function Login() {
         </button>
 
         <p className="muted" style={{ fontSize: 12, marginTop: 16, marginBottom: 0 }}>
-          Demo: <strong>admin@novaotica.com</strong> / senha <strong>admin123</strong>
+          {import.meta.env.VITE_DEMO_USERS
+            ? 'Acesso restrito: use o login e a senha que você recebeu.'
+            : (
+              <>
+                Demo: <strong>admin@novaotica.com</strong> / senha <strong>admin123</strong>
+              </>
+            )}
         </p>
       </form>
     </div>
