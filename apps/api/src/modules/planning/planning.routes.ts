@@ -52,10 +52,12 @@ planningRouter.get(
 
 /**
  * GET /api/planning/rebalance — transferências sugeridas entre lojas
- * (visão da rede: excesso/parado numa loja × falta na outra).
+ * (visão da rede: excesso/parado numa loja × falta na outra). Só ADMIN:
+ * o plano não tem recorte por loja e expõe estoque/vendas da rede inteira.
  */
 planningRouter.get(
   '/rebalance',
+  requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     res.json(await rebalancePlan(days(req.query.days)));
   }),

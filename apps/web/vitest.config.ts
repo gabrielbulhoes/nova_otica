@@ -1,8 +1,13 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, mergeConfig } from 'vitest/config';
+// Herda o resolve.alias do app (@planning etc.) — fonte única de configuração.
+import viteConfig from './vite.config';
 
-export default defineConfig({
-  test: {
-    include: ['src/**/*.test.ts'],
-    environment: 'node',
-  },
-});
+export default mergeConfig(
+  viteConfig,
+  defineConfig({
+    test: {
+      include: ['src/**/*.test.ts'],
+      environment: 'node',
+    },
+  }),
+);

@@ -71,6 +71,11 @@ const totalUnitsNetwork = [...stockByProduct.values()].reduce(
   (a, per) => a + [...per.values()].reduce((x, y) => x + y, 0),
   0,
 );
+// Unidades em estoque por loja — rede INTEIRA (antes do corte do catálogo),
+// para a cobertura por loja não subcontar.
+const stockUnitsByStore = new Map(); // lojaExt -> unidades
+for (const per of stockByProduct.values())
+  for (const [st, qty] of per) stockUnitsByStore.set(st, (stockUnitsByStore.get(st) ?? 0) + qty);
 
 // ─── Vendas (30 dias) — agregados, nada identificável ────────────────────────
 const vendaLoja = new Map(); // "loja-venda" -> lojaExt
@@ -114,6 +119,13 @@ for (const d of detalhes) {
   ps.units += qty;
   ps.revenue = round2(ps.revenue + revenue);
   productSales.set(prod, ps);
+}
+
+// Unidades vendidas por loja — rede inteira (todos os itens válidos do período).
+const soldUnitsByStore = new Map(); // lojaExt -> unidades
+for (const [k, qty] of soldByStoreProduct) {
+  const st = k.split('|')[0];
+  soldUnitsByStore.set(st, (soldUnitsByStore.get(st) ?? 0) + qty);
 }
 
 const byPayment = new Map(); // forma -> {total,count}
@@ -216,6 +228,13 @@ const out = {
     externalId: s.externalId,
     name: s.name,
     ...(salesByStoreMap.get(s.externalId) ?? { count: 0, total: 0 }),
+  })),
+  // Cobertura por loja (rede inteira): unidades em estoque e vendidas no
+  // período completo — independentes da amostragem do catálogo acima.
+  storeStats: stores.map((s) => ({
+    externalId: s.externalId,
+    stockUnits: stockUnitsByStore.get(s.externalId) ?? 0,
+    soldUnits: soldUnitsByStore.get(s.externalId) ?? 0,
   })),
   dailySales: [...daily.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, v]) => ({ date, ...v })),
   byPayment: [...byPayment.entries()].map(([label, v]) => ({ label, ...v })),

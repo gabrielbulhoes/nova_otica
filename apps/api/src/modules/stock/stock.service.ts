@@ -14,10 +14,12 @@ export function computeLiveStock(quantity: number, reserved: number, pendingDelt
 }
 
 export interface StockFilter {
-  storeId?: string;
+  /** Uma ou mais lojas (multi-seleção do filtro). */
+  storeIds?: string[];
   productId?: string;
   search?: string;
-  category?: string;
+  /** Uma ou mais categorias (multi-seleção do filtro). */
+  categories?: string[];
   onlyAvailable?: boolean;
   limit: number;
   skip: number;
@@ -81,11 +83,11 @@ async function liveDeltas(): Promise<Map<string, number>> {
 /** Lista o estoque consolidado com saldo ao vivo. */
 export async function listStock(filter: StockFilter): Promise<{ total: number; rows: StockRow[] }> {
   const where: Prisma.StockItemWhereInput = {};
-  if (filter.storeId) where.storeId = filter.storeId;
+  if (filter.storeIds?.length) where.storeId = { in: filter.storeIds };
   if (filter.productId) where.productId = filter.productId;
-  if (filter.search || filter.category) {
+  if (filter.search || filter.categories?.length) {
     where.product = {
-      ...(filter.category ? { category: filter.category } : {}),
+      ...(filter.categories?.length ? { category: { in: filter.categories } } : {}),
       ...(filter.search
         ? {
             OR: [
@@ -140,10 +142,10 @@ export async function listStock(filter: StockFilter): Promise<{ total: number; r
 }
 
 /** Resumo do estoque por produto somando todas as lojas (visão de rede). */
-export async function stockByProduct(search?: string, category?: string) {
+export async function stockByProduct(search?: string, categories?: string[]) {
   const { rows } = await listStock({
     search,
-    category,
+    categories,
     limit: 100_000,
     skip: 0,
   });

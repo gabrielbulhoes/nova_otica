@@ -13,7 +13,9 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
+  computeStoreCoverage,
   DEFAULT_PLANNING_CONFIG,
+  type StoreCoverageInput,
   type StoreProductInput,
 } from '@planning';
 
@@ -36,6 +38,8 @@ interface RealDataset {
   byCategory: { label: string; total: number; count: number }[];
   productSales: { externalId: string; units: number; revenue: number }[];
   weekdayStore: { storeExt: string; weekday: number; total: number }[];
+  /** Cobertura por loja (rede inteira) — ausente em datasets antigos. */
+  storeStats?: { externalId: string; stockUnits: number; soldUnits: number }[];
 }
 const realModules = import.meta.glob('./demo-real-data.json', { eager: true }) as Record<string, { default: RealDataset }>;
 const real: RealDataset | null = Object.values(realModules)[0]?.default ?? null;
@@ -231,15 +235,28 @@ const salesByStore = real
 const revenue = real ? real.totals.revenue30d : round2(salesByStore.reduce((a, b) => a + b.total, 0));
 const salesCount = real ? real.totals.salesCount30d : salesByStore.reduce((a, b) => a + b.count, 0);
 
-function stockRows(params: Record<string, string | undefined>) {
+/**
+ * Filtro multi-seleção → Set (null = sem filtro). Espelha o parseList da API:
+ * array (parâmetro repetido do axios) com valores literais, ou "a,b,c".
+ */
+function asSet(v?: string | string[]) {
+  const parts = Array.isArray(v) ? v : (v ?? '').split(',');
+  const items = parts.map((s) => s.trim()).filter(Boolean);
+  return items.length > 0 ? new Set(items) : null;
+}
+
+function stockRows(params: Record<string, string | string[] | undefined>) {
+  const storeSel = asSet(params.storeId);
+  const catSel = asSet(params.category);
   const rows: Record<string, unknown>[] = [];
   for (const st of stores) {
-    if (params.storeId && params.storeId !== st.id) continue;
+    if (storeSel && !storeSel.has(st.id)) continue;
     for (const p of products) {
       if (params.productId && params.productId !== p.id) continue;
-      if (params.category && params.category !== p.category) continue;
-      if (params.search) {
-        const q = params.search.toLowerCase();
+      if (catSel && !catSel.has(p.category)) continue;
+      const search = one(params.search);
+      if (search) {
+        const q = search.toLowerCase();
         if (!p.description.toLowerCase().includes(q) && !(p.sku ?? '').toLowerCase().includes(q) && !p.brand.toLowerCase().includes(q))
           continue;
       }
@@ -483,14 +500,18 @@ const demoUsers: Record<string, unknown>[] =
 export interface DemoRequest {
   method: string;
   url: string;
-  params?: Record<string, string | undefined>;
+  /** Arrays chegam do axios como parâmetro repetido (multi-seleção). */
+  params?: Record<string, string | string[] | undefined>;
   body?: Record<string, unknown>;
 }
+
+/** Colapsa um param que deveria ser único (1º valor quando vier array). */
+const one = (v?: string | string[]) => (Array.isArray(v) ? v[0] : v);
 
 export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest): unknown {
   const m = method.toUpperCase();
   const p = (re: RegExp) => re.exec(url);
-  const days = Number(params.days) || 30;
+  const days = Number(one(params.days)) || 30;
 
   // Auth — com contas nomeadas (build de dados reais) o login é validado;
   // sem elas, a demo pública continua aceitando qualquer credencial.
@@ -549,6 +570,27 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       lastSync: { status: 'SUCCESS', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), recordsWritten: 982, window: '06:00-07:00' },
     };
   if (url === '/dashboard/sales-by-store') return { rows: salesByStore };
+  if (url === '/dashboard/coverage') {
+    // Com dados reais, usa os totais POR LOJA da rede inteira (storeStats);
+    // sem eles (dataset antigo ou fictício), soma o catálogo local.
+    const inputs: StoreCoverageInput[] = real?.storeStats
+      ? real.storeStats.map((st) => {
+          const s = stores.find((x) => x.externalId === st.externalId);
+          return {
+            storeId: s?.id ?? `st_${st.externalId}`,
+            storeName: s?.name ?? `Loja ${st.externalId}`,
+            stockUnits: st.stockUnits,
+            unitsSold: st.soldUnits,
+          };
+        })
+      : stores.map((s) => ({
+          storeId: s.id,
+          storeName: s.name,
+          stockUnits: products.reduce((a, prod) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
+          unitsSold: products.reduce((a, prod) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
+        }));
+    return { days, rows: computeStoreCoverage(inputs, days) };
+  }
 
   // Sync
   if (url === '/sync/status')
@@ -557,12 +599,16 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   // Estoque
   if (url === '/stock') { const rows = stockRows(params); return { total: rows.length, page: 1, limit: 200, rows: rows.slice(0, 200) }; }
 
-  // Produtos
-  if (url === '/products/categories') return CATEGORIAS;
+  // Produtos — categorias derivadas do catálogo carregado (com dados reais,
+  // são os grupos do CDS; a lista fixa fictícia mostrava rótulos sem match).
+  if (url === '/products/categories')
+    return [...new Set(products.map((x) => x.category))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   if (url === '/products') {
     let rows = products;
-    if (params.category) rows = rows.filter((x) => x.category === params.category);
-    if (params.search) { const q = params.search.toLowerCase(); rows = rows.filter((x) => x.description.toLowerCase().includes(q) || x.brand.toLowerCase().includes(q)); }
+    const cat = one(params.category);
+    if (cat) rows = rows.filter((x) => x.category === cat);
+    const q0 = one(params.search);
+    if (q0) { const q = q0.toLowerCase(); rows = rows.filter((x) => x.description.toLowerCase().includes(q) || x.brand.toLowerCase().includes(q)); }
     return { total: rows.length, page: 1, limit: 200, rows: rows.map((x) => ({ ...x, color: { name: x.color }, size: { name: x.size } })) };
   }
   mm = p(/^\/products\/(.+)$/);
@@ -602,7 +648,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     };
   }
   if (url === '/bi/sales-timeseries') return timeseries(days);
-  if (url === '/bi/sales-by-dimension') return byDimension(params.by ?? 'store');
+  if (url === '/bi/sales-by-dimension') return byDimension(one(params.by) ?? 'store');
   if (url === '/bi/sales-flow') return salesFlow();
   if (url === '/bi/transfer-flow') return transferFlow();
   if (url === '/bi/heatmap') return heatmap();
@@ -669,12 +715,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       ),
     );
   };
-  const planDays = Number(params.days) || 90;
-  if (url === '/planning/overview') return buildOverview(planningPlans(planDays, params.storeId), planDays);
+  const planDays = Number(one(params.days)) || 90;
+  if (url === '/planning/overview') return buildOverview(planningPlans(planDays, one(params.storeId)), planDays);
   if (url === '/planning/purchase-suggestions')
-    return buildSuggestions(planningPlans(planDays, params.storeId), planDays);
+    return buildSuggestions(planningPlans(planDays, one(params.storeId)), planDays);
   if (url === '/planning/purchase-orders' && m === 'GET')
-    return buildPurchaseOrders(planningPlans(planDays, params.storeId), planDays);
+    return buildPurchaseOrders(planningPlans(planDays, one(params.storeId)), planDays);
   if (url === '/planning/purchase-orders' && m === 'POST') {
     const items = (body.items ?? []) as DemoOrderRecord['items'];
     const leadTimeDays = Number(body.leadTimeDays) || 14;

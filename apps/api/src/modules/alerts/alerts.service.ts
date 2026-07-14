@@ -37,7 +37,7 @@ export async function stockAlerts(storeId?: string): Promise<{
   low: number;
   rows: StockAlert[];
 }> {
-  const { rows } = await listStock({ storeId, limit: 100_000, skip: 0 });
+  const { rows } = await listStock({ storeIds: storeId ? [storeId] : undefined, limit: 100_000, skip: 0 });
   const def = env.DEFAULT_MIN_STOCK;
 
   const alerts: StockAlert[] = [];
