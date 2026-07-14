@@ -68,7 +68,13 @@ curl -sS -m 15 -o /dev/null -w 'HTTP:%{http_code} em %{time_total}s\n' \
 
 ## 3. Sonda da CDS — o passo mais importante deste runbook
 
-A sonda chama cada rota GET, salva as respostas brutas e imprime os campos reais de cada uma. **É o insumo que o time de engenharia precisa para fechar os normalizadores.**
+A sonda chama cada rota GET, salva as respostas brutas e imprime os campos reais de cada uma.
+
+> **Estado (14/07/2026):** a primeira sonda foi executada e os normalizadores
+> JÁ estão calibrados com as amostras reais (PR #18). Rodar a sonda de novo no
+> servidor definitivo continua útil — a versão atual também captura `/estoque`
+> (faltou na 1ª rodada) e `contasPagar` (abertos+pagos) — mas não é mais
+> bloqueador de nada.
 
 ```bash
 npm ci
@@ -84,13 +90,11 @@ Se alguma rota falhar, registre qual e com que erro — isso também é resultad
 
 ---
 
-## 4. Descobrir a janela real da CDS
+## 4. Janela da CDS — RESOLVIDO (13/07/2026)
 
-A documentação oficial não define janela de horário, mas a operação relatou historicamente "06h–07h". Tire a dúvida na prática:
-
-- [ ] Rode a sonda (ou o curl do passo 2) **fora** da manhã (ex.: 15h). Funcionou → não há janela; mantenha `SELLBIE_IGNORE_WINDOW=true`.
-- [ ] Se fora do horário vier erro/recusa consistente, anote o comportamento, configure `SELLBIE_WINDOW_START/END` com a janela real e `SELLBIE_IGNORE_WINDOW=false`.
-- [ ] Pergunte oficialmente à CDS (junto com as perguntas do passo 9) qual é a política.
+Verificado ao vivo (HTTP 200 às 22h50 BRT): **não há janela de horário — a API
+responde 24h**. Mantenha `SELLBIE_IGNORE_WINDOW=true`. Se a CDS um dia impuser
+janela, configure `SELLBIE_WINDOW_START/END` e volte para `false`.
 
 ---
 
@@ -134,6 +138,13 @@ Verificação:
 
 A partir daqui o cron das 06:00 roda sozinho (`SYNC_CRON`).
 
+4. **Carga histórica** (uma vez, após o primeiro sync completo) — alimenta a
+   previsão de demanda com 24 meses de vendas; idempotente, pode repetir:
+
+```bash
+docker compose -f docker-compose.prod.yml exec api npm run sync:backfill --workspace=@nova-otica/api -- 24
+```
+
 ---
 
 ## 7. Backup — antes de qualquer dado importante existir
@@ -167,18 +178,22 @@ curl -X POST https://<api>/api/sync/export-orders \
 
 ---
 
-## 9. Três perguntas oficiais para a CDS (abrir chamado)
+## 9. Chamado à CDS — resta UMA pergunta
 
 1. O `POST /cds/inserirvenda` **deduplica por `pedidoSite`**? (Se sim, avisem o time — o reprocesso de envios ambíguos pode virar automático.)
-2. Existe **janela de horário** para consumo da API? Qual?
-3. Existe **paginação/limite** de registros por resposta nas rotas GET? (Importante para a carga histórica.)
+
+Já respondidas em 13/07/2026: ~~janela de horário~~ (não há — 24h, testado ao
+vivo) e ~~parâmetros do contasPagar~~ (`situacao` é obrigatória na prática,
+apesar de a doc da CDS dizer opcional — já tratado no código). Paginação: as
+rotas devolveram volumes grandes sem truncar (21.683 na grade); se a CDS
+confirmar algum limite, avise a engenharia.
 
 ---
 
 ## 10. Cadastros que só a rede pode fornecer (no painel)
 
 - [ ] **Prazos de fornecedores** (marca × dias de entrega) em *Planejamento & Compras → Prazos dos fornecedores*. Sem isso, vale o padrão de 14 dias e o "pedir até" fica impreciso.
-- [ ] **Custo dos produtos**, caso não venha no campo `precoCusto` da CDS (o time confirma com os fixtures). Sem custo real, o sistema estima 55% do preço de venda.
+- [x] ~~Custo dos produtos~~ **resolvido pelos fixtures**: o conector envia `valor_compra` real por produto — nada a cadastrar.
 - [ ] **Estoque mínimo por loja** nos itens críticos (tela de Alertas) — o padrão da rede é `DEFAULT_MIN_STOCK`.
 
 ---
