@@ -822,6 +822,164 @@ export function computeStoreCoverage(rows: StoreCoverageInput[], days: number): 
   ).map(({ key, label, ...rest }) => rest);
 }
 
+// ─── Bandeiras da rede ───────────────────────────────────────────────────────
+
+/** Prefixos conhecidos das bandeiras da rede (nomes de loja do CDS, sem acento). */
+const BANDEIRAS = ['A GRACIOSA', 'OTICALLI', 'GRAND OPTICAL', 'ZEISS', 'GMAIS', 'MOZAIK'];
+
+export function bandeiraDaLoja(storeName: string): string {
+  const raw = storeName.trim();
+  const n = raw
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  for (const b of BANDEIRAS) if (n.startsWith(b)) return b;
+  // Loja sem prefixo conhecido vira a PRÓPRIA bandeira — uma unidade nova (ou
+  // renomeada no CDS) aparece como coluna própria em vez de sumir num balde
+  // genérico. Vazio → OPERAÇÃO só como último recurso.
+  return raw || 'OPERAÇÃO';
+}
+
+// ─── Mix de marcas por bandeira (feedback 04 fase 2) ─────────────────────────
+
+export interface BrandBannerInput {
+  storeName: string;
+  brand: string;
+  stockUnits: number;
+  unitsSold: number;
+}
+
+export interface BrandMixCell {
+  stockUnits: number;
+  unitsSold: number;
+}
+
+export interface BrandMixRow {
+  brand: string;
+  total: BrandMixCell;
+  byBanner: Record<string, BrandMixCell>;
+  /** Bandeiras onde a marca vendeu no período. */
+  sellsIn: string[];
+  /** Bandeiras com estoque da marca PARADO (sem venda) enquanto ela vende em outra. */
+  moveFrom: string[];
+}
+
+/**
+ * Agrega estoque e vendas de cada marca por bandeira e aponta candidatas a
+ * remanejo de marca: estoque numa bandeira que não vende a marca, com venda
+ * dela em outra bandeira. Candidatas primeiro, depois maiores vendas.
+ */
+export function buildBrandMix(rows: BrandBannerInput[]): { banners: string[]; rows: BrandMixRow[] } {
+  const byBrand = new Map<string, Map<string, BrandMixCell>>();
+  const bannerTotals = new Map<string, number>();
+  for (const r of rows) {
+    const banner = bandeiraDaLoja(r.storeName);
+    const brand = r.brand || 'Sem marca';
+    const cells = byBrand.get(brand) ?? new Map<string, BrandMixCell>();
+    const cell = cells.get(banner) ?? { stockUnits: 0, unitsSold: 0 };
+    cell.stockUnits += r.stockUnits;
+    cell.unitsSold += r.unitsSold;
+    cells.set(banner, cell);
+    byBrand.set(brand, cells);
+    bannerTotals.set(banner, (bannerTotals.get(banner) ?? 0) + r.unitsSold);
+  }
+
+  const banners = [...bannerTotals.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'pt-BR'))
+    .map(([b]) => b);
+
+  const out: BrandMixRow[] = [...byBrand.entries()].map(([brand, cells]) => {
+    const byBanner: Record<string, BrandMixCell> = {};
+    const total = { stockUnits: 0, unitsSold: 0 };
+    for (const [banner, cell] of cells) {
+      byBanner[banner] = cell;
+      total.stockUnits += cell.stockUnits;
+      total.unitsSold += cell.unitsSold;
+    }
+    const sellsIn = banners.filter((b) => (byBanner[b]?.unitsSold ?? 0) > 0);
+    const moveFrom =
+      sellsIn.length > 0
+        ? banners.filter((b) => (byBanner[b]?.stockUnits ?? 0) > 0 && (byBanner[b]?.unitsSold ?? 0) === 0)
+        : [];
+    return { brand, total, byBanner, sellsIn, moveFrom };
+  });
+
+  out.sort(
+    (a, b) =>
+      Number(b.moveFrom.length > 0) - Number(a.moveFrom.length > 0) ||
+      b.total.unitsSold - a.total.unitsSold ||
+      a.brand.localeCompare(b.brand, 'pt-BR'),
+  );
+  return { banners, rows: out };
+}
+
+// ─── Modo Feira: rateio de compra por loja (feedback 08, MVP) ────────────────
+
+export interface FairSplitInput {
+  storeId: string;
+  storeName: string;
+  /** Unidades da marca/grupo vendidas pela loja no período. */
+  unitsSold: number;
+  /** Estoque atual da marca/grupo na loja (contexto, não entra no rateio). */
+  stockUnits: number;
+}
+
+export interface FairSplitRow extends FairSplitInput {
+  sharePct: number;
+  suggestedQty: number;
+}
+
+/**
+ * Rateia uma compra (lançamentos de feira, sem histórico próprio) entre as
+ * lojas proporcionalmente à participação de cada uma nas VENDAS da marca ou
+ * do grupo escolhido. Arredondamento pelo método dos maiores restos — a soma
+ * das sugestões é EXATAMENTE totalQty. Loja sem venda da marca não recebe.
+ */
+export function buildFairSplit(
+  rows: FairSplitInput[],
+  totalQty: number,
+): { totalQty: number; totalSold: number; rows: FairSplitRow[] } {
+  // Devoluções podem vir como venda líquida negativa; participação nunca é
+  // negativa — clampa em 0 para o rateio dos maiores restos não se inverter.
+  rows = rows.map((r) => ({ ...r, unitsSold: Math.max(0, r.unitsSold) }));
+  const totalSold = rows.reduce((a, r) => a + r.unitsSold, 0);
+  const qty = Math.max(0, Math.trunc(totalQty));
+  if (qty === 0 || totalSold === 0) {
+    return {
+      totalQty: qty,
+      totalSold,
+      rows: rows
+        .map((r) => ({ ...r, sharePct: 0, suggestedQty: 0 }))
+        .sort((a, b) => b.unitsSold - a.unitsSold || a.storeName.localeCompare(b.storeName, 'pt-BR')),
+    };
+  }
+
+  const exact = rows.map((r) => (qty * r.unitsSold) / totalSold);
+  const base = exact.map(Math.floor);
+  let rest = qty - base.reduce((a, b) => a + b, 0);
+  // Maiores restos primeiro (empate: mais vendas, depois nome).
+  const order = rows
+    .map((r, i) => ({ i, frac: exact[i] - base[i], sold: r.unitsSold, name: r.storeName }))
+    .sort((a, b) => b.frac - a.frac || b.sold - a.sold || a.name.localeCompare(b.name, 'pt-BR'));
+  for (const o of order) {
+    if (rest <= 0) break;
+    base[o.i] += 1;
+    rest -= 1;
+  }
+
+  return {
+    totalQty: qty,
+    totalSold,
+    rows: rows
+      .map((r, i) => ({
+        ...r,
+        sharePct: round2((r.unitsSold / totalSold) * 100),
+        suggestedQty: base[i],
+      }))
+      .sort((a, b) => b.suggestedQty - a.suggestedQty || a.storeName.localeCompare(b.storeName, 'pt-BR')),
+  };
+}
+
 // ─── Curva ABC (por SKU, por marca…) ─────────────────────────────────────────
 
 /** Classificação ABC de um item a partir do % acumulado de receita. */

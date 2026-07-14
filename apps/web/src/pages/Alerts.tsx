@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAlerts, setMinStock, type StockAlert } from '../api/client';
+import { getAlerts, getRebalancePlan, setMinStock, type StockAlert } from '../api/client';
 import { PageHeader, Loading, StatCard } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 
@@ -10,6 +11,16 @@ export function Alerts() {
 
   const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
   const rows = (alerts.data?.rows ?? []).filter((r) => !level || r.level === level);
+
+  // Alerta de transferência (feedback 07): antes de comprar, remanejar o que a
+  // rede já tem. Só ADMIN (o plano é da rede inteira).
+  const rebalance = useQuery({
+    queryKey: ['planning-rebalance', '90'],
+    queryFn: () => getRebalancePlan({ days: '90' }),
+    enabled: isAdmin,
+    staleTime: 5 * 60_000,
+  });
+  const transfers = rebalance.data?.rows.slice(0, 8) ?? [];
 
   return (
     <>
@@ -74,6 +85,44 @@ export function Alerts() {
           <div className="empty">Nenhum alerta. 🎉</div>
         )}
       </div>
+
+      {isAdmin && rebalance.data && transfers.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h3 className="section-title">↔︎ Transferências sugeridas — remanejar antes de comprar</h3>
+          <p className="muted" style={{ marginTop: -4, marginBottom: 10, fontSize: 12.5 }}>
+            A rede tem <strong>{rebalance.data.summary.units}</strong> unidades a mover em{' '}
+            <strong>{rebalance.data.summary.suggestions}</strong> sugestões (custo zero): produto parado numa loja
+            com saída em outra.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th>De → Para</th>
+                <th className="num">Qtd</th>
+                <th>Motivo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transfers.map((t, i) => (
+                <tr key={`${t.productId}-${t.fromStoreId}-${t.toStoreId}-${i}`}>
+                  <td>{t.description}</td>
+                  <td>
+                    {t.fromStoreName} <span className="muted">→</span> {t.toStoreName}
+                  </td>
+                  <td className="num">{t.quantity}</td>
+                  <td className="muted" style={{ fontSize: 12.5 }}>{t.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p style={{ marginTop: 10, marginBottom: 0 }}>
+            <Link to="/admin/relatorios" style={{ color: 'var(--accent)' }}>
+              Ver o relatório completo de transferências →
+            </Link>
+          </p>
+        </div>
+      )}
     </>
   );
 }

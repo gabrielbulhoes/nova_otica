@@ -4,6 +4,7 @@ import { asyncHandler, parseDays } from '../../http/helpers.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
+  fairSplit,
   listSupplierSettings,
   planningOverview,
   purchaseOrderHistory,
@@ -134,5 +135,24 @@ planningRouter.put(
   asyncHandler(async (req, res) => {
     const input = supplierSchema.parse(req.body);
     res.json(await setSupplierLeadTime(input.brand, input.leadTimeDays));
+  }),
+);
+
+/**
+ * GET /api/planning/fair-split — Modo Feira: rateio de uma compra entre as
+ * lojas pela participação nas vendas da marca OU do grupo. Só ADMIN.
+ */
+planningRouter.get(
+  '/fair-split',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const qty = Math.trunc(Number(req.query.qty));
+    if (!Number.isFinite(qty) || qty < 1 || qty > 100_000) {
+      res.status(400).json({ error: 'qty deve ser um inteiro entre 1 e 100000.' });
+      return;
+    }
+    const brand = (req.query.brand as string | undefined)?.trim() || undefined;
+    const category = (req.query.category as string | undefined)?.trim() || undefined;
+    res.json(await fairSplit(days(req.query.days), { brand, category }, qty));
   }),
 );
