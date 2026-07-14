@@ -151,7 +151,9 @@ export class SellbieHttpClient implements SellbieClient {
     return this.get<SellbieEstoqueGrade>('cds/estoquegrade', query);
   }
 
-  getContasPagar(query?: ContasPagarQuery): Promise<SellbieContaPagar[]> {
+  getContasPagar(query: ContasPagarQuery): Promise<SellbieContaPagar[]> {
+    // situacao é obrigatória NA PRÁTICA (o conector responde 400 sem ela,
+    // apesar de a doc dizer opcional) — o tipo já força o chamador.
     return this.get<SellbieContaPagar>('cds/contasPagar', query);
   }
 

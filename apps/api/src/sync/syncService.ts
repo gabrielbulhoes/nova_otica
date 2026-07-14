@@ -190,6 +190,46 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
   return { ok: !hadError, window: win.window, durationMs, entities };
 }
 
+/** aaaa-mm-dd de hoje (fuso do processo). */
+function isoToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Carga histórica de vendas por janelas mensais (alimenta giro/ABC e a
+ * previsão sazonal, que usa 24 meses). Reaproveita os mesmos syncs com faixa
+ * explícita; upserts por externalId tornam a repetição inofensiva.
+ */
+export async function backfillSalesHistory(months: number): Promise<SyncResult['entities']> {
+  const client = getSellbieClient();
+  const entities: SyncResult['entities'] = {};
+  const now = new Date();
+  for (let i = months; i >= 0; i -= 1) {
+    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+    const range = {
+      date_start: start.toISOString().slice(0, 10),
+      date_end: end.toISOString().slice(0, 10),
+    };
+    const label = range.date_start.slice(0, 7);
+    try {
+      const sales = await syncSales(client, range);
+      const items = await syncSaleItems(client, range);
+      const payments = await syncPayments(client, range);
+      entities[label] = {
+        read: sales.read + items.read + payments.read,
+        written: sales.written + items.written + payments.written,
+      };
+      log.info('Backfill de vendas: mês concluído', { mes: label, ...entities[label] });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      entities[label] = { read: 0, written: 0, error: message };
+      log.error('Backfill de vendas: mês falhou', { mes: label, error: message });
+    }
+  }
+  return entities;
+}
+
 // ─── Helpers de lookup externalId -> id interno ──────────────────────────────
 
 async function storeIdMap(): Promise<Map<string, string>> {
@@ -278,8 +318,10 @@ async function syncSellers(client: Client) {
   return { read: rows.length, written };
 }
 
-async function syncProducts(client: Client) {
-  const rows = await client.getProdutos();
+async function syncProducts(client: Client, range?: { date_start: string; date_end: string }) {
+  // Sem filtros o conector devolve só os últimos 30 dias — o catálogo
+  // completo exige faixa explícita desde o início da base.
+  const rows = await client.getProdutos(range ?? { date_start: '2000-01-01', date_end: isoToday() });
   const colors = await prisma.color.findMany({ select: { id: true, externalId: true } });
   const sizes = await prisma.size.findMany({ select: { id: true, externalId: true } });
   const colorMap = new Map(colors.map((c) => [c.externalId, c.id]));
@@ -328,37 +370,44 @@ async function syncCustomers(client: Client) {
 }
 
 async function syncStock(client: Client) {
-  const stores = await prisma.store.findMany({ select: { id: true, externalId: true } });
+  // Fonte: /cds/estoquegrade — UMA chamada devolve a rede inteira, com o
+  // estoque aninhado por filial em cada linha produto×variante. As variantes
+  // (GRADE) do mesmo produto são somadas por loja.
+  const stores = await storeIdMap();
   const products = await productIdMap();
-  let read = 0;
-  let written = 0;
-  for (const store of stores) {
-    // A rota de estoque exige cod_loja (idFilial) — uma chamada por loja.
-    const rows = await client.getEstoque({ cod_loja: store.externalId, only_disp: 0 });
-    read += rows.length;
-    for (const raw of rows) {
-      const d = map.mapEstoque(raw);
-      const productId = products.get(d.externalProductId);
-      if (!productId) continue; // produto ainda não cadastrado
-      await prisma.stockItem.upsert({
-        where: { storeId_productId: { storeId: store.id, productId } },
-        create: {
-          storeId: store.id,
-          productId,
-          quantity: d.quantity,
-          available: d.available,
-          syncedAt: new Date(),
-        },
-        update: { quantity: d.quantity, available: d.available, syncedAt: new Date() },
-      });
-      written += 1;
+  const rows = await client.getEstoqueGrade();
+
+  const byStoreProduct = new Map<string, number>(); // "loja|produto" -> qtd
+  for (const raw of rows) {
+    for (const pos of map.mapEstoqueGrade(raw)) {
+      const key = `${pos.externalStoreId}|${pos.externalProductId}`;
+      byStoreProduct.set(key, (byStoreProduct.get(key) ?? 0) + pos.quantity);
     }
   }
-  return { read, written };
+
+  let written = 0;
+  let skipped = 0;
+  for (const [key, quantity] of byStoreProduct) {
+    const [externalStoreId, externalProductId] = key.split('|');
+    const storeId = stores.get(externalStoreId);
+    const productId = products.get(externalProductId);
+    if (!storeId || !productId) {
+      skipped += 1; // loja/produto ainda não cadastrado (ex.: registro de teste do ERP)
+      continue;
+    }
+    await prisma.stockItem.upsert({
+      where: { storeId_productId: { storeId, productId } },
+      create: { storeId, productId, quantity, available: quantity, syncedAt: new Date() },
+      update: { quantity, available: quantity, syncedAt: new Date() },
+    });
+    written += 1;
+  }
+  if (skipped > 0) log.warn('Posições de estoque ignoradas (loja/produto desconhecido)', { skipped });
+  return { read: rows.length, written };
 }
 
-async function syncSales(client: Client) {
-  const rows = await client.getVendas();
+async function syncSales(client: Client, range?: { date_start: string; date_end: string }) {
+  const rows = await client.getVendas(range);
   const stores = await storeIdMap();
   const sellers = await prisma.seller.findMany({ select: { id: true, externalId: true } });
   const sellerMap = new Map(sellers.map((s) => [s.externalId, s.id]));
@@ -388,8 +437,8 @@ async function syncSales(client: Client) {
   return { read: rows.length, written };
 }
 
-async function syncSaleItems(client: Client) {
-  const rows = await client.getDetalhesVendas();
+async function syncSaleItems(client: Client, range?: { date_start: string; date_end: string }) {
+  const rows = await client.getDetalhesVendas(range);
   const sales = await prisma.sale.findMany({ select: { id: true, externalId: true } });
   const saleMap = new Map(sales.map((s) => [s.externalId, s.id]));
   const products = await productIdMap();
@@ -421,8 +470,8 @@ async function syncSaleItems(client: Client) {
   return { read: rows.length, written };
 }
 
-async function syncPayments(client: Client) {
-  const rows = await client.getPagamentosVendas();
+async function syncPayments(client: Client, range?: { date_start: string; date_end: string }) {
+  const rows = await client.getPagamentosVendas(range);
   const sales = await prisma.sale.findMany({ select: { id: true, externalId: true } });
   const saleMap = new Map(sales.map((s) => [s.externalId, s.id]));
   let written = 0;
