@@ -18,7 +18,8 @@
     "sync:once": "tsx src/sync/runOnce.ts",
     "cds:probe": "tsx src/integrations/sellbie/probe.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "sync:backfill": "tsx src/sync/backfill.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

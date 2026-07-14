@@ -102,7 +102,10 @@ async function main() {
   results.push(await probe(http, 'detalhesVendas', 'cds/detalhesVendas', range));
   results.push(await probe(http, 'pagamentosVendas', 'cds/pagamentosVendas', range));
   results.push(await probe(http, 'estoquegrade', 'cds/estoquegrade', { only_disp: 1 }));
-  results.push(await probe(http, 'contasPagar', 'cds/contasPagar', {}));
+  // contasPagar: a doc diz que situacao é opcional, mas o conector responde
+  // 400 sem ela (verificado ao vivo em 13/07/2026) — sondamos as duas.
+  results.push(await probe(http, 'contasPagar-abertos', 'cds/contasPagar', { situacao: 'abertos' }));
+  results.push(await probe(http, 'contasPagar-pagos', 'cds/contasPagar', { situacao: 'pagos' }));
   // POST /cds/inserirvenda NÃO é sondado de propósito: é escrita no ERP real.
 
   // Estoque exige cod_loja — usa a 1ª filial retornada em /lojas, se houver.
@@ -111,7 +114,7 @@ async function main() {
     try {
       const first = (await http.get('cds/lojas')).data;
       const arr = unwrap(first);
-      const codLoja = (arr[0] as Record<string, unknown> | undefined)?.idFilial;
+      const codLoja = (arr[0] as Record<string, unknown> | undefined)?.codigo_loja;
       if (codLoja !== undefined) {
         results.push(await probe(http, 'estoque', 'cds/estoque', { cod_loja: codLoja, only_disp: 0 }));
       }
