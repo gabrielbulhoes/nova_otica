@@ -10,6 +10,8 @@
 import {
   abcFromItems,
   analyzeProduct,
+  buildBrandMix,
+  buildFairSplit,
   buildOverview,
   buildPurchaseOrders,
   buildRebalance,
@@ -18,6 +20,8 @@ import {
   computeStoreCoverage,
   DEFAULT_PLANNING_CONFIG,
   type AbcItem,
+  type BrandBannerInput,
+  type FairSplitInput,
   type StoreCoverageInput,
   type StoreProductInput,
 } from '@planning';
@@ -47,6 +51,10 @@ interface RealDataset {
   bySeller?: { label: string; units: number; revenue: number; sales: number }[];
   /** Cobertura por marca (rede inteira; grade sem fornecedor = "Sem marca"). */
   brandCoverage?: { label: string; stockUnits: number; soldUnits: number }[];
+  /** Estoque × vendas por loja × marca (rede inteira) — mix por bandeira. */
+  storeBrand?: { storeExt: string; label: string; stockUnits: number; soldUnits: number }[];
+  /** Estoque × vendas por loja × grupo (rede inteira) — Modo Feira. */
+  storeCategory?: { storeExt: string; label: string; stockUnits: number; soldUnits: number }[];
 }
 const realModules = import.meta.glob('./demo-real-data.json', { eager: true }) as Record<string, { default: RealDataset }>;
 const real: RealDataset | null = Object.values(realModules)[0]?.default ?? null;
@@ -891,22 +899,84 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         });
     return buildRebalance(inputs, planDays, cfgForBrand);
   }
-  if (url === '/planning/suppliers' && m === 'GET')
+  if (url === '/planning/suppliers' && m === 'GET') {
+    // Com dados reais, as marcas são as do catálogo carregado (as fictícias
+    // MARCAS não casariam com nada); ordenadas por nº de produtos.
+    let brands = MARCAS as string[];
+    if (real) {
+      const count = new Map<string, number>();
+      for (const p of products) if (p.brand && p.brand !== '—') count.set(p.brand, (count.get(p.brand) ?? 0) + 1);
+      brands = [...count.keys()].sort((a, b) => (count.get(b) ?? 0) - (count.get(a) ?? 0));
+    }
     return {
       defaultLeadTimeDays: DEFAULT_PLANNING_CONFIG.leadTimeDays,
-      rows: MARCAS.map((brand) => ({
+      rows: brands.map((brand) => ({
         brand,
         leadTimeDays: demoLeadTimes.get(brand) ?? null,
         products: products.filter((x) => x.brand === brand).length,
         isDefault: !demoLeadTimes.has(brand),
       })),
     };
+  }
   if (url === '/planning/suppliers' && m === 'PUT') {
     const brand = String(body.brand ?? '');
     const lt = body.leadTimeDays;
     if (lt === null) demoLeadTimes.delete(brand);
     else demoLeadTimes.set(brand, Number(lt));
     return { brand, leadTimeDays: lt };
+  }
+
+  // Mix de marcas por bandeira (feedback 04 fase 2)
+  if (url === '/reports/brand-mix') {
+    const storeNameByExt = new Map(stores.map((s) => [s.externalId, s.name]));
+    const inputs: BrandBannerInput[] = real?.storeBrand
+      ? real.storeBrand.map((r) => ({
+          storeName: storeNameByExt.get(r.storeExt) ?? `Loja ${r.storeExt}`,
+          brand: r.label,
+          stockUnits: r.stockUnits,
+          unitsSold: r.soldUnits,
+        }))
+      : stores.flatMap((s) =>
+          products.map((prod) => ({
+            storeName: s.name,
+            brand: prod.brand,
+            stockUnits: stockQty.get(key(s.id, prod.id)) ?? 0,
+            unitsSold: soldQty.get(key(s.id, prod.id)) ?? 0,
+          })),
+        );
+    return { days: effectiveDays(days), ...buildBrandMix(inputs) };
+  }
+
+  // Modo Feira (feedback 08): rateio por participação nas vendas do recorte.
+  if (url === '/planning/fair-split') {
+    const qty = Math.trunc(Number(one(params.qty)) || 0);
+    if (qty < 1 || qty > 100_000) return { __status: 400, error: 'qty deve ser um inteiro entre 1 e 100000.' };
+    const brand = one(params.brand)?.trim();
+    const category = one(params.category)?.trim();
+    if (!brand === !category) return { __status: 400, error: 'Informe exatamente um recorte: brand OU category.' };
+
+    let inputs: FairSplitInput[];
+    const src = brand ? real?.storeBrand : real?.storeCategory;
+    if (src) {
+      const alvo = (brand ?? category)!;
+      const byStore = new Map(src.filter((r) => r.label === alvo).map((r) => [r.storeExt, r]));
+      inputs = stores.map((s) => ({
+        storeId: s.id,
+        storeName: s.name,
+        unitsSold: byStore.get(s.externalId)?.soldUnits ?? 0,
+        stockUnits: byStore.get(s.externalId)?.stockUnits ?? 0,
+      }));
+    } else {
+      const match = (p: Product) => (brand ? p.brand === brand : p.category === category);
+      const matched = products.filter(match); // invariante à loja: filtra 1x
+      inputs = stores.map((s) => ({
+        storeId: s.id,
+        storeName: s.name,
+        unitsSold: matched.reduce((a, p) => a + (soldQty.get(key(s.id, p.id)) ?? 0), 0),
+        stockUnits: matched.reduce((a, p) => a + (stockQty.get(key(s.id, p.id)) ?? 0), 0),
+      }));
+    }
+    return { days: effectiveDays(days), filter: { brand, category }, ...buildFairSplit(inputs, qty) };
   }
 
   // Alertas

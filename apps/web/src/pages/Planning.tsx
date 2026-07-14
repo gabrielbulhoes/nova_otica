@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createMovement,
   formatBRL,
+  getCategories,
+  getFairSplit,
   getPlanningOverview,
   getPurchaseOrderHistory,
   getPurchaseOrders,
@@ -19,7 +21,7 @@ import {
   type Recommendation,
   type RebalanceSuggestion,
 } from '../api/client';
-import { PageHeader, Loading } from '../components/ui';
+import { PageHeader, Loading, ExportCsv } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 import { downloadCsv, toCsv } from '../bi/csv';
 
@@ -502,6 +504,139 @@ function SupplierRow({
   );
 }
 
+/**
+ * Modo Feira (feedback 08): lançamentos comprados em feira não têm histórico
+ * próprio. Escolhida a marca ou o grupo e a quantidade total, rateia a compra
+ * entre as lojas pela participação de cada uma nas vendas daquele recorte.
+ */
+function FairSplit() {
+  const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
+  const categories = useQuery({ queryKey: ['categories'], queryFn: getCategories });
+  const [mode, setMode] = useState<'brand' | 'category'>('brand');
+  const [brand, setBrand] = useState('');
+  const [category, setCategory] = useState('');
+  const [qty, setQty] = useState('100');
+  const [days, setDays] = useState('180');
+  const [submitted, setSubmitted] = useState<{ brand?: string; category?: string; qty: string; days: string } | null>(null);
+
+  const split = useQuery({
+    queryKey: ['fair-split', submitted],
+    queryFn: () => getFairSplit({ ...submitted!, qty: submitted!.qty, days: submitted!.days }),
+    enabled: submitted !== null,
+  });
+
+  const qtyNum = Math.trunc(Number(qty));
+  const qtyOk = Number.isFinite(qtyNum) && qtyNum >= 1 && qtyNum <= 100_000;
+  const recorteOk = mode === 'brand' ? !!brand : !!category;
+  const canRun = recorteOk && qtyOk;
+  const run = () => {
+    if (!canRun) return;
+    setSubmitted(mode === 'brand' ? { brand, qty: String(qtyNum), days } : { category, qty: String(qtyNum), days });
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="section-title" style={{ marginBottom: 2 }}>Modo Feira — como distribuir uma compra nova</div>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
+        Lançamentos de feira não têm histórico. Escolha a marca ou o grupo, a quantidade comprada, e o sistema
+        rateia entre as lojas pela participação de cada uma nas vendas desse recorte (a soma bate exatamente com o
+        total).
+      </div>
+      <div className="toolbar" style={{ marginBottom: 0 }}>
+        <div className="segmented">
+          <button className={mode === 'brand' ? 'active' : ''} onClick={() => setMode('brand')}>Por marca</button>
+          <button className={mode === 'category' ? 'active' : ''} onClick={() => setMode('category')}>Por grupo</button>
+        </div>
+        {mode === 'brand' ? (
+          <select value={brand} onChange={(e) => setBrand(e.target.value)} aria-label="Marca">
+            <option value="">Escolha a marca…</option>
+            {suppliers.data?.rows.map((s) => (
+              <option key={s.brand} value={s.brand}>{s.brand}</option>
+            ))}
+          </select>
+        ) : (
+          <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Grupo">
+            <option value="">Escolha o grupo…</option>
+            {categories.data?.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        )}
+        <label className="muted">Comprei</label>
+        <input
+          type="number"
+          min={1}
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          style={{ width: 90 }}
+          aria-label="Quantidade total comprada"
+        />
+        <label className="muted">un., histórico</label>
+        <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Janela de histórico">
+          <option value="90">90 dias</option>
+          <option value="180">180 dias</option>
+          <option value="365">1 ano</option>
+        </select>
+        <button className="btn" disabled={!canRun} onClick={run}>Distribuir</button>
+      </div>
+
+      {submitted && (
+        split.isLoading ? (
+          <Loading />
+        ) : split.data && split.data.totalSold === 0 ? (
+          <div className="empty" style={{ marginTop: 12 }}>
+            Nenhuma venda desse recorte no período — sem base para ratear. Escolha outro período ou distribua manualmente.
+          </div>
+        ) : split.data ? (
+          <>
+            <div className="row-between" style={{ marginTop: 12, marginBottom: 8 }}>
+              <div className="muted" style={{ fontSize: 12.5 }}>
+                {split.data.totalQty} un. rateadas por {split.data.totalSold} vendas do período em{' '}
+                {split.data.rows.filter((r) => r.suggestedQty > 0).length} lojas.
+              </div>
+              <ExportCsv
+                rows={split.data.rows}
+                filename={`modo-feira-${submitted.brand ?? submitted.category}-${submitted.qty}un`}
+                columns={[
+                  { key: 'storeName', label: 'Loja' },
+                  { key: 'unitsSold', label: 'Vendas do período' },
+                  { key: 'sharePct', label: '% participação' },
+                  { key: 'stockUnits', label: 'Estoque atual' },
+                  { key: 'suggestedQty', label: 'Comprar p/ loja' },
+                ]}
+              />
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Loja</th>
+                  <th className="num">Vendas no período</th>
+                  <th className="num">Participação</th>
+                  <th className="num">Estoque atual</th>
+                  <th className="num">Enviar</th>
+                </tr>
+              </thead>
+              <tbody>
+                {split.data.rows.map((r) => (
+                  <tr key={r.storeId}>
+                    <td>{r.storeName}</td>
+                    <td className="num">{r.unitsSold}</td>
+                    <td className="num">{r.sharePct.toFixed(1)}%</td>
+                    <td className="num">{r.stockUnits}</td>
+                    <td className="num">
+                      {r.suggestedQty > 0 ? <strong>{r.suggestedQty}</strong> : <span className="muted">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ) : null
+      )}
+    </div>
+  );
+}
+
 export function Planning() {
   const { isAdmin } = useAuth();
   const [days, setDays] = useState('90');
@@ -811,6 +946,9 @@ export function Planning() {
           </table>
         )}
       </div>
+
+      {/* ── Modo Feira: distribuir uma compra nova entre as lojas (ADMIN) ── */}
+      {isAdmin && <FairSplit />}
 
       {/* ── Panorama (secundário): capital imobilizado + Pareto ── */}
       {overview.isLoading || !overview.data ? (

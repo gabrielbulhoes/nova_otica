@@ -120,3 +120,42 @@ describe('demo: relatórios da Onda 2', () => {
     expect(somaMarcas).toBeCloseTo(abc.totalRevenue, 0);
   });
 });
+
+describe('demo: Onda 3 (mix por bandeira + Modo Feira)', () => {
+  it('/reports/brand-mix agrega marcas por bandeira com total coerente', () => {
+    const r = get('/reports/brand-mix');
+    expect(Array.isArray(r.banners)).toBe(true);
+    expect(r.rows.length).toBeGreaterThan(0);
+    for (const row of r.rows.slice(0, 5)) {
+      const somaVend = r.banners.reduce((a: number, b: string) => a + (row.byBanner[b]?.unitsSold ?? 0), 0);
+      expect(row.total.unitsSold).toBe(somaVend);
+      // Candidata a remanejo: estoque parado numa bandeira e venda em outra.
+      for (const b of row.moveFrom) {
+        expect(row.byBanner[b].stockUnits).toBeGreaterThan(0);
+        expect(row.byBanner[b].unitsSold).toBe(0);
+        expect(row.sellsIn.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('/planning/fair-split rateia por marca somando exatamente a quantidade', () => {
+    const marca = (get('/reports/brand-mix').rows as any[]).find((r) => r.total.unitsSold > 0)?.brand;
+    const r = get('/planning/fair-split', { brand: marca, qty: '120', days: '180' });
+    if (r.totalSold > 0) {
+      const soma = r.rows.reduce((a: number, x: any) => a + x.suggestedQty, 0);
+      expect(soma).toBe(120);
+      // Loja sem venda da marca não recebe.
+      for (const row of r.rows) if (row.unitsSold === 0) expect(row.suggestedQty).toBe(0);
+    }
+  });
+
+  it('/planning/fair-split valida os parâmetros (paridade com a API)', () => {
+    expect(get('/planning/fair-split', { qty: '0', brand: 'X' }).__status).toBe(400);
+    // acima do teto (100000) → erro, igual à rota Express
+    expect(get('/planning/fair-split', { qty: '1000000', brand: 'X' }).__status).toBe(400);
+    // marca E grupo juntos → erro (exatamente um recorte)
+    expect(get('/planning/fair-split', { qty: '10', brand: 'X', category: 'Y' }).__status).toBe(400);
+    // nenhum recorte → erro
+    expect(get('/planning/fair-split', { qty: '10' }).__status).toBe(400);
+  });
+});

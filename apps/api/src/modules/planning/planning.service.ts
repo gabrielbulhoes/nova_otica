@@ -4,11 +4,13 @@ import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import {
   analyzeProduct,
+  buildFairSplit,
   buildOverview,
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
+  type FairSplitInput,
   type PlanningConfig,
   type DemandHistory,
   type ProductMetricsInput,
@@ -375,4 +377,53 @@ export async function setSupplierLeadTime(brand: string, leadTimeDays: number | 
     update: { leadTimeDays },
   });
   return { brand: row.brand, leadTimeDays: row.leadTimeDays };
+}
+
+// ─── Modo Feira: rateio de compra por loja (feedback 08, MVP) ────────────────
+
+export interface FairSplitFilter {
+  brand?: string;
+  category?: string;
+}
+
+/**
+ * Participação de cada loja nas vendas da marca OU do grupo escolhido, com o
+ * rateio da quantidade comprada (buildFairSplit — maiores restos). Lançamento
+ * de feira não tem histórico próprio: a régua é a marca/grupo como um todo.
+ */
+export async function fairSplit(days: number, filter: FairSplitFilter, totalQty: number) {
+  if (!filter.brand === !filter.category) {
+    throw badRequest('Informe exatamente um recorte: brand OU category.');
+  }
+  const field = filter.brand ? Prisma.sql`p.brand` : Prisma.sql`p.category`;
+  const value = filter.brand ?? filter.category!;
+
+  const [soldRows, stockRows, stores] = await Promise.all([
+    prisma.$queryRaw<{ storeId: string | null; units: bigint }[]>(Prisma.sql`
+      SELECT s."storeId" AS "storeId", COALESCE(SUM(si.quantity), 0)::bigint AS units
+      FROM "SaleItem" si
+      JOIN "Sale" s ON s.id = si."saleId"
+      JOIN "Product" p ON p.id = si."productId"
+      WHERE s."saleDate" >= ${periodStart(days)} AND ${field} = ${value}
+      GROUP BY s."storeId"
+    `),
+    prisma.$queryRaw<{ storeId: string; units: bigint }[]>(Prisma.sql`
+      SELECT st."storeId" AS "storeId", COALESCE(SUM(st.quantity), 0)::bigint AS units
+      FROM "StockItem" st
+      JOIN "Product" p ON p.id = st."productId"
+      WHERE ${field} = ${value}
+      GROUP BY st."storeId"
+    `),
+    prisma.store.findMany({ select: { id: true, name: true } }),
+  ]);
+  const soldById = new Map(soldRows.filter((r) => r.storeId).map((r) => [r.storeId as string, Number(r.units)]));
+  const stockById = new Map(stockRows.map((r) => [r.storeId, Number(r.units)]));
+
+  const inputs: FairSplitInput[] = stores.map((s) => ({
+    storeId: s.id,
+    storeName: s.name,
+    unitsSold: soldById.get(s.id) ?? 0,
+    stockUnits: stockById.get(s.id) ?? 0,
+  }));
+  return { days, filter, ...buildFairSplit(inputs, totalQty) };
 }

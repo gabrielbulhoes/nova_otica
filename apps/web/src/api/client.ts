@@ -328,6 +328,44 @@ export const getSalesAnalysis = (params: Record<string, string | number | undefi
     .get<{ days: number; by: AnalysisDimension; rows: AnalysisRow[] }>('/reports/sales-analysis', { params })
     .then((r) => r.data);
 
+// ─── Mix de marcas por bandeira + Modo Feira (Onda 3) ────────────────────────
+
+export interface BrandMixCell {
+  stockUnits: number;
+  unitsSold: number;
+}
+
+export interface BrandMixRow {
+  brand: string;
+  total: BrandMixCell;
+  byBanner: Record<string, BrandMixCell>;
+  sellsIn: string[];
+  /** Bandeiras com estoque parado da marca enquanto ela vende em outra. */
+  moveFrom: string[];
+}
+
+export const getBrandMix = (params?: Record<string, string | undefined>) =>
+  api
+    .get<{ days: number; banners: string[]; rows: BrandMixRow[] }>('/reports/brand-mix', { params })
+    .then((r) => r.data);
+
+export interface FairSplitRow {
+  storeId: string;
+  storeName: string;
+  unitsSold: number;
+  stockUnits: number;
+  sharePct: number;
+  suggestedQty: number;
+}
+
+export const getFairSplit = (params: Record<string, string | number | undefined>) =>
+  api
+    .get<{ days: number; filter: { brand?: string; category?: string }; totalQty: number; totalSold: number; rows: FairSplitRow[] }>(
+      '/planning/fair-split',
+      { params },
+    )
+    .then((r) => r.data);
+
 export const getAlerts = (params: Record<string, string | undefined>) =>
   api
     .get<{ total: number; out: number; low: number; rows: StockAlert[] }>('/alerts', { params })

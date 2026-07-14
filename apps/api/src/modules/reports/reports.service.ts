@@ -3,9 +3,11 @@ import { prisma } from '../../lib/prisma.js';
 import { toNumber } from '../../http/helpers.js';
 import {
   abcFromItems,
+  buildBrandMix,
   computeCoverage,
   type AbcDimension,
   type AbcResult,
+  type BrandBannerInput,
   type CoverageRow,
 } from '../planning/planning.math.js';
 
@@ -324,4 +326,44 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
     .sort((a, b) => b.turnover - a.turnover);
 
   return { days, rows };
+}
+
+// ─── Mix de marcas por bandeira (feedback 04 fase 2) ─────────────────────────
+
+/**
+ * Estoque e vendas de cada marca por LOJA (o buildBrandMix agrega em
+ * bandeiras a partir do nome). LEFT JOIN: produto sem marca vira "Sem marca".
+ */
+export async function brandMix(days: number) {
+  const [stockRows, soldRows, stores] = await Promise.all([
+    prisma.$queryRaw<{ storeId: string; brand: string | null; units: bigint }[]>(Prisma.sql`
+      SELECT st."storeId" AS "storeId", p.brand AS brand, COALESCE(SUM(st.quantity), 0)::bigint AS units
+      FROM "StockItem" st
+      LEFT JOIN "Product" p ON p.id = st."productId"
+      GROUP BY st."storeId", p.brand
+    `),
+    prisma.$queryRaw<{ storeId: string | null; brand: string | null; units: bigint }[]>(Prisma.sql`
+      SELECT s."storeId" AS "storeId", p.brand AS brand, COALESCE(SUM(si.quantity), 0)::bigint AS units
+      FROM "SaleItem" si
+      JOIN "Sale" s ON s.id = si."saleId"
+      LEFT JOIN "Product" p ON p.id = si."productId"
+      WHERE s."saleDate" >= ${periodStart(days)}
+      GROUP BY s."storeId", p.brand
+    `),
+    prisma.store.findMany({ select: { id: true, name: true } }),
+  ]);
+  const nameById = new Map(stores.map((s) => [s.id, s.name]));
+
+  const acc = new Map<string, BrandBannerInput>();
+  const bump = (storeId: string | null, brand: string | null, field: 'stockUnits' | 'unitsSold', units: number) => {
+    const storeName = storeId ? nameById.get(storeId) ?? 'Sem loja' : 'Sem loja';
+    const key = `${storeName}|${brand ?? ''}`;
+    const cur = acc.get(key) ?? { storeName, brand: brand ?? '', stockUnits: 0, unitsSold: 0 };
+    cur[field] += units;
+    acc.set(key, cur);
+  };
+  for (const r of stockRows) bump(r.storeId, r.brand, 'stockUnits', Number(r.units));
+  for (const r of soldRows) bump(r.storeId, r.brand, 'unitsSold', Number(r.units));
+
+  return { days, ...buildBrandMix([...acc.values()]) };
 }

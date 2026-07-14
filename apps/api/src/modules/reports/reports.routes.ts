@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler, badRequest, parseDays } from '../../http/helpers.js';
-import { scopedStoreId } from '../auth/auth.middleware.js';
+import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import {
   abcCurve,
+  brandMix,
   coverageByBrand,
   inventoryTurnover,
   salesAnalysis,
@@ -59,5 +60,17 @@ reportsRouter.get(
       throw badRequest(`by deve ser um de: ${ANALYSIS_DIMENSIONS.join(', ')}`);
     }
     res.json(await salesAnalysis(days, by, storeId));
+  }),
+);
+
+/**
+ * GET /api/reports/brand-mix — mix de marcas por bandeira (estoque × vendas)
+ * com candidatas a remanejo de marca. Só ADMIN: visão da rede inteira.
+ */
+reportsRouter.get(
+  '/brand-mix',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    res.json(await brandMix(parseDays(req.query.days, 90)));
   }),
 );

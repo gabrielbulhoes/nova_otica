@@ -194,6 +194,48 @@ for (const [ext, per] of stockByProduct)
 for (const [ext, ps] of productSales) brandBucket(ext).soldUnits += ps.units;
 const brandCoverage = [...brandCoverageMap.entries()].map(([label, v]) => ({ label, ...v }));
 
+// Estoque × vendas por LOJA × MARCA e por LOJA × GRUPO — rede inteira, para o
+// mix por bandeira e o Modo Feira da demo. Categoria: /produtos primeiro,
+// senão o GRUPO da grade.
+const catByExt = new Map(); // ext -> grupo/categoria
+for (const p of produtos) {
+  const ext = trim(p.codigo_base);
+  const cat = trim(p.classificacao) || trim(p.categora);
+  if (ext && cat) catByExt.set(ext, cat);
+}
+for (const [ext, g] of gradeInfo) if (!catByExt.has(ext) && g.grupo) catByExt.set(ext, g.grupo);
+
+const storeBrandMap = new Map(); // "loja|marca" -> {stockUnits, soldUnits}
+const storeCategoryMap = new Map(); // "loja|grupo" -> {stockUnits, soldUnits}
+const bump = (map, st, dim, field, qty) => {
+  const k = `${st}|${dim}`;
+  const cur = map.get(k) ?? { stockUnits: 0, soldUnits: 0 };
+  cur[field] += qty;
+  map.set(k, cur);
+};
+for (const [ext, per] of stockByProduct) {
+  const marca = brandByExt.get(ext) || 'Sem marca';
+  const grupo = catByExt.get(ext) || 'OUTROS';
+  for (const [st, qty] of per) {
+    bump(storeBrandMap, st, marca, 'stockUnits', qty);
+    bump(storeCategoryMap, st, grupo, 'stockUnits', qty);
+  }
+}
+for (const [k, qty] of soldByStoreProduct) {
+  const [st, ext] = k.split('|');
+  const marca = brandByExt.get(ext) || 'Sem marca';
+  const grupo = catByExt.get(ext) || 'OUTROS';
+  bump(storeBrandMap, st, marca, 'soldUnits', qty);
+  bump(storeCategoryMap, st, grupo, 'soldUnits', qty);
+}
+const unpack = (map) =>
+  [...map.entries()].map(([k, v]) => {
+    const [storeExt, label] = [k.slice(0, k.indexOf('|')), k.slice(k.indexOf('|') + 1)];
+    return { storeExt, label, ...v };
+  });
+const storeBrand = unpack(storeBrandMap);
+const storeCategory = unpack(storeCategoryMap);
+
 // ─── Catálogo amostrado ──────────────────────────────────────────────────────
 const catalog = new Map(); // ext -> product
 for (const p of produtos) {
@@ -204,7 +246,9 @@ for (const p of produtos) {
     sku: trim(p.sku) || ext,
     description: trim(p.nome) || `Produto ${ext}`,
     brand: trim(p.nome_fornecedor),
-    category: trim(p.classificacao) || trim(p.categora) || 'OUTROS',
+    // Mesma resolução do catByExt (classificacao || categora || grupo da grade)
+    // para o grupo do catálogo casar com os baldes de storeCategory (Modo Feira).
+    category: catByExt.get(ext) || 'OUTROS',
     price: num(p.valor_venda),
     cost: num(p.valor_compra) || null,
   });
@@ -296,6 +340,8 @@ const out = {
   })),
   bySeller,
   brandCoverage,
+  storeBrand,
+  storeCategory,
   dailySales: [...daily.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, v]) => ({ date, ...v })),
   byPayment: [...byPayment.entries()].map(([label, v]) => ({ label, ...v })),
   byBrand: [...byBrand.entries()].map(([label, v]) => ({ label, ...v })),

@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   getAbc,
   getBrandCoverage,
+  getBrandMix,
   getRebalancePlan,
   getStores,
   getTurnover,
@@ -12,7 +13,7 @@ import {
 import { PageHeader, Loading, CoverageBadge, ExportCsv, fmtMonths } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 
-type Tab = 'abc' | 'turnover' | 'coverage' | 'transfers';
+type Tab = 'abc' | 'turnover' | 'coverage' | 'transfers' | 'brandmix';
 
 const classColor: Record<string, string> = { A: 'green', B: 'amber', C: 'gray' };
 
@@ -47,6 +48,12 @@ export function Reports() {
     queryFn: () => getRebalancePlan({ days }),
     enabled: tab === 'transfers' && isAdmin,
   });
+  // Mix de marcas por bandeira (feedback 04 fase 2).
+  const brandMix = useQuery({
+    queryKey: ['brand-mix', days],
+    queryFn: () => getBrandMix({ days }),
+    enabled: tab === 'brandmix' && isAdmin,
+  });
 
   return (
     <>
@@ -71,6 +78,11 @@ export function Reports() {
               Transferências
             </button>
           )}
+          {isAdmin && (
+            <button className={tab === 'brandmix' ? 'active' : ''} onClick={() => setTab('brandmix')}>
+              Marcas × Bandeiras
+            </button>
+          )}
         </div>
         {tab === 'abc' && (
           <div className="segmented">
@@ -88,7 +100,7 @@ export function Reports() {
           <option value="90">Últimos 90 dias</option>
           <option value="180">Últimos 180 dias</option>
         </select>
-        {isAdmin && tab !== 'transfers' && (
+        {isAdmin && tab !== 'transfers' && tab !== 'brandmix' && (
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)}>
             <option value="">Toda a rede</option>
             {stores.data?.rows.map((s) => (
@@ -140,6 +152,27 @@ export function Reports() {
               { key: 'monthlyUnits', label: 'Venda média/mês' },
               { key: 'coverageMonths', label: 'Cobertura (meses)' },
               { key: 'level', label: 'Nível' },
+            ]}
+          />
+        )}
+        {tab === 'brandmix' && brandMix.data && (
+          <ExportCsv
+            rows={brandMix.data.rows.flatMap((r) =>
+              brandMix.data!.banners.map((b) => ({
+                marca: r.brand,
+                bandeira: b,
+                vendidas: r.byBanner[b]?.unitsSold ?? 0,
+                estoque: r.byBanner[b]?.stockUnits ?? 0,
+                remanejar: r.moveFrom.includes(b) ? 'sim' : '',
+              })),
+            )}
+            filename={`marcas-bandeiras-${days}d`}
+            columns={[
+              { key: 'marca', label: 'Marca' },
+              { key: 'bandeira', label: 'Bandeira' },
+              { key: 'vendidas', label: 'Un. vendidas' },
+              { key: 'estoque', label: 'Estoque' },
+              { key: 'remanejar', label: 'Candidata a remanejo' },
             ]}
           />
         )}
@@ -324,6 +357,75 @@ export function Reports() {
                 </tbody>
               </table>
             </div>
+          </>
+        ) : null
+      ) : tab === 'brandmix' ? (
+        brandMix.isLoading ? (
+          <Loading />
+        ) : brandMix.data ? (
+          <>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Unidades vendidas / em estoque de cada marca por bandeira. O selo{' '}
+              <span className="badge amber">remanejar</span> marca bandeiras com estoque da marca{' '}
+              <strong>parado</strong> (sem venda no período) enquanto ela vende em outra bandeira.
+            </p>
+            <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Marca</th>
+                    {brandMix.data.banners.map((b) => (
+                      <th key={b} className="num">
+                        {b}
+                      </th>
+                    ))}
+                    <th className="num">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {brandMix.data.rows.slice(0, 40).map((r) => (
+                    <tr key={r.brand}>
+                      <td>
+                        <div>{r.brand}</div>
+                        {r.moveFrom.length > 0 && (
+                          <div className="muted" style={{ fontSize: 12 }}>
+                            parada em {r.moveFrom.join(', ')}
+                          </div>
+                        )}
+                      </td>
+                      {brandMix.data!.banners.map((b) => {
+                        const cell = r.byBanner[b];
+                        const flagged = r.moveFrom.includes(b);
+                        return (
+                          <td key={b} className="num">
+                            {cell ? (
+                              <span className={flagged ? 'badge amber' : undefined} title={flagged ? 'Estoque parado: remanejar' : undefined}>
+                                {cell.unitsSold} / {cell.stockUnits.toLocaleString('pt-BR')}
+                              </span>
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td className="num">
+                        <strong>{r.total.unitsSold}</strong> / {r.total.stockUnits.toLocaleString('pt-BR')}
+                      </td>
+                    </tr>
+                  ))}
+                  {brandMix.data.rows.length === 0 && (
+                    <tr>
+                      <td colSpan={brandMix.data.banners.length + 2} className="empty">
+                        Sem dados no período.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <p className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>
+              Célula = un. vendidas / un. em estoque. Mostrando as 40 primeiras marcas (candidatas a remanejo primeiro); o CSV leva tudo.
+            </p>
           </>
         ) : null
       ) : transfers.isLoading ? (
