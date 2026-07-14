@@ -436,15 +436,47 @@ function cartView() {
 
 const ADMIN_USER = { id: 'demo_admin', email: 'admin@novaotica.com', name: 'Administrador (Demo)', role: 'ADMIN', storeId: null, storeName: null };
 
-// Usuários fictícios para a tela de gestão (mutáveis na sessão)
-const demoUsers: Record<string, unknown>[] = [
-  { id: 'demo_admin', email: 'admin@novaotica.com', name: 'Administrador (Demo)', role: 'ADMIN', storeId: null, active: true, lastLoginAt: new Date().toISOString(), store: null },
-  ...stores.slice(0, 3).map((s, i) => ({
-    id: `demo_mgr_${i + 1}`, email: `loja${i + 1}@novaotica.com`, name: `Gestor ${s.city}`,
-    role: 'STORE_MANAGER', storeId: s.id, active: i !== 2, lastLoginAt: i === 0 ? new Date().toISOString() : null,
-    store: { name: s.name },
-  })),
-];
+/**
+ * Contas nomeadas do build (VITE_DEMO_USERS="Nome:senha,Nome:senha").
+ * Quando definidas — caso da variante com DADOS REAIS — o login da demo passa
+ * a VALIDAR e-mail e senha em vez de aceitar qualquer coisa. Atenção: é uma
+ * trava de conveniência no navegador (site estático não tem servidor); a
+ * proteção de verdade do conteúdo é a senha de diretório no hosting.
+ */
+const buildAccounts = ((import.meta.env.VITE_DEMO_USERS as string | undefined) ?? '')
+  .split(',')
+  .map((entry) => {
+    const [name, ...rest] = entry.split(':');
+    return { name: (name ?? '').trim(), password: rest.join(':') };
+  })
+  .filter((a) => a.name && a.password);
+const accountUsers = buildAccounts.map((a, i) => ({
+  id: `demo_acc_${i + 1}`,
+  email: `${a.name.toLowerCase()}@novaotica.com`,
+  name: a.name,
+  role: 'ADMIN',
+  storeId: null as string | null,
+  storeName: null as string | null,
+}));
+// Sessão local: quem logou por último (o /auth/me devolve o usuário certo).
+let currentUser = accountUsers[0] ?? ADMIN_USER;
+
+// Usuários para a tela de gestão (mutáveis na sessão). Com contas nomeadas
+// do build, são elas que aparecem; senão, o elenco fictício de sempre.
+const demoUsers: Record<string, unknown>[] =
+  accountUsers.length > 0
+    ? accountUsers.map((u, i) => ({
+        id: u.id, email: u.email, name: u.name, role: u.role, storeId: null,
+        active: true, lastLoginAt: i === 0 ? new Date().toISOString() : null, store: null,
+      }))
+    : [
+        { id: 'demo_admin', email: 'admin@novaotica.com', name: 'Administrador (Demo)', role: 'ADMIN', storeId: null, active: true, lastLoginAt: new Date().toISOString(), store: null },
+        ...stores.slice(0, 3).map((s, i) => ({
+          id: `demo_mgr_${i + 1}`, email: `loja${i + 1}@novaotica.com`, name: `Gestor ${s.city || s.name}`,
+          role: 'STORE_MANAGER', storeId: s.id, active: i !== 2, lastLoginAt: i === 0 ? new Date().toISOString() : null,
+          store: { name: s.name },
+        })),
+      ];
 
 // ─── Roteador ────────────────────────────────────────────────────────────────
 
@@ -460,9 +492,23 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   const p = (re: RegExp) => re.exec(url);
   const days = Number(params.days) || 30;
 
-  // Auth
-  if (url === '/auth/login') return { token: 'demo-token', user: ADMIN_USER };
-  if (url === '/auth/me') return ADMIN_USER;
+  // Auth — com contas nomeadas (build de dados reais) o login é validado;
+  // sem elas, a demo pública continua aceitando qualquer credencial.
+  if (url === '/auth/login') {
+    if (buildAccounts.length > 0) {
+      const email = String(body.email ?? '').trim().toLowerCase();
+      const password = String(body.password ?? '');
+      const idx = buildAccounts.findIndex(
+        (a, i) => (email === accountUsers[i].email || email === a.name.toLowerCase()) && password === a.password,
+      );
+      if (idx === -1) return { __status: 401, error: 'E-mail ou senha inválidos.' };
+      currentUser = accountUsers[idx];
+      return { token: 'demo-token', user: currentUser };
+    }
+    currentUser = ADMIN_USER;
+    return { token: 'demo-token', user: currentUser };
+  }
+  if (url === '/auth/me') return currentUser;
 
   // Usuários (gestão)
   if (url === '/users' && m === 'GET') return { total: demoUsers.length, rows: demoUsers };
