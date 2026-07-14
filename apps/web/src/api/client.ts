@@ -165,9 +165,11 @@ export interface Movement {
   toStore: { id: string; name: string } | null;
 }
 
+export type AbcDimension = 'product' | 'brand';
+
 export interface AbcRow {
-  productId: string;
-  description: string;
+  key: string;
+  label: string;
   brand: string | null;
   category: string | null;
   revenue: number;
@@ -175,6 +177,26 @@ export interface AbcRow {
   revenuePct: number;
   cumulativePct: number;
   class: 'A' | 'B' | 'C';
+}
+
+/** Cobertura por recorte genérico (marca, geral…) — mesma régua da por loja. */
+export interface CoverageReportRow {
+  key: string;
+  label: string;
+  stockUnits: number;
+  unitsSold: number;
+  monthlyUnits: number;
+  coverageMonths: number | null;
+  level: CoverageLevel;
+}
+
+export type AnalysisDimension = 'brand' | 'category' | 'product' | 'store' | 'seller';
+
+export interface AnalysisRow {
+  key: string;
+  label: string;
+  units: number;
+  revenue: number;
 }
 
 export interface TurnoverRow {
@@ -287,13 +309,24 @@ export const resetUserPassword = (id: string, password: string) =>
 
 export const getAbc = (params: Record<string, string | number | undefined>) =>
   api
-    .get<{ days: number; totalRevenue: number; summary: Record<'A' | 'B' | 'C', { products: number; revenue: number }>; rows: AbcRow[] }>(
-      '/reports/abc',
-      { params },
-    )
+    .get<{
+      days: number;
+      dimension: AbcDimension;
+      totalRevenue: number;
+      summary: Record<'A' | 'B' | 'C', { items: number; revenue: number }>;
+      rows: AbcRow[];
+    }>('/reports/abc', { params })
     .then((r) => r.data);
 export const getTurnover = (params: Record<string, string | number | undefined>) =>
   api.get<{ days: number; rows: TurnoverRow[] }>('/reports/turnover', { params }).then((r) => r.data);
+export const getBrandCoverage = (params: Record<string, string | number | undefined>) =>
+  api
+    .get<{ days: number; total: CoverageReportRow; rows: CoverageReportRow[] }>('/reports/coverage', { params })
+    .then((r) => r.data);
+export const getSalesAnalysis = (params: Record<string, string | number | undefined>) =>
+  api
+    .get<{ days: number; by: AnalysisDimension; rows: AnalysisRow[] }>('/reports/sales-analysis', { params })
+    .then((r) => r.data);
 
 export const getAlerts = (params: Record<string, string | undefined>) =>
   api

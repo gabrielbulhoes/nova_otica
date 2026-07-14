@@ -8,13 +8,16 @@
  *   REAIS da rede, agregados e sem qualquer dado de cliente.
  */
 import {
+  abcFromItems,
   analyzeProduct,
   buildOverview,
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
+  computeCoverage,
   computeStoreCoverage,
   DEFAULT_PLANNING_CONFIG,
+  type AbcItem,
   type StoreCoverageInput,
   type StoreProductInput,
 } from '@planning';
@@ -39,7 +42,11 @@ interface RealDataset {
   productSales: { externalId: string; units: number; revenue: number }[];
   weekdayStore: { storeExt: string; weekday: number; total: number }[];
   /** Cobertura por loja (rede inteira) — ausente em datasets antigos. */
-  storeStats?: { externalId: string; stockUnits: number; soldUnits: number }[];
+  storeStats?: { externalId: string; stockUnits: number; soldUnits: number; soldRevenue?: number }[];
+  /** Top vendedores por receita (equipe própria; site protegido por senha). */
+  bySeller?: { label: string; units: number; revenue: number; sales: number }[];
+  /** Cobertura por marca (rede inteira; grade sem fornecedor = "Sem marca"). */
+  brandCoverage?: { label: string; stockUnits: number; soldUnits: number }[];
 }
 const realModules = import.meta.glob('./demo-real-data.json', { eager: true }) as Record<string, { default: RealDataset }>;
 const real: RealDataset | null = Object.values(realModules)[0]?.default ?? null;
@@ -337,32 +344,138 @@ function byDimension(by: string) {
 
 const realSalesByProduct = new Map((real?.productSales ?? []).map((x) => [`pr_${x.externalId}`, x]));
 
-function abc(days: number) {
-  const rows = products
+/**
+ * Itens vendidos no período: base única do ABC e da análise por dimensão.
+ * Memoizado para o sabor fictício não sortear números novos a cada chamada
+ * (ABC, análise e giro contam a mesma história).
+ */
+let soldItemsCache: { p: Product; revenue: number; units: number }[] | null = null;
+function soldItems() {
+  soldItemsCache ??= products
     .map((p) => {
       const rs = realSalesByProduct.get(p.id);
       return real
         ? { p, revenue: rs?.revenue ?? 0, units: rs?.units ?? 0 }
         : { p, revenue: money(2000, 40000), units: int(5, 120) };
     })
-    .filter((x) => !real || x.revenue > 0)
-    .sort((a, b) => b.revenue - a.revenue);
-  const total = round2(rows.reduce((a, b) => a + b.revenue, 0));
-  const summary = { A: { products: 0, revenue: 0 }, B: { products: 0, revenue: 0 }, C: { products: 0, revenue: 0 } };
-  let cum = 0;
-  const out = rows.map((x) => {
-    const revenuePct = (x.revenue / total) * 100;
-    cum += revenuePct;
-    const cls = cum <= 80 ? 'A' : cum <= 95 ? 'B' : 'C';
-    summary[cls].products += 1;
-    summary[cls].revenue = round2(summary[cls].revenue + x.revenue);
-    return {
-      productId: x.p.id, description: x.p.description, brand: x.p.brand, category: x.p.category,
-      revenue: round2(x.revenue), units: x.units, revenuePct: round2(revenuePct),
-      cumulativePct: round2(cum), class: cls,
-    };
-  });
-  return { days, totalRevenue: total, summary, rows: out };
+    .filter((x) => !real || x.revenue > 0);
+  return soldItemsCache;
+}
+
+function abc(days: number, dimension: 'product' | 'brand') {
+  let items: AbcItem[];
+  if (dimension === 'brand') {
+    const acc = new Map<string, { revenue: number; units: number }>();
+    if (real) {
+      // O gerador usa '—' para produto sem fornecedor; aqui vira "Sem marca"
+      // (mesmo rótulo da cobertura por marca).
+      for (const b of real.byBrand) acc.set(b.label === '—' ? 'Sem marca' : b.label, { revenue: b.total, units: b.count });
+    } else {
+      for (const x of soldItems()) {
+        const cur = acc.get(x.p.brand) ?? { revenue: 0, units: 0 };
+        cur.revenue = round2(cur.revenue + x.revenue);
+        cur.units += x.units;
+        acc.set(x.p.brand, cur);
+      }
+    }
+    items = [...acc.entries()].map(([label, v]) => ({
+      key: label, label: label || 'Sem marca', brand: null, category: null, ...v,
+    }));
+  } else {
+    items = soldItems().map((x) => ({
+      key: x.p.id, label: x.p.description, brand: x.p.brand, category: x.p.category,
+      revenue: x.revenue, units: x.units,
+    }));
+  }
+  // A classificação (ponto médio, resumo por classe) é a MESMA do backend.
+  return abcFromItems(items, days, dimension);
+}
+
+/**
+ * A fotografia real só tem 30 dias de vendas: qualquer período pedido acima
+ * disso usaria os mesmos números como se fossem do período maior e INFLARIA
+ * a cobertura (30/days). Em modo real, a janela efetiva é sempre 30.
+ */
+const effectiveDays = (days: number) => (real ? 30 : days);
+
+/** Cobertura geral e por marca (feedback 06). */
+function brandCoverageReport(rawDays: number) {
+  const days = effectiveDays(rawDays);
+  const inputs = real?.brandCoverage
+    ? real.brandCoverage.map((b) => ({ key: b.label, label: b.label, stockUnits: b.stockUnits, unitsSold: b.soldUnits }))
+    : (() => {
+        const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
+        for (const p of products) {
+          const cur = acc.get(p.brand) ?? { stockUnits: 0, unitsSold: 0 };
+          for (const s of stores) {
+            cur.stockUnits += stockQty.get(key(s.id, p.id)) ?? 0;
+            cur.unitsSold += soldQty.get(key(s.id, p.id)) ?? 0;
+          }
+          acc.set(p.brand, cur);
+        }
+        return [...acc.entries()].map(([label, v]) => ({ key: label, label: label || 'Sem marca', ...v }));
+      })();
+  const rows = computeCoverage(inputs, days);
+  const [total] = computeCoverage(
+    [{
+      key: '__total__',
+      label: 'GERAL',
+      stockUnits: rows.reduce((a, r) => a + r.stockUnits, 0),
+      unitsSold: rows.reduce((a, r) => a + r.unitsSold, 0),
+    }],
+    days,
+  );
+  return { days, total, rows };
+}
+
+/** Vendas por dimensão em unidades E receita (feedback 10). */
+function salesAnalysisReport(rawDays: number, by: string) {
+  const days = effectiveDays(rawDays);
+  let rows: { key: string; label: string; units: number; revenue: number }[] = [];
+  if (by === 'store') {
+    rows = stores.map((s) => {
+      const st = real?.storeStats?.find((x) => x.externalId === s.externalId);
+      const sales = salesByStore.find((x) => x.storeId === s.id);
+      // Receita preferindo a régua de ITENS (soldRevenue), a mesma das outras
+      // dimensões; datasets antigos caem no total da venda (valor_pago).
+      const units = st
+        ? st.soldUnits
+        : products.reduce((a, p) => a + (soldQty.get(key(s.id, p.id)) ?? 0), 0);
+      const revenue = st?.soldRevenue ?? sales?.total ?? 0;
+      return { key: s.id, label: s.name, units, revenue: round2(revenue) };
+    });
+  } else if (by === 'seller') {
+    rows = real?.bySeller
+      ? real.bySeller.map((v) => ({ key: v.label, label: v.label, units: v.units, revenue: v.revenue }))
+      : ['Ana', 'Bruno', 'Carla', 'Diego', 'Elisa'].map((nome, i) => ({
+          key: nome, label: nome, units: int(20, 90), revenue: money(15000, 60000 - i * 5000),
+        }));
+  } else if (by === 'product') {
+    rows = soldItems().map((x) => ({
+      key: x.p.id,
+      label: `${x.p.description}${x.p.sku ? ` (${x.p.sku})` : ''}`,
+      units: x.units,
+      revenue: round2(x.revenue),
+    }));
+  } else {
+    // brand | category
+    const acc = new Map<string, { units: number; revenue: number }>();
+    if (real) {
+      const src = by === 'brand' ? real.byBrand : real.byCategory;
+      for (const b of src) acc.set(by === 'brand' && b.label === '—' ? 'Sem marca' : b.label, { units: b.count, revenue: b.total });
+    } else {
+      for (const x of soldItems()) {
+        const k = by === 'brand' ? x.p.brand : x.p.category;
+        const cur = acc.get(k) ?? { units: 0, revenue: 0 };
+        cur.units += x.units;
+        cur.revenue = round2(cur.revenue + x.revenue);
+        acc.set(k, cur);
+      }
+    }
+    rows = [...acc.entries()].map(([label, v]) => ({ key: label, label: label || '—', ...v }));
+  }
+  rows.sort((a, b) => b.units - a.units);
+  return { days, by, rows: rows.slice(0, 500) };
 }
 
 function turnover(days: number) {
@@ -654,8 +767,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/bi/heatmap') return heatmap();
 
   // Relatórios
-  if (url === '/reports/abc') return abc(days);
+  if (url === '/reports/abc') return abc(days, one(params.dimension) === 'brand' ? 'brand' : 'product');
   if (url === '/reports/turnover') return turnover(days);
+  if (url === '/reports/coverage') return brandCoverageReport(days);
+  if (url === '/reports/sales-analysis') return salesAnalysisReport(days, one(params.by) ?? 'brand');
 
   // Planejamento & Compras (reusa a matemática do backend via @planning)
   const cfgForBrand = (brand: string | null) =>

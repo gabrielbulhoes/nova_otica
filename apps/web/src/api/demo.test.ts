@@ -74,3 +74,49 @@ describe('demo: /dashboard/coverage', () => {
     expect(months).toEqual([...months].sort((a, b) => a - b));
   });
 });
+
+describe('demo: relatórios da Onda 2', () => {
+  it('/reports/abc por marca agrega SKUs da mesma marca', () => {
+    const brand = get('/reports/abc', { dimension: 'brand' });
+    const sku = get('/reports/abc');
+    expect(brand.dimension).toBe('brand');
+    expect(sku.dimension).toBe('product');
+    expect(brand.rows.length).toBeLessThan(sku.rows.length);
+    // Receita total é a mesma nas duas dimensões (mesma base de itens).
+    expect(brand.totalRevenue).toBeCloseTo(sku.totalRevenue, 1);
+    // % acumulado fecha em ~100 e as classes seguem a ordem A→B→C.
+    const classes = brand.rows.map((r: any) => r.class).join('');
+    expect(classes).toMatch(/^A+B*C*$/);
+  });
+
+  it('/reports/coverage traz linha GERAL coerente com as marcas', () => {
+    const r = get('/reports/coverage');
+    const somaEstoque = r.rows.reduce((a: number, x: any) => a + x.stockUnits, 0);
+    expect(r.total.stockUnits).toBe(somaEstoque);
+    expect(r.total.label).toBe('GERAL');
+    for (const row of r.rows) expect(['CRITICAL', 'HEALTHY', 'HIGH', 'EXCESS']).toContain(row.level);
+  });
+
+  it('/reports/sales-analysis responde todas as dimensões com unidades E receita', () => {
+    for (const by of ['brand', 'category', 'product', 'store', 'seller']) {
+      const r = get('/reports/sales-analysis', { by });
+      expect(r.by).toBe(by);
+      expect(r.rows.length, `dimensão ${by} vazia`).toBeGreaterThan(0);
+      for (const row of r.rows.slice(0, 5)) {
+        expect(row.units).toBeGreaterThanOrEqual(0);
+        expect(row.revenue).toBeGreaterThanOrEqual(0);
+        expect(typeof row.label).toBe('string');
+      }
+      // Ordenada por unidades (o foco do feedback 10).
+      const units = r.rows.map((x: any) => x.units);
+      expect(units).toEqual([...units].sort((a: number, b: number) => b - a));
+    }
+  });
+
+  it('análise por dimensão bate com o ABC na receita total (mesma base)', () => {
+    const abc = get('/reports/abc');
+    const porMarca = get('/reports/sales-analysis', { by: 'brand' });
+    const somaMarcas = porMarca.rows.reduce((a: number, x: any) => a + x.revenue, 0);
+    expect(somaMarcas).toBeCloseTo(abc.totalRevenue, 0);
+  });
+});
