@@ -1,7 +1,11 @@
 /**
- * Modo demonstração — dados fictícios servidos no próprio navegador.
- * Permite publicar o app como site estático (ex.: GitHub Pages) sem backend
- * nem banco. Ativado por VITE_DEMO=1; nenhum dado real é usado.
+ * Modo demonstração — dados servidos no próprio navegador, sem backend.
+ * Ativado por VITE_DEMO=1. Dois sabores:
+ * - padrão: dados FICTÍCIOS gerados aqui (site público);
+ * - real:   se apps/web/src/api/demo-real-data.json existir no build
+ *   (gerado por scripts/build-demo-real-data.mjs a partir dos fixtures da
+ *   sonda CDS — gitignorado), os cadastros/estoque/vendas exibidos são os
+ *   REAIS da rede, agregados e sem qualquer dado de cliente.
  */
 import {
   analyzeProduct,
@@ -12,6 +16,29 @@ import {
   DEFAULT_PLANNING_CONFIG,
   type StoreProductInput,
 } from '@planning';
+
+// Dataset real opcional: import.meta.glob devolve {} quando o arquivo não
+// existe — o build público segue 100% fictício sem nenhuma outra mudança.
+interface RealDataset {
+  label: string;
+  totals: {
+    revenue30d: number; salesCount30d: number; stockUnitsNetwork: number;
+    productCountNetwork: number; catalogSampled: number; storeCount: number;
+  };
+  stores: { externalId: string; name: string }[];
+  products: { externalId: string; sku: string; description: string; brand: string; category: string; price: number; cost: number | null }[];
+  stock: [string, string, number][];
+  sold: [string, string, number][];
+  salesByStore: { externalId: string; name: string; count: number; total: number }[];
+  dailySales: { date: string; total: number; count: number }[];
+  byPayment: { label: string; total: number; count: number }[];
+  byBrand: { label: string; total: number; count: number }[];
+  byCategory: { label: string; total: number; count: number }[];
+  productSales: { externalId: string; units: number; revenue: number }[];
+  weekdayStore: { storeExt: string; weekday: number; total: number }[];
+}
+const realModules = import.meta.glob('./demo-real-data.json', { eager: true }) as Record<string, { default: RealDataset }>;
+const real: RealDataset | null = Object.values(realModules)[0]?.default ?? null;
 
 const CATEGORIAS = ['Armação', 'Óculos de Sol', 'Lente', 'Acessório', 'Estojo'];
 const MARCAS = ['Ray-Ban', 'Oakley', 'Chilli Beans', 'Hoya', 'Bulget', 'Atitude'];
@@ -57,35 +84,61 @@ const STORE_NAMES: [string, string, string][] = [
   ['4', 'Belo Horizonte', 'MG'],
 ];
 
-const stores: Store[] = STORE_NAMES.map(([ext, city, state]) => ({
-  id: `st_${ext}`,
-  externalId: ext,
-  name: `Nova Ótica — ${city}`,
-  city,
-  state,
-  active: true,
-}));
+const stores: Store[] = real
+  ? real.stores.map((s) => ({
+      id: `st_${s.externalId}`,
+      externalId: s.externalId,
+      name: s.name,
+      city: '',
+      state: '',
+      active: true,
+    }))
+  : STORE_NAMES.map(([ext, city, state]) => ({
+      id: `st_${ext}`,
+      externalId: ext,
+      name: `Nova Ótica — ${city}`,
+      city,
+      state,
+      active: true,
+    }));
 
-const products: Product[] = Array.from({ length: 16 }, (_, i) => {
-  const category = CATEGORIAS[i % CATEGORIAS.length];
-  const brand = MARCAS[i % MARCAS.length];
-  return {
-    id: `pr_${1000 + i}`,
-    externalId: String(1000 + i),
-    sku: `${brand.slice(0, 3).toUpperCase()}-${1000 + i}`,
-    description: `${category} ${brand} ${CORES[i % CORES.length]}`,
-    brand,
-    category,
-    price: money(120, 1200),
-    color: CORES[i % CORES.length],
-    size: TAMS[i % TAMS.length],
-    minStock: 3,
-  };
-});
+const products: Product[] = real
+  ? real.products.map((p) => ({
+      id: `pr_${p.externalId}`,
+      externalId: p.externalId,
+      sku: p.sku,
+      description: p.description,
+      brand: p.brand || '—',
+      category: p.category || 'OUTROS',
+      price: p.price,
+      color: '',
+      size: '',
+      minStock: 3,
+    }))
+  : Array.from({ length: 16 }, (_, i) => {
+      const category = CATEGORIAS[i % CATEGORIAS.length];
+      const brand = MARCAS[i % MARCAS.length];
+      return {
+        id: `pr_${1000 + i}`,
+        externalId: String(1000 + i),
+        sku: `${brand.slice(0, 3).toUpperCase()}-${1000 + i}`,
+        description: `${category} ${brand} ${CORES[i % CORES.length]}`,
+        brand,
+        category,
+        price: money(120, 1200),
+        color: CORES[i % CORES.length],
+        size: TAMS[i % TAMS.length],
+        minStock: 3,
+      };
+    });
 
 // Matriz de estoque store×product
 const stockQty = new Map<string, number>();
-for (const st of stores) for (const p of products) stockQty.set(`${st.id}:${p.id}`, r() < 0.12 ? int(0, 2) : int(3, 30));
+if (real) {
+  for (const [stExt, prExt, qty] of real.stock) stockQty.set(`st_${stExt}:pr_${prExt}`, qty);
+} else {
+  for (const st of stores) for (const p of products) stockQty.set(`${st.id}:${p.id}`, r() < 0.12 ? int(0, 2) : int(3, 30));
+}
 const reserved = new Map<string, number>();
 // Overrides de estoque mínimo por loja (paridade com StockItem.minStock)
 const storeMinStock = new Map<string, number | null>();
@@ -93,21 +146,25 @@ const key = (s: string, p: string) => `${s}:${p}`;
 
 // Vendas por loja×produto no período (base do planejamento/redistribuição)
 const soldQty = new Map<string, number>();
-for (const st of stores) for (const p of products) soldQty.set(key(st.id, p.id), r() < 0.25 ? 0 : int(0, 24));
-// Posições-vitrine determinísticas: garantem exemplos claros de redistribuição
-// (vende muito e falta em SP; parado em BH) em qualquer seed.
-soldQty.set(key(stores[0].id, products[0].id), 36);
-stockQty.set(key(stores[0].id, products[0].id), 3);
-soldQty.set(key(stores[3].id, products[0].id), 0);
-stockQty.set(key(stores[3].id, products[0].id), 18);
-soldQty.set(key(stores[1].id, products[5].id), 20);
-stockQty.set(key(stores[1].id, products[5].id), 2);
-soldQty.set(key(stores[2].id, products[5].id), 0);
-stockQty.set(key(stores[2].id, products[5].id), 14);
-// Falta na rede inteira (transferir não resolve): compra urgente com prazo.
-for (const st of stores) {
-  soldQty.set(key(st.id, products[2].id), 15);
-  stockQty.set(key(st.id, products[2].id), 2);
+if (real) {
+  for (const [stExt, prExt, qty] of real.sold) soldQty.set(`st_${stExt}:pr_${prExt}`, qty);
+} else {
+  for (const st of stores) for (const p of products) soldQty.set(key(st.id, p.id), r() < 0.25 ? 0 : int(0, 24));
+  // Posições-vitrine determinísticas (SÓ no dataset fictício): exemplos claros
+  // de redistribuição em qualquer seed.
+  soldQty.set(key(stores[0].id, products[0].id), 36);
+  stockQty.set(key(stores[0].id, products[0].id), 3);
+  soldQty.set(key(stores[3].id, products[0].id), 0);
+  stockQty.set(key(stores[3].id, products[0].id), 18);
+  soldQty.set(key(stores[1].id, products[5].id), 20);
+  stockQty.set(key(stores[1].id, products[5].id), 2);
+  soldQty.set(key(stores[2].id, products[5].id), 0);
+  stockQty.set(key(stores[2].id, products[5].id), 14);
+  // Falta na rede inteira (transferir não resolve): compra urgente com prazo.
+  for (const st of stores) {
+    soldQty.set(key(st.id, products[2].id), 15);
+    stockQty.set(key(st.id, products[2].id), 2);
+  }
 }
 
 // Prazos por fornecedor (marca) editáveis na demo
@@ -161,15 +218,18 @@ const availableAt = (storeId: string, productId: string) =>
 
 // ─── Derivações de métricas ──────────────────────────────────────────────────
 
-const stockUnits = [...stockQty.values()].reduce((a, b) => a + b, 0);
-const salesByStore = stores.map((s) => ({
-  storeId: s.id,
-  storeName: s.name,
-  count: int(15, 30),
-  total: money(35000, 75000),
-}));
-const revenue = round2(salesByStore.reduce((a, b) => a + b.total, 0));
-const salesCount = salesByStore.reduce((a, b) => a + b.count, 0);
+// Com dados reais os totais são da REDE INTEIRA (pré-amostragem do catálogo).
+const stockUnits = real ? real.totals.stockUnitsNetwork : [...stockQty.values()].reduce((a, b) => a + b, 0);
+const salesByStore = real
+  ? real.salesByStore.map((s) => ({ storeId: `st_${s.externalId}`, storeName: s.name, count: s.count, total: s.total }))
+  : stores.map((s) => ({
+      storeId: s.id,
+      storeName: s.name,
+      count: int(15, 30),
+      total: money(35000, 75000),
+    }));
+const revenue = real ? real.totals.revenue30d : round2(salesByStore.reduce((a, b) => a + b.total, 0));
+const salesCount = real ? real.totals.salesCount30d : salesByStore.reduce((a, b) => a + b.count, 0);
 
 function stockRows(params: Record<string, string | undefined>) {
   const rows: Record<string, unknown>[] = [];
@@ -200,6 +260,14 @@ function stockRows(params: Record<string, string | undefined>) {
 
 function alerts() {
   const rows = stockRows({}).filter((x) => {
+    // Com o dataset real (catálogo amostrado), só alerta posições que EXISTEM
+    // na loja: linha de estoque presente ou venda no período. Sem isso, cada
+    // produto ausente numa filial viraria "ruptura" fantasma.
+    if (real) {
+      const k = key(x.storeId as string, x.productId as string);
+      const conhecido = stockQty.has(k) || (soldQty.get(k) ?? 0) > 0;
+      if (!conhecido) return false;
+    }
     const override = storeMinStock.get(key(x.storeId as string, x.productId as string));
     const threshold = override ?? (x.minStock as number);
     (x as Record<string, unknown>).minStock = threshold;
@@ -221,6 +289,11 @@ function alerts() {
 }
 
 function timeseries(days: number) {
+  if (real) {
+    // Série diária REAL (30 dias da sonda), recortada ao período pedido.
+    const points = real.dailySales.slice(-days).map((d) => ({ date: d.date, total: d.total, count: d.count }));
+    return { days, granularity: 'day', points };
+  }
   const points = [];
   const now = new Date();
   for (let i = days - 1; i >= 0; i -= 1) {
@@ -234,7 +307,10 @@ function timeseries(days: number) {
 function byDimension(by: string) {
   let rows: { key: string; label: string; total: number; count: number }[] = [];
   if (by === 'store') rows = salesByStore.map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }));
-  else if (by === 'payment') rows = PAG.map((m) => ({ key: m, label: m, total: money(20000, 70000), count: int(10, 40) }));
+  else if (real) {
+    const src = by === 'payment' ? real.byPayment : by === 'brand' ? real.byBrand : real.byCategory;
+    rows = src.map((m) => ({ key: m.label, label: m.label, total: m.total, count: m.count }));
+  } else if (by === 'payment') rows = PAG.map((m) => ({ key: m, label: m, total: money(20000, 70000), count: int(10, 40) }));
   else {
     const dims = by === 'brand' ? MARCAS : CATEGORIAS;
     rows = dims.map((m) => ({ key: m, label: m, total: money(15000, 60000), count: int(20, 90) }));
@@ -242,9 +318,17 @@ function byDimension(by: string) {
   return { by, rows: rows.sort((a, b) => b.total - a.total) };
 }
 
+const realSalesByProduct = new Map((real?.productSales ?? []).map((x) => [`pr_${x.externalId}`, x]));
+
 function abc(days: number) {
   const rows = products
-    .map((p) => ({ p, revenue: money(2000, 40000), units: int(5, 120) }))
+    .map((p) => {
+      const rs = realSalesByProduct.get(p.id);
+      return real
+        ? { p, revenue: rs?.revenue ?? 0, units: rs?.units ?? 0 }
+        : { p, revenue: money(2000, 40000), units: int(5, 120) };
+    })
+    .filter((x) => !real || x.revenue > 0)
     .sort((a, b) => b.revenue - a.revenue);
   const total = round2(rows.reduce((a, b) => a + b.revenue, 0));
   const summary = { A: { products: 0, revenue: 0 }, B: { products: 0, revenue: 0 }, C: { products: 0, revenue: 0 } };
@@ -268,7 +352,7 @@ function turnover(days: number) {
   return {
     days,
     rows: products.map((p) => {
-      const unitsSold = int(0, 60);
+      const unitsSold = real ? realSalesByProduct.get(p.id)?.units ?? 0 : int(0, 60);
       const currentStock = stores.reduce((a, s) => a + (stockQty.get(key(s.id, p.id)) ?? 0), 0);
       return {
         productId: p.id, description: p.description, brand: p.brand, category: p.category,
@@ -282,6 +366,22 @@ function turnover(days: number) {
 function salesFlow() {
   const links: { source: string; target: string; value: number }[] = [];
   const names = new Set<string>();
+  if (real) {
+    // Alocação proporcional: total real da categoria × participação real da
+    // loja no faturamento (top 6 × top 8 para o sankey respirar).
+    const cats = [...real.byCategory].sort((a, b) => b.total - a.total).slice(0, 6);
+    const tops = [...salesByStore].sort((a, b) => b.total - a.total).slice(0, 8);
+    const topTotal = tops.reduce((a, b) => a + b.total, 0) || 1;
+    for (const cat of cats)
+      for (const st of tops) {
+        const v = round2((cat.total * st.total) / topTotal);
+        if (v <= 0) continue;
+        links.push({ source: cat.label, target: st.storeName, value: v });
+        names.add(cat.label);
+        names.add(st.storeName);
+      }
+    return { nodes: [...names].map((name) => ({ name })), links };
+  }
   for (const cat of CATEGORIAS)
     for (const st of stores) {
       const v = money(2000, 25000);
@@ -310,7 +410,14 @@ function transferFlow() {
 function heatmap() {
   const yLabels = stores.map((s) => s.name);
   const cells: [number, number, number][] = [];
-  yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000))])));
+  if (real) {
+    const byKey = new Map(real.weekdayStore.map((w) => [`${w.storeExt}|${w.weekday}`, w.total]));
+    stores.forEach((s, yi) =>
+      WEEK.forEach((_, wd) => cells.push([wd, yi, Math.round(byKey.get(`${s.externalId}|${wd}`) ?? 0)])),
+    );
+  } else {
+    yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000))])));
+  }
   return { xLabels: WEEK, yLabels, cells };
 }
 

@@ -40,3 +40,4 @@ novaotica-demo-hostgator.zip
 
 # Amostras capturadas da CDS (podem conter dados de clientes) — nunca versionar
 apps/api/tmp/
+apps/web/src/api/demo-real-data.json
