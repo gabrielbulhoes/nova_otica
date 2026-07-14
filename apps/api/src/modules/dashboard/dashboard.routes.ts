@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
-import { asyncHandler, toNumber } from '../../http/helpers.js';
+import { asyncHandler, parseDays, toNumber } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
+import { computeStoreCoverage } from '../planning/planning.math.js';
 
 export const dashboardRouter = Router();
 
@@ -63,6 +64,56 @@ dashboardRouter.get(
           }
         : null,
     });
+  }),
+);
+
+/**
+ * GET /api/dashboard/coverage — cobertura de estoque por loja: unidades em
+ * estoque ÷ média mensal de unidades vendidas = estoque para X meses.
+ * Base de estoque = quantidade sincronizada (StockItem.quantity), a MESMA do
+ * card "Unidades em estoque" do /summary — reservas/ajustes internos ficam de
+ * fora de propósito para os dois indicadores baterem.
+ */
+dashboardRouter.get(
+  '/coverage',
+  asyncHandler(async (req, res) => {
+    const days = parseDays(req.query.days, 30, 365);
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+
+    const [stores, stockGrouped, soldRows] = await Promise.all([
+      prisma.store.findMany({
+        where: storeId ? { id: storeId } : {},
+        select: { id: true, name: true },
+      }),
+      prisma.stockItem.groupBy({
+        by: ['storeId'],
+        where: storeId ? { storeId } : {},
+        _sum: { quantity: true },
+      }),
+      prisma.$queryRaw<{ storeId: string; units: bigint }[]>(Prisma.sql`
+        SELECT s."storeId" AS "storeId", COALESCE(SUM(si.quantity), 0)::bigint AS units
+        FROM "SaleItem" si
+        JOIN "Sale" s ON s.id = si."saleId"
+        WHERE s."saleDate" >= ${since} AND s."storeId" IS NOT NULL
+        ${storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty}
+        GROUP BY s."storeId"
+      `),
+    ]);
+
+    const stockByStore = new Map(stockGrouped.map((g) => [g.storeId, g._sum.quantity ?? 0]));
+    const soldByStore = new Map(soldRows.map((r) => [r.storeId, Number(r.units)]));
+    const rows = computeStoreCoverage(
+      stores.map((s) => ({
+        storeId: s.id,
+        storeName: s.name,
+        stockUnits: stockByStore.get(s.id) ?? 0,
+        unitsSold: soldByStore.get(s.id) ?? 0,
+      })),
+      days,
+    );
+    res.json({ days, rows });
   }),
 );
 

@@ -368,6 +368,126 @@ input::placeholder {
   color: #a1a1a6;
 }
 
+/* ─── Filtro multi-seleção (MultiSelect) ────────────────────────────────── */
+
+.mselect {
+  position: relative;
+}
+.mselect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 8px 11px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 240px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.mselect-btn:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+  outline: none;
+}
+.mselect-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.mselect-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mselect-caret {
+  font-size: 11px;
+  color: var(--muted);
+}
+.mselect-pop {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 240px;
+  max-width: 320px;
+  background: var(--window-solid, #fff);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.mselect-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 6px;
+}
+.mselect-opt {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: inherit;
+  padding: 7px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.mselect-opt:hover {
+  background: var(--hover);
+}
+.mselect-opt.checked {
+  font-weight: 600;
+}
+.mselect-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #fff;
+  background: transparent;
+}
+.mselect-opt.checked .mselect-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.mselect-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 10px;
+}
+.mselect-actions {
+  border-top: 1px solid var(--border);
+  padding: 6px;
+}
+.mselect-actions button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 6px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+.mselect-actions button:hover {
+  background: var(--hover);
+}
+
 .btn {
   background: var(--accent);
   color: #fff;
@@ -748,9 +868,13 @@ th.num {
     background: rgba(28, 28, 30, 0.7);
   }
   input,
-  select {
+  select,
+  .mselect-btn {
     background: #1c1c1e;
     color: var(--text);
+  }
+  .mselect-btn.active {
+    color: var(--accent);
   }
   input::placeholder {
     color: #6a6a6e;

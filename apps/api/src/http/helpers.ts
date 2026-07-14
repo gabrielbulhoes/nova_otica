@@ -35,6 +35,21 @@ export function parseDays(v: unknown, def = 30, max = 365): number {
   return Number.isFinite(n) && n > 0 && n <= max ? Math.trunc(n) : def;
 }
 
+/**
+ * Filtro de múltiplos valores em query string → array sem vazios (undefined
+ * se nada sobrar). Aceita o parâmetro repetido (?storeId=a&storeId=b — como o
+ * axios/qs serializam arrays), em que cada elemento vale LITERALMENTE (pode
+ * conter vírgula), e também o atalho "a,b,c" num valor único.
+ */
+export function parseList(v: unknown): string[] | undefined {
+  const parts = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : [];
+  const items = parts
+    .filter((s): s is string => typeof s === 'string')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
 /** Paginação simples a partir de query string. */
 export function parsePaging(query: Record<string, unknown>, defLimit = 50, maxLimit = 200) {
   const limit = Math.min(Math.max(Number(query.limit) || defLimit, 1), maxLimit);

@@ -91,11 +91,17 @@ export interface DashboardSummary {
   } | null;
 }
 
-export interface SalesByStore {
-  storeId: string | null;
+export type CoverageLevel = 'CRITICAL' | 'HEALTHY' | 'HIGH' | 'EXCESS';
+
+export interface StoreCoverageRow {
+  storeId: string;
   storeName: string;
-  count: number;
-  total: number;
+  stockUnits: number;
+  unitsSold: number;
+  monthlyUnits: number;
+  /** Estoque para quantos meses no ritmo atual (null = sem venda no período). */
+  coverageMonths: number | null;
+  level: CoverageLevel;
 }
 
 export interface StockRow {
@@ -227,10 +233,12 @@ export interface Sale {
 // ─── Chamadas ────────────────────────────────────────────────────────────────
 
 export const getSummary = () => api.get<DashboardSummary>('/dashboard/summary').then((r) => r.data);
-export const getSalesByStore = () =>
-  api.get<{ rows: SalesByStore[] }>('/dashboard/sales-by-store').then((r) => r.data.rows);
+export const getStoreCoverage = (params?: Record<string, string | undefined>) =>
+  api.get<{ days: number; rows: StoreCoverageRow[] }>('/dashboard/coverage', { params }).then((r) => r.data);
 
-export const getStock = (params: Record<string, string | boolean | undefined>) =>
+// Arrays viram parâmetro repetido (?storeId=a&storeId=b) — cada valor segue
+// literal, então categorias com vírgula não quebram o filtro multi-seleção.
+export const getStock = (params: Record<string, string | string[] | boolean | undefined>) =>
   api.get<Paged<StockRow>>('/stock', { params }).then((r) => r.data);
 
 export const getStores = () => api.get<Paged<Store>>('/stores').then((r) => r.data);

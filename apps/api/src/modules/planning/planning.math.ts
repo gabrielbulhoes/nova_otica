@@ -744,3 +744,55 @@ export function buildPurchaseOrders(plans: ProductPlan[], days: number): Purchas
     orders,
   };
 }
+
+// ─── Cobertura de estoque por loja ───────────────────────────────────────────
+
+export interface StoreCoverageInput {
+  storeId: string;
+  storeName: string;
+  /** Unidades em estoque na loja (rede inteira do catálogo, não amostra). */
+  stockUnits: number;
+  /** Unidades vendidas pela loja no período analisado. */
+  unitsSold: number;
+}
+
+export type CoverageLevel = 'CRITICAL' | 'HEALTHY' | 'HIGH' | 'EXCESS';
+
+export interface StoreCoverageRow extends StoreCoverageInput {
+  /** Média mensal de unidades vendidas (normalizada do período para 30 dias). */
+  monthlyUnits: number;
+  /** Estoque para quantos meses no ritmo atual (null = sem venda no período). */
+  coverageMonths: number | null;
+  level: CoverageLevel;
+}
+
+export function classifyCoverage(months: number | null): CoverageLevel {
+  if (months === null) return 'EXCESS'; // estoque parado, sem nenhuma venda no período
+  if (months < 1) return 'CRITICAL';
+  if (months <= 6) return 'HEALTHY';
+  if (months <= 12) return 'HIGH';
+  return 'EXCESS';
+}
+
+/**
+ * Cobertura por loja: X unidades em estoque ÷ média mensal vendida = estoque
+ * para X meses. Lojas com menos fôlego primeiro (sem venda por último).
+ * Loja vazia (sem estoque e sem venda) é CRITICAL — não tem o que vender —,
+ * nunca "excesso".
+ */
+export function computeStoreCoverage(rows: StoreCoverageInput[], days: number): StoreCoverageRow[] {
+  const factor = days > 0 ? 30 / days : 0;
+  return rows
+    .map((r) => {
+      const monthlyUnits = round2(r.unitsSold * factor);
+      const coverageMonths = monthlyUnits > 0 ? round2(r.stockUnits / monthlyUnits) : null;
+      const level =
+        coverageMonths === null && r.stockUnits === 0 ? 'CRITICAL' : classifyCoverage(coverageMonths);
+      return { ...r, monthlyUnits, coverageMonths, level };
+    })
+    .sort(
+      (a, b) =>
+        (a.coverageMonths ?? Infinity) - (b.coverageMonths ?? Infinity) ||
+        a.storeName.localeCompare(b.storeName, 'pt-BR'),
+    );
+}
