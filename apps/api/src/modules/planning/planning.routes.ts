@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, parseDays } from '../../http/helpers.js';
+import type { ProductGroup } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
@@ -21,12 +22,16 @@ export const planningRouter = Router();
 // Janela padrão do planejamento: 90 dias de histórico de vendas.
 const days = (v: unknown) => parseDays(v, 90);
 
+// Recorte de cobertura (?group=): principal | lentes | todos (padrão).
+const group = (v: unknown): ProductGroup =>
+  v === 'principal' || v === 'lentes' ? v : 'todos';
+
 /** GET /api/planning/overview — capital imobilizado + Pareto + giro. */
 planningRouter.get(
   '/overview',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await planningOverview(days(req.query.days), storeId));
+    res.json(await planningOverview(days(req.query.days), storeId, group(req.query.group)));
   }),
 );
 
@@ -35,7 +40,7 @@ planningRouter.get(
   '/purchase-suggestions',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await purchaseSuggestions(days(req.query.days), storeId));
+    res.json(await purchaseSuggestions(days(req.query.days), storeId, group(req.query.group)));
   }),
 );
 
@@ -47,7 +52,7 @@ planningRouter.get(
   '/purchase-orders',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await purchaseOrders(days(req.query.days), storeId));
+    res.json(await purchaseOrders(days(req.query.days), storeId, group(req.query.group)));
   }),
 );
 
@@ -60,7 +65,7 @@ planningRouter.get(
   '/rebalance',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
-    res.json(await rebalancePlan(days(req.query.days)));
+    res.json(await rebalancePlan(days(req.query.days), group(req.query.group)));
   }),
 );
 

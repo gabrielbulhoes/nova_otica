@@ -17,6 +17,7 @@ import {
   settlePurchaseOrder,
   type MovementClass,
   type PurchaseOrder,
+  type ProductGroup,
   type PurchaseOrderRecord,
   type Recommendation,
   type RebalanceSuggestion,
@@ -40,6 +41,25 @@ const moveMeta: Record<MovementClass, { label: string; cls: string }> = {
 };
 
 type Filter = 'ALL' | Recommendation;
+
+/** Recortes de cobertura — vocabulário da operação (feedback do cliente). */
+const GROUP_OPTIONS: { value: ProductGroup; label: string; hint: string }[] = [
+  {
+    value: 'principal',
+    label: 'Cobertura principal',
+    hint: 'Óculos, óculos de grau (armações) e relógios — o que a rede chama de cobertura no dia a dia.',
+  },
+  {
+    value: 'lentes',
+    label: 'Lentes',
+    hint: 'Somente lentes — a visão usada para programar as reposições de lentes prontas.',
+  },
+  {
+    value: 'todos',
+    label: 'Consolidado',
+    hint: 'Todos os produtos juntos, incluindo estojos, acessórios e demais categorias.',
+  },
+];
 
 function Bar({ segments }: { segments: { value: number; color: string; label: string }[] }) {
   const total = segments.reduce((a, s) => a + s.value, 0) || 1;
@@ -641,18 +661,21 @@ export function Planning() {
   const { isAdmin } = useAuth();
   const [days, setDays] = useState('90');
   const [storeId, setStoreId] = useState('');
+  // Recorte de cobertura: a operação fala de "cobertura" como óculos + grau +
+  // relógio (principal); lentes são acompanhadas à parte; consolidado é tudo.
+  const [group, setGroup] = useState<ProductGroup>('principal');
   const [filter, setFilter] = useState<Filter>('ALL');
   const rebalanceRef = useRef<HTMLDivElement>(null);
   const ordersRef = useRef<HTMLDivElement>(null);
   const purchaseRef = useRef<HTMLDivElement>(null);
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
-  const params = { days, storeId: storeId || undefined };
+  const params = { days, storeId: storeId || undefined, group };
 
-  const overview = useQuery({ queryKey: ['planning-overview', days, storeId], queryFn: () => getPlanningOverview(params) });
-  const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId], queryFn: () => getPurchaseSuggestions(params) });
-  const rebalance = useQuery({ queryKey: ['planning-rebalance', days], queryFn: () => getRebalancePlan({ days }) });
-  const orders = useQuery({ queryKey: ['planning-orders', days, storeId], queryFn: () => getPurchaseOrders(params) });
+  const overview = useQuery({ queryKey: ['planning-overview', days, storeId, group], queryFn: () => getPlanningOverview(params) });
+  const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId, group], queryFn: () => getPurchaseSuggestions(params) });
+  const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
+  const orders = useQuery({ queryKey: ['planning-orders', days, storeId, group], queryFn: () => getPurchaseOrders(params) });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
   const filteredRows = useMemo(() => {
@@ -681,6 +704,18 @@ export function Planning() {
       />
 
       <div className="toolbar">
+        <div className="segmented" role="group" aria-label="Grupo de cobertura">
+          {GROUP_OPTIONS.map((g) => (
+            <button
+              key={g.value}
+              className={group === g.value ? 'active' : ''}
+              aria-pressed={group === g.value}
+              onClick={() => setGroup(g.value)}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
         <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período de análise">
           <option value="30">Últimos 30 dias</option>
           <option value="90">Últimos 90 dias</option>
@@ -696,6 +731,10 @@ export function Planning() {
             ))}
           </select>
         )}
+      </div>
+
+      <div className="muted" style={{ fontSize: 12.5, margin: '-14px 0 18px' }}>
+        {GROUP_OPTIONS.find((g) => g.value === group)!.hint}
       </div>
 
       {/* ── O que fazer hoje: prioridades em 1 olhada, ação em 1 clique ── */}

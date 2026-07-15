@@ -7,6 +7,7 @@ import {
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
   forecastDemand,
+  matchesProductGroup,
   paretoSummary,
   type ProductMetricsInput,
 } from '../src/modules/planning/planning.math.js';
@@ -348,5 +349,34 @@ describe('forecastDemand (suavização + sazonalidade)', () => {
     });
     expect(comForecast.forecast?.method).toBe('sazonal');
     expect(comForecast.reorderPoint).toBeGreaterThan(semForecast.reorderPoint);
+  });
+});
+
+describe('matchesProductGroup (recortes de cobertura)', () => {
+  it('cobertura principal = óculos + óculos de grau/armações + relógios', () => {
+    for (const cat of ['Óculos de Sol', 'OCULOS SOLAR', 'Armação', 'ARMACAO RX', 'Óculos de Grau', 'Relógio', 'RELOGIO']) {
+      expect(matchesProductGroup(cat, 'principal')).toBe(true);
+    }
+    for (const cat of ['Lente', 'LENTE PRONTA', 'Estojo', 'Acessório', null]) {
+      expect(matchesProductGroup(cat, 'principal')).toBe(false);
+    }
+  });
+
+  it('lentes isola qualquer categoria com "lente" — inclusive lente de grau', () => {
+    for (const cat of ['Lente', 'LENTES PRONTAS', 'Lente de contato', 'LENTE DE GRAU']) {
+      expect(matchesProductGroup(cat, 'lentes')).toBe(true);
+    }
+    expect(matchesProductGroup('Óculos de Grau', 'lentes')).toBe(false);
+    expect(matchesProductGroup('Armação', 'lentes')).toBe(false);
+  });
+
+  it('"lente" nunca vaza para o principal, mesmo citando grau', () => {
+    expect(matchesProductGroup('LENTE DE GRAU', 'principal')).toBe(false);
+  });
+
+  it('consolidado aceita tudo, inclusive sem categoria', () => {
+    for (const cat of ['Estojo', 'Acessório', 'Lente', 'Relógio', null, undefined]) {
+      expect(matchesProductGroup(cat, 'todos')).toBe(true);
+    }
   });
 });

@@ -38,6 +38,47 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
 export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
 
+// ─── Grupos de cobertura (recorte por categoria) ─────────────────────────────
+
+/**
+ * Visões de cobertura pedidas pela operação:
+ * - `principal`: o que a rede chama de "cobertura" no dia a dia — óculos
+ *   (solares), óculos de grau/armações e relógios;
+ * - `lentes`: lentes analisadas à parte, para as reposições;
+ * - `todos`: consolidado com todas as demais categorias (estojos, acessórios…).
+ */
+export type ProductGroup = 'principal' | 'lentes' | 'todos';
+
+export const PRODUCT_GROUPS: ProductGroup[] = ['principal', 'lentes', 'todos'];
+
+/** Normaliza para comparação: minúsculas, sem acentos. */
+const normCategory = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+/**
+ * Decide se uma categoria pertence ao grupo. O casamento é por palavra-chave
+ * normalizada (sem acento), tolerante às variações de nome vindas do ERP
+ * ("OCULOS SOLAR", "Armação RX", "RELOGIO", "Lente de contato"…).
+ * Categoria com "lente" nunca entra no principal, mesmo que também cite grau.
+ */
+export function matchesProductGroup(category: string | null | undefined, group: ProductGroup): boolean {
+  if (group === 'todos') return true;
+  const c = normCategory(category ?? '');
+  const isLente = c.includes('lente');
+  if (group === 'lentes') return isLente;
+  if (isLente) return false;
+  return (
+    c.includes('oculos') ||
+    c.includes('armacao') ||
+    c.includes('relogio') ||
+    c.includes('grau') ||
+    c.includes('solar')
+  );
+}
+
 // ─── Previsão de demanda (suavização + sazonalidade) ────────────────────────
 
 /** Um bucket mensal do histórico de vendas (mês calendário 1–12). */

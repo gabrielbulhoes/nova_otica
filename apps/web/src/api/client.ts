@@ -377,6 +377,8 @@ export const setMinStock = (productId: string, minStock: number | null, storeId?
 
 export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
+/** Recorte de cobertura: principal (óculos+grau+relógio), lentes ou tudo. */
+export type ProductGroup = 'principal' | 'lentes' | 'todos';
 
 export interface ProductPlan {
   productId: string;

@@ -10,9 +10,11 @@ import {
   buildRebalance,
   buildSuggestions,
   DEFAULT_PLANNING_CONFIG,
+  matchesProductGroup,
   type FairSplitInput,
   type PlanningConfig,
   type DemandHistory,
+  type ProductGroup,
   type ProductMetricsInput,
   type ProductPlan,
   type StoreProductInput,
@@ -47,7 +49,11 @@ async function supplierConfigResolver(): Promise<(brand: string | null) => Plann
  * unidades vendidas no período, estoque atual, custo e preço.
  * Quando o custo não está preenchido, estima-se 55% do preço (margem típica).
  */
-export async function planningInputs(days: number, storeId?: string): Promise<ProductMetricsInput[]> {
+export async function planningInputs(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'todos',
+): Promise<ProductMetricsInput[]> {
   const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) } };
   if (storeId) saleFilter.storeId = storeId;
 
@@ -89,7 +95,9 @@ export async function planningInputs(days: number, storeId?: string): Promise<Pr
   ]);
 
   const currentMonth = new Date().getMonth() + 1;
-  return products.map((p) => {
+  // Recorte de cobertura: principal (óculos/grau/relógio), lentes ou tudo.
+  const scoped = products.filter((p) => matchesProductGroup(p.category, group));
+  return scoped.map((p) => {
     const price = toNumber(p.price) ?? 0;
     const cost = toNumber(p.cost) ?? round2(price * 0.55);
     const unitsSold = soldBy.get(p.id) ?? 0;
@@ -181,24 +189,27 @@ async function onOrderQuantities(): Promise<Map<string, number>> {
   return byProduct;
 }
 
-async function plans(days: number, storeId?: string): Promise<ProductPlan[]> {
-  const [inputs, cfgFor] = await Promise.all([planningInputs(days, storeId), supplierConfigResolver()]);
+async function plans(days: number, storeId?: string, group: ProductGroup = 'todos'): Promise<ProductPlan[]> {
+  const [inputs, cfgFor] = await Promise.all([
+    planningInputs(days, storeId, group),
+    supplierConfigResolver(),
+  ]);
   return inputs.map((i) => analyzeProduct(i, days, cfgFor(i.brand)));
 }
 
 /** Panorama de capital imobilizado + Pareto (80/20) da receita. */
-export async function planningOverview(days: number, storeId?: string) {
-  return buildOverview(await plans(days, storeId), days);
+export async function planningOverview(days: number, storeId?: string, group: ProductGroup = 'todos') {
+  return buildOverview(await plans(days, storeId, group), days);
 }
 
 /** Recomendações de compra (comprar / manter / não comprar / liquidar). */
-export async function purchaseSuggestions(days: number, storeId?: string) {
-  return buildSuggestions(await plans(days, storeId), days);
+export async function purchaseSuggestions(days: number, storeId?: string, group: ProductGroup = 'todos') {
+  return buildSuggestions(await plans(days, storeId, group), days);
 }
 
 /** Rascunhos de ordem de compra agrupados por fornecedor (marca). */
-export async function purchaseOrders(days: number, storeId?: string) {
-  return buildPurchaseOrders(await plans(days, storeId), days);
+export async function purchaseOrders(days: number, storeId?: string, group: ProductGroup = 'todos') {
+  return buildPurchaseOrders(await plans(days, storeId, group), days);
 }
 
 /**
@@ -222,7 +233,7 @@ export async function publishPlanningAlert(days = 90): Promise<void> {
  * Redistribuição entre lojas: cruza vendas do período × estoque atual por
  * loja e sugere transferências de onde sobra/está parado para onde vende.
  */
-export async function rebalancePlan(days: number) {
+export async function rebalancePlan(days: number, group: ProductGroup = 'todos') {
   const [sold, stock, stores, cfgFor] = await Promise.all([
     prisma.saleItem.findMany({
       where: {
@@ -260,7 +271,7 @@ export async function rebalancePlan(days: number) {
   const productIds = Array.from(new Set(Array.from(positions.values()).map((p) => p.productId)));
   const products = await prisma.product.findMany({
     where: { id: { in: productIds } },
-    select: { id: true, description: true, brand: true },
+    select: { id: true, description: true, brand: true, category: true },
   });
   const productBy = new Map(products.map((p) => [p.id, p]));
 
@@ -268,6 +279,7 @@ export async function rebalancePlan(days: number) {
   for (const pos of positions.values()) {
     const product = productBy.get(pos.productId);
     if (!product) continue;
+    if (!matchesProductGroup(product.category, group)) continue;
     inputs.push({
       storeId: pos.storeId,
       storeName: storeName.get(pos.storeId) ?? '—',

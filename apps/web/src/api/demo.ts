@@ -10,6 +10,7 @@
 import {
   abcFromItems,
   analyzeProduct,
+  matchesProductGroup,
   buildBrandMix,
   buildFairSplit,
   buildOverview,
@@ -23,6 +24,7 @@ import {
   type BrandBannerInput,
   type FairSplitInput,
   type StoreCoverageInput,
+  type ProductGroup,
   type StoreProductInput,
 } from '@planning';
 
@@ -817,9 +819,9 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     };
   };
 
-  const planningPlans = (period: number, storeId?: string) => {
+  const planningPlans = (period: number, storeId?: string, group: ProductGroup = 'todos') => {
     const scope = storeId ? stores.filter((s) => s.id === storeId) : stores;
-    return products.map((prod) =>
+    return products.filter((prod) => matchesProductGroup(prod.category, group)).map((prod) =>
       analyzeProduct(
         {
           productId: prod.id,
@@ -839,11 +841,14 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     );
   };
   const planDays = Number(one(params.days)) || 90;
-  if (url === '/planning/overview') return buildOverview(planningPlans(planDays, one(params.storeId)), planDays);
+  const rawGroup = one(params.group);
+  const planGroup: ProductGroup = rawGroup === 'principal' || rawGroup === 'lentes' ? rawGroup : 'todos';
+  if (url === '/planning/overview')
+    return buildOverview(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-suggestions')
-    return buildSuggestions(planningPlans(planDays, one(params.storeId)), planDays);
+    return buildSuggestions(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-orders' && m === 'GET')
-    return buildPurchaseOrders(planningPlans(planDays, one(params.storeId)), planDays);
+    return buildPurchaseOrders(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-orders' && m === 'POST') {
     const items = (body.items ?? []) as DemoOrderRecord['items'];
     const leadTimeDays = Number(body.leadTimeDays) || 14;
@@ -887,7 +892,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/planning/rebalance') {
     const inputs: StoreProductInput[] = [];
     for (const s of stores)
-      for (const prod of products)
+      for (const prod of products.filter((x) => matchesProductGroup(x.category, planGroup)))
         inputs.push({
           storeId: s.id,
           storeName: s.name,
