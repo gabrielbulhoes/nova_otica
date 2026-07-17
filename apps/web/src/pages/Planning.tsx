@@ -17,6 +17,7 @@ import {
   settlePurchaseOrder,
   type MovementClass,
   type PurchaseOrder,
+  type ProductGroup,
   type PurchaseOrderRecord,
   type Recommendation,
   type RebalanceSuggestion,
@@ -40,6 +41,25 @@ const moveMeta: Record<MovementClass, { label: string; cls: string }> = {
 };
 
 type Filter = 'ALL' | Recommendation;
+
+/** Recortes de cobertura — vocabulário da operação (feedback do cliente). */
+const GROUP_OPTIONS: { value: ProductGroup; label: string; hint: string }[] = [
+  {
+    value: 'principal',
+    label: 'Cobertura principal',
+    hint: 'Óculos, óculos de grau (armações) e relógios — o que a rede chama de cobertura no dia a dia.',
+  },
+  {
+    value: 'lentes',
+    label: 'Lentes',
+    hint: 'Somente lentes — a visão usada para programar as reposições de lentes prontas.',
+  },
+  {
+    value: 'todos',
+    label: 'Consolidado',
+    hint: 'Todos os produtos juntos, incluindo estojos, acessórios e demais categorias.',
+  },
+];
 
 function Bar({ segments }: { segments: { value: number; color: string; label: string }[] }) {
   const total = segments.reduce((a, s) => a + s.value, 0) || 1;
@@ -69,6 +89,25 @@ function OrderBy({ inDays, leadTimeDays }: { inDays: number | null; leadTimeDays
     <span className={`badge ${cls}`} title={`Prazo do fornecedor: ${leadTimeDays} dias. Pedido deve ser feito ${inDays === 0 ? 'hoje' : `em até ${inDays} dias`} para não romper.`}>
       {label}
     </span>
+  );
+}
+
+/** Selo de confiabilidade da decisão (0–100), com cor por faixa. */
+function Confidence({ value }: { value: number }) {
+  const cls = value >= 75 ? 'green' : value >= 50 ? 'amber' : 'gray';
+  return (
+    <span className={`badge ${cls}`} title="Confiabilidade da recomendação: quanto mais vendas e histórico, mais confiável.">
+      {value}%
+    </span>
+  );
+}
+
+/** Explicação curta e amigável do porquê da decisão. */
+function WhyNote({ text }: { text: string }) {
+  return (
+    <div className="muted" style={{ fontSize: 11.5, marginTop: 3, lineHeight: 1.35 }}>
+      💡 {text}
+    </div>
   );
 }
 
@@ -138,6 +177,7 @@ function TwoStepButton({
 function orderCsv(order: PurchaseOrder): string {
   type Row = {
     fornecedor: string;
+    marca: string;
     produto: string;
     categoria: string;
     quantidade: number | string;
@@ -148,6 +188,7 @@ function orderCsv(order: PurchaseOrder): string {
   };
   const rows: Row[] = order.items.map((it) => ({
     fornecedor: order.supplier,
+    marca: it.brand ?? '',
     produto: it.description,
     categoria: it.category ?? '',
     quantidade: it.quantity,
@@ -158,6 +199,7 @@ function orderCsv(order: PurchaseOrder): string {
   }));
   rows.push({
     fornecedor: order.supplier,
+    marca: '',
     produto: 'TOTAL DO PEDIDO',
     categoria: '',
     quantidade: order.units,
@@ -168,6 +210,7 @@ function orderCsv(order: PurchaseOrder): string {
   });
   return toCsv(rows, [
     { key: 'fornecedor', label: 'Fornecedor' },
+    { key: 'marca', label: 'Marca' },
     { key: 'produto', label: 'Produto' },
     { key: 'categoria', label: 'Categoria' },
     { key: 'quantidade', label: 'Quantidade' },
@@ -225,8 +268,11 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
       >
         <span style={{ fontSize: 12, color: 'var(--muted)', width: 14 }}>{open ? '▾' : '▸'}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600 }}>{order.supplier}</div>
+          <div style={{ fontWeight: 600 }}>
+            <span className="muted" style={{ fontWeight: 500, fontSize: 12 }}>Fornecedor:</span> {order.supplier}
+          </div>
           <div className="muted" style={{ fontSize: 12 }}>
+            {order.brands.length > 0 && <>marcas: {order.brands.join(', ')} · </>}
             {order.items.length} {order.items.length === 1 ? 'item' : 'itens'} · {order.units} un. · entrega em{' '}
             {order.leadTimeDays} dias
             {order.stockoutInDays !== null && (
@@ -264,23 +310,29 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
           <thead>
             <tr>
               <th>Produto</th>
+              <th>Marca</th>
               <th>Categoria</th>
               <th className="num">Qtde</th>
               <th className="num">Custo unit.</th>
               <th className="num">Total</th>
               <th>Pedir até</th>
+              <th>Confiança</th>
             </tr>
           </thead>
           <tbody>
             {order.items.map((it) => (
               <tr key={it.productId}>
                 <td>{it.description}</td>
+                <td>{it.brand ?? '—'}</td>
                 <td>{it.category ?? '—'}</td>
                 <td className="num">{it.quantity}</td>
                 <td className="num">{formatBRL(it.unitCost)}</td>
                 <td className="num">{formatBRL(it.total)}</td>
                 <td>
                   <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
+                </td>
+                <td>
+                  <Confidence value={it.confidence} />
                 </td>
               </tr>
             ))}
@@ -410,8 +462,12 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
   return (
     <tr>
       <td>
-        {s.description}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>{s.description}</span>
+          <Confidence value={s.confidence} />
+        </div>
         <div className="muted" style={{ fontSize: 11.5 }}>{s.reason}</div>
+        <WhyNote text={s.friendlyReason} />
       </td>
       <td style={{ whiteSpace: 'nowrap' }}>
         {s.fromStoreName.replace('Nova Ótica — ', '')} <span className="muted">→</span>{' '}
@@ -641,18 +697,21 @@ export function Planning() {
   const { isAdmin } = useAuth();
   const [days, setDays] = useState('90');
   const [storeId, setStoreId] = useState('');
+  // Recorte de cobertura: a operação fala de "cobertura" como óculos + grau +
+  // relógio (principal); lentes são acompanhadas à parte; consolidado é tudo.
+  const [group, setGroup] = useState<ProductGroup>('principal');
   const [filter, setFilter] = useState<Filter>('ALL');
   const rebalanceRef = useRef<HTMLDivElement>(null);
   const ordersRef = useRef<HTMLDivElement>(null);
   const purchaseRef = useRef<HTMLDivElement>(null);
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
-  const params = { days, storeId: storeId || undefined };
+  const params = { days, storeId: storeId || undefined, group };
 
-  const overview = useQuery({ queryKey: ['planning-overview', days, storeId], queryFn: () => getPlanningOverview(params) });
-  const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId], queryFn: () => getPurchaseSuggestions(params) });
-  const rebalance = useQuery({ queryKey: ['planning-rebalance', days], queryFn: () => getRebalancePlan({ days }) });
-  const orders = useQuery({ queryKey: ['planning-orders', days, storeId], queryFn: () => getPurchaseOrders(params) });
+  const overview = useQuery({ queryKey: ['planning-overview', days, storeId, group], queryFn: () => getPlanningOverview(params) });
+  const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId, group], queryFn: () => getPurchaseSuggestions(params) });
+  const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
+  const orders = useQuery({ queryKey: ['planning-orders', days, storeId, group], queryFn: () => getPurchaseOrders(params) });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
   const filteredRows = useMemo(() => {
@@ -681,6 +740,18 @@ export function Planning() {
       />
 
       <div className="toolbar">
+        <div className="segmented" role="group" aria-label="Grupo de cobertura">
+          {GROUP_OPTIONS.map((g) => (
+            <button
+              key={g.value}
+              className={group === g.value ? 'active' : ''}
+              aria-pressed={group === g.value}
+              onClick={() => setGroup(g.value)}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
         <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período de análise">
           <option value="30">Últimos 30 dias</option>
           <option value="90">Últimos 90 dias</option>
@@ -696,6 +767,10 @@ export function Planning() {
             ))}
           </select>
         )}
+      </div>
+
+      <div className="muted" style={{ fontSize: 12.5, margin: '-14px 0 18px' }}>
+        {GROUP_OPTIONS.find((g) => g.value === group)!.hint}
       </div>
 
       {/* ── O que fazer hoje: prioridades em 1 olhada, ação em 1 clique ── */}
@@ -840,6 +915,7 @@ export function Planning() {
                   <th className="num">Vendas/dia</th>
                   <th className="num">Cobertura</th>
                   <th>Recomendação</th>
+                  <th className="num">Confiança</th>
                   <th className="num">Comprar</th>
                   <th>Pedir até</th>
                   <th className="num">Capital</th>
@@ -888,7 +964,9 @@ export function Planning() {
                       <span className={`badge ${recMeta[r.recommendation].cls}`} title={r.reason}>
                         {recMeta[r.recommendation].label}
                       </span>
+                      <WhyNote text={r.friendlyReason} />
                     </td>
+                    <td className="num"><Confidence value={r.confidence} /></td>
                     <td className="num">{r.suggestedQty > 0 ? r.suggestedQty : '—'}</td>
                     <td>
                       {r.recommendation === 'BUY' ? (
@@ -902,7 +980,7 @@ export function Planning() {
                 ))}
                 {filteredRows.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="empty">Nenhum item nesta categoria.</td>
+                    <td colSpan={10} className="empty">Nenhum item nesta categoria.</td>
                   </tr>
                 )}
               </tbody>

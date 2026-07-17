@@ -5,6 +5,8 @@ import {
   abcFromItems,
   buildBrandMix,
   computeCoverage,
+  extractBrand,
+  isMadeToOrderLens,
   type AbcDimension,
   type AbcResult,
   type BrandBannerInput,
@@ -40,28 +42,34 @@ export async function abcCurve(
   if (storeId) saleFilter.storeId = storeId;
 
   if (dimension === 'brand') {
-    // LEFT JOIN: item sem produto vinculado cai em "Sem marca" em vez de
-    // sumir — os totais fecham com as outras dimensões.
-    const grouped = await prisma.$queryRaw<{ brand: string | null; revenue: number; units: bigint }[]>(
-      Prisma.sql`
-        SELECT p.brand AS brand, COALESCE(SUM(si.total), 0)::float AS revenue,
-               COALESCE(SUM(si.quantity), 0)::bigint AS units
-        FROM "SaleItem" si
-        JOIN "Sale" s ON s.id = si."saleId"
-        LEFT JOIN "Product" p ON p.id = si."productId"
-        WHERE s."saleDate" >= ${periodStart(days)}
-        ${storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty}
-        GROUP BY p.brand
-      `,
-    );
+    // Marca REAL do produto, extraída da descrição (o campo p.brand carrega o
+    // fornecedor). Receita/unidades são reagrupadas por marca extraída.
+    const grouped = await prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: { sale: saleFilter, productId: { not: null } },
+      _sum: { total: true, quantity: true },
+    });
+    const products = await prisma.product.findMany({
+      where: { id: { in: grouped.map((g) => g.productId as string) } },
+      select: { id: true, description: true },
+    });
+    const descById = new Map(products.map((p) => [p.id, p.description]));
+    const byBrand = new Map<string, { revenue: number; units: number }>();
+    for (const g of grouped) {
+      const brand = extractBrand(descById.get(g.productId as string)) ?? 'Sem marca';
+      const cur = byBrand.get(brand) ?? { revenue: 0, units: 0 };
+      cur.revenue += toNumber(g._sum.total) ?? 0;
+      cur.units += g._sum.quantity ?? 0;
+      byBrand.set(brand, cur);
+    }
     return abcFromItems(
-      grouped.map((g) => ({
-        key: g.brand ?? '—',
-        label: g.brand ?? 'Sem marca',
+      [...byBrand.entries()].map(([brand, v]) => ({
+        key: brand,
+        label: brand,
         brand: null,
         category: null,
-        revenue: g.revenue,
-        units: Number(g.units),
+        revenue: v.revenue,
+        units: v.units,
       })),
       days,
       dimension,
@@ -111,34 +119,42 @@ export interface BrandCoverageResult {
  * grade do CDS não traz fornecedor; o backfill do sistema vivo preenche).
  */
 export async function coverageByBrand(days: number, storeId?: string): Promise<BrandCoverageResult> {
-  const [stockRows, soldRows] = await Promise.all([
-    prisma.$queryRaw<{ brand: string | null; units: bigint }[]>(Prisma.sql`
-      SELECT p.brand AS brand, COALESCE(SUM(st.quantity), 0)::bigint AS units
-      FROM "StockItem" st
-      JOIN "Product" p ON p.id = st."productId"
-      ${storeId ? Prisma.sql`WHERE st."storeId" = ${storeId}` : Prisma.empty}
-      GROUP BY p.brand
-    `),
-    prisma.$queryRaw<{ brand: string | null; units: bigint }[]>(Prisma.sql`
-      SELECT p.brand AS brand, COALESCE(SUM(si.quantity), 0)::bigint AS units
-      FROM "SaleItem" si
-      JOIN "Sale" s ON s.id = si."saleId"
-      LEFT JOIN "Product" p ON p.id = si."productId"
-      WHERE s."saleDate" >= ${periodStart(days)}
-      ${storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty}
-      GROUP BY p.brand
-    `),
+  const stockWhere: Prisma.StockItemWhereInput = storeId ? { storeId } : {};
+  const [displayStock, sold, netStock] = await Promise.all([
+    // Estoque exibido (respeita o filtro de loja).
+    prisma.stockItem.groupBy({ by: ['productId'], where: stockWhere, _sum: { quantity: true } }),
+    // Vendas do período (respeita o filtro de loja).
+    prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: { sale: { saleDate: { gte: periodStart(days) }, ...(storeId ? { storeId } : {}) }, productId: { not: null } },
+      _sum: { quantity: true },
+    }),
+    // Estoque da REDE inteira (sem filtro) — decide "lente por encomenda".
+    prisma.stockItem.groupBy({ by: ['productId'], _sum: { quantity: true } }),
   ]);
 
+  const netById = new Map(netStock.map((r) => [r.productId, r._sum.quantity ?? 0]));
+  const ids = Array.from(new Set([...displayStock.map((r) => r.productId), ...sold.map((r) => r.productId as string)]));
+  const products = await prisma.product.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, description: true, category: true },
+  });
+  const metaById = new Map(products.map((p) => [p.id, p]));
+  const displayById = new Map(displayStock.map((r) => [r.productId, r._sum.quantity ?? 0]));
+  const soldById = new Map(sold.map((r) => [r.productId as string, r._sum.quantity ?? 0]));
+
   const byBrand = new Map<string, { stockUnits: number; unitsSold: number }>();
-  const bucket = (brand: string | null) => {
-    const k = brand ?? 'Sem marca';
-    const cur = byBrand.get(k) ?? { stockUnits: 0, unitsSold: 0 };
-    byBrand.set(k, cur);
-    return cur;
-  };
-  for (const r of stockRows) bucket(r.brand).stockUnits += Number(r.units);
-  for (const r of soldRows) bucket(r.brand).unitsSold += Number(r.units);
+  for (const id of ids) {
+    const meta = metaById.get(id);
+    if (!meta) continue;
+    // Lente por encomenda (grade da rede = 0) sai da cobertura de estoque.
+    if (isMadeToOrderLens(meta.category, netById.get(id) ?? 0)) continue;
+    const brand = extractBrand(meta.description) ?? 'Sem marca';
+    const cur = byBrand.get(brand) ?? { stockUnits: 0, unitsSold: 0 };
+    cur.stockUnits += displayById.get(id) ?? 0;
+    cur.unitsSold += soldById.get(id) ?? 0;
+    byBrand.set(brand, cur);
+  }
 
   const rows = computeCoverage(
     [...byBrand.entries()].map(([label, v]) => ({ key: label, label, ...v })),
@@ -214,8 +230,34 @@ export async function salesAnalysis(
     };
   }
 
+  // Marca: agrupa pela marca REAL extraída da descrição (p.brand = fornecedor).
+  if (by === 'brand') {
+    const grouped = await prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) }, productId: { not: null } },
+      _sum: { quantity: true, total: true },
+    });
+    const products = await prisma.product.findMany({
+      where: { id: { in: grouped.map((g) => g.productId as string) } },
+      select: { id: true, description: true },
+    });
+    const descById = new Map(products.map((p) => [p.id, p.description]));
+    const byBrand = new Map<string, { units: number; revenue: number }>();
+    for (const g of grouped) {
+      const brand = extractBrand(descById.get(g.productId as string)) ?? 'Sem marca';
+      const cur = byBrand.get(brand) ?? { units: 0, revenue: 0 };
+      cur.units += g._sum.quantity ?? 0;
+      cur.revenue += toNumber(g._sum.total) ?? 0;
+      byBrand.set(brand, cur);
+    }
+    const rows = [...byBrand.entries()]
+      .map(([brand, v]) => ({ key: brand, label: brand, units: v.units, revenue: round2(v.revenue) }))
+      .sort((a, b) => b.units - a.units)
+      .slice(0, ANALYSIS_LIMIT);
+    return { days, by, rows };
+  }
+
   const select = {
-    brand: Prisma.sql`p.brand`,
     category: Prisma.sql`p.category`,
     store: Prisma.sql`lo.name`,
     seller: Prisma.sql`se.name`,
@@ -295,6 +337,10 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
   });
   const stockByProduct = new Map(stock.map((s) => [s.productId, s._sum.quantity ?? 0]));
 
+  // Estoque da rede (sem filtro) — exclui lentes por encomenda do giro.
+  const netStock = await prisma.stockItem.groupBy({ by: ['productId'], _sum: { quantity: true } });
+  const netById = new Map(netStock.map((n) => [n.productId, n._sum.quantity ?? 0]));
+
   const productIds = Array.from(new Set([...soldByProduct.keys(), ...stockByProduct.keys()]));
   const products = await prisma.product.findMany({
     where: { id: { in: productIds } },
@@ -323,6 +369,7 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
       };
     })
     .filter((r) => r.unitsSold > 0 || r.currentStock > 0)
+    .filter((r) => !isMadeToOrderLens(r.category, netById.get(r.productId) ?? 0))
     .sort((a, b) => b.turnover - a.turnover);
 
   return { days, rows };

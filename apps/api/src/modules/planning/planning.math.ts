@@ -38,6 +38,112 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
 export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
 
+// ─── Grupos de cobertura (recorte por categoria) ─────────────────────────────
+
+/**
+ * Visões de cobertura pedidas pela operação:
+ * - `principal`: o que a rede chama de "cobertura" no dia a dia — óculos
+ *   (solares), óculos de grau/armações e relógios;
+ * - `lentes`: lentes analisadas à parte, para as reposições;
+ * - `todos`: consolidado com todas as demais categorias (estojos, acessórios…).
+ */
+export type ProductGroup = 'principal' | 'lentes' | 'todos';
+
+export const PRODUCT_GROUPS: ProductGroup[] = ['principal', 'lentes', 'todos'];
+
+/** Normaliza para comparação: minúsculas, sem acentos. */
+const normCategory = (s: string) =>
+  s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+/**
+ * Decide se uma categoria pertence ao grupo. O casamento é por palavra-chave
+ * normalizada (sem acento), tolerante às variações de nome vindas do ERP
+ * ("OCULOS SOLAR", "Armação RX", "RELOGIO", "Lente de contato"…).
+ * Categoria com "lente" nunca entra no principal, mesmo que também cite grau.
+ */
+export function matchesProductGroup(category: string | null | undefined, group: ProductGroup): boolean {
+  if (group === 'todos') return true;
+  const c = normCategory(category ?? '');
+  const isLente = c.includes('lente');
+  if (group === 'lentes') return isLente;
+  if (isLente) return false;
+  return (
+    c.includes('oculos') ||
+    c.includes('armacao') ||
+    c.includes('relogio') ||
+    c.includes('grau') ||
+    c.includes('solar')
+  );
+}
+
+// ─── Marca do produto (extraída da descrição) ───────────────────────────────
+
+/**
+ * No ERP da rede, o campo "marca" carrega na verdade o FORNECEDOR; a marca
+ * real do produto vem no nome/descrição (ex.: "Armação Ray-Ban RB1234 Preto").
+ * Esta função extrai a marca da descrição: descarta as palavras de
+ * categoria/tipo no começo e para na primeira cor, código de modelo (com
+ * dígito) ou tamanho, devolvendo 1–2 tokens como marca. Heurística — deve ser
+ * validada e afinada com as descrições reais quando a sonda CDS rodar.
+ */
+const CATEGORY_WORDS = new Set([
+  'armacao', 'armacoes', 'oculos', 'oculo', 'lente', 'lentes', 'relogio', 'relogios',
+  'estojo', 'estojos', 'acessorio', 'acessorios', 'sol', 'solar', 'grau', 'receituario',
+  'contato', 'infantil', 'de', 'do', 'da', 'para', 'com',
+]);
+const COLOR_WORDS = new Set([
+  'preto', 'preta', 'branco', 'branca', 'dourado', 'dourada', 'prata', 'prateado', 'azul',
+  'tartaruga', 'marrom', 'vermelho', 'vermelha', 'verde', 'rosa', 'cinza', 'nude',
+  'transparente', 'cristal', 'fume', 'degrade', 'chumbo', 'grafite', 'bordo', 'vinho',
+  'roxo', 'laranja', 'amarelo', 'bege', 'caramelo', 'gold', 'black', 'silver', 'blue',
+]);
+
+const norm = (s: string) =>
+  s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+export function extractBrand(description: string | null | undefined): string | null {
+  const raw = (description ?? '').trim();
+  if (!raw) return null;
+  const tokens = raw.split(/\s+/);
+  const picked: string[] = [];
+  let started = false;
+  for (const tok of tokens) {
+    const n = norm(tok).replace(/[.,;:]+$/, '');
+    if (!n) continue;
+    // Antes de começar a marca, pula categoria/tipo. Depois de começar,
+    // categoria encerra a marca.
+    if (CATEGORY_WORDS.has(n)) {
+      if (started) break;
+      continue;
+    }
+    if (COLOR_WORDS.has(n)) break; // cor encerra a marca
+    if (/\d/.test(n)) {
+      // código de modelo (RB1234, 0RX...) encerra — a menos que ainda não
+      // tenhamos pego nada (aí ignora e segue procurando).
+      if (started) break;
+      continue;
+    }
+    picked.push(tok);
+    started = true;
+    if (picked.length >= 2) break; // marcas têm 1–2 palavras (ex.: Ray-Ban, Chilli Beans)
+  }
+  return picked.length > 0 ? picked.join(' ') : null;
+}
+
+// ─── Lentes por encomenda (sem posição de estoque) ──────────────────────────
+
+/**
+ * Lente feita sob demanda: categoria de lente cuja grade nunca tem saldo na
+ * rede (soma de estoque = 0). Elas não devem entrar nos alertas de ruptura nem
+ * nos relatórios de estoque/cobertura — só no faturamento consolidado.
+ */
+export function isMadeToOrderLens(category: string | null | undefined, networkStockQty: number): boolean {
+  return matchesProductGroup(category, 'lentes') && networkStockQty <= 0;
+}
+
 // ─── Previsão de demanda (suavização + sazonalidade) ────────────────────────
 
 /** Um bucket mensal do histórico de vendas (mês calendário 1–12). */
@@ -173,6 +279,10 @@ export interface ProductPlan {
   /** Previsão de ruptura em dias, para itens em risco (senão null). */
   stockoutInDays: number | null;
   reason: string;
+  /** Explicação curta, direta e amigável do porquê da decisão. */
+  friendlyReason: string;
+  /** Confiabilidade da decisão (0–100): volume de vendas + histórico + método. */
+  confidence: number;
   /** Unidades a caminho (pedidos enviados e não recebidos). */
   onOrderQty: number;
   /** Prazo de ressuprimento aplicado (do fornecedor/marca ou padrão). */
@@ -189,6 +299,48 @@ export interface ProductPlan {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * Confiabilidade da decisão (0–100). Quanto mais vendas e mais histórico,
+ * mais confiável a previsão de demanda — e a previsão sazonal/tendência
+ * (com dados suficientes) soma um bônus. Para itens sem giro, a certeza de
+ * que estão "parados" cresce com o tempo observado.
+ */
+export function decisionConfidence(
+  unitsSold: number,
+  days: number,
+  hasDemand: boolean,
+  method: DemandForecast['method'] | null,
+): number {
+  const history = Math.min(1, days / 180); // 6 meses = histórico "cheio"
+  let conf: number;
+  if (!hasDemand) {
+    conf = 0.4 + 0.5 * history; // "parado": mais tempo observando = mais certeza
+  } else {
+    const volume = Math.min(1, unitsSold / 30); // 30 vendas no período satura
+    const methodBonus = method === 'sazonal' ? 0.1 : method === 'tendencia' ? 0.05 : 0;
+    conf = 0.35 + 0.45 * volume + 0.2 * history + methodBonus;
+  }
+  return Math.round(Math.min(0.97, Math.max(0.3, conf)) * 100);
+}
+
+/** Texto curto e amigável explicando a decisão para o lojista. */
+function friendlyReasonFor(rec: Recommendation, ctx: { onOrder: number; coverageDays: number | null }): string {
+  switch (rec) {
+    case 'BUY':
+      return 'Vende bem e o estoque está no limite — vale repor pra não deixar cliente na mão.';
+    case 'HOLD':
+      return ctx.onOrder > 0
+        ? 'Já tem pedido a caminho que cobre a necessidade — não precisa comprar de novo agora.'
+        : 'Estoque tranquilo pro ritmo de venda — pode deixar como está por enquanto.';
+    case 'DONT_BUY':
+      return ctx.coverageDays === null
+        ? 'Não vende e não tem em estoque — não vale a pena trazer.'
+        : 'Tem estoque de sobra pra bastante tempo — segura a compra pra não empatar dinheiro.';
+    case 'LIQUIDATE':
+      return 'Parado, sem sair há um tempo — melhor liquidar ou remanejar pra soltar o capital.';
+  }
+}
 
 /** Analisa um único produto e devolve o plano completo. */
 export function analyzeProduct(
@@ -278,6 +430,8 @@ export function analyzeProduct(
     capital,
     stockoutInDays,
     reason,
+    friendlyReason: friendlyReasonFor(recommendation, { onOrder, coverageDays }),
+    confidence: decisionConfidence(input.unitsSold, days, dailyDemand > 0, forecast?.method ?? null),
     onOrderQty: onOrder,
     leadTimeDays: cfg.leadTimeDays,
     orderByInDays,
@@ -511,6 +665,10 @@ export interface RebalanceSuggestion {
   /** Previsão de ruptura no destino (dias), quando houver. */
   stockoutInDays: number | null;
   reason: string;
+  /** Explicação curta e amigável do porquê transferir. */
+  friendlyReason: string;
+  /** Confiabilidade da sugestão (0–100): giro do destino e sobra na origem. */
+  confidence: number;
 }
 
 export interface RebalancePlan {
@@ -599,10 +757,21 @@ export function buildRebalance(
         donor.spare -= qty;
 
         const stockout = (receiver.coverage as number) < minCover ? Math.floor(receiver.coverage as number) : null;
-        const donorSide =
-          donor.dailyDemand === 0
-            ? `parado em ${donor.storeName} (${donor.stock} un. sem venda no período)`
-            : `sobrando em ${donor.storeName} (${fmtCover(donor.coverage)})`;
+        const donorParado = donor.dailyDemand === 0;
+        const donorSide = donorParado
+          ? `parado em ${donor.storeName} (${donor.stock} un. sem venda no período)`
+          : `sobrando em ${donor.storeName} (${fmtCover(donor.coverage)})`;
+        const fromShort = donor.storeName.replace(/^.*—\s*/, '');
+        const toShort = receiver.storeName.replace(/^.*—\s*/, '');
+        const friendly = donorParado
+          ? `Está parado em ${fromShort} e vende em ${toShort} — melhor mandar pra onde gira do que deixar encalhado.`
+          : `${toShort} está no limite e ${fromShort} tem de sobra — remaneja e ninguém fica sem, sem gastar nada.`;
+        // Confiança: giro no destino (quanto mais vende, mais seguro) + sobra
+        // folgada na origem. Escala simples, coerente com a de compra.
+        const recvRate = receiver.dailyDemand * days;
+        const volume = Math.min(1, recvRate / 30);
+        const spareRatio = donorParado ? 1 : Math.min(1, donor.spare / Math.max(1, qty));
+        const conf = Math.round(Math.min(0.97, Math.max(0.3, 0.4 + 0.4 * volume + 0.2 * spareRatio)) * 100);
         out.push({
           productId,
           description: p.description,
@@ -616,6 +785,8 @@ export function buildRebalance(
           toCoverageDays: receiver.coverage === null ? null : round1(receiver.coverage),
           stockoutInDays: stockout,
           reason: `Vende em ${receiver.storeName} (${fmtCover(receiver.coverage)}) e está ${donorSide}.`,
+          friendlyReason: friendly,
+          confidence: conf,
         });
       }
     }
@@ -645,6 +816,8 @@ export function buildRebalance(
 export interface PurchaseOrderItem {
   productId: string;
   description: string;
+  /** Marca real do produto (extraída da descrição), para exibir no pedido. */
+  brand: string | null;
   category: string | null;
   quantity: number;
   unitCost: number;
@@ -652,11 +825,15 @@ export interface PurchaseOrderItem {
   /** Dias restantes para pedir sem romper (0 = hoje). */
   orderByInDays: number | null;
   stockoutInDays: number | null;
+  /** Confiabilidade da sugestão de compra deste item (0–100). */
+  confidence: number;
 }
 
 export interface PurchaseOrder {
-  /** Fornecedor = marca do produto; itens sem marca ficam em "Sem marca". */
+  /** Fornecedor (campo "marca" do ERP); itens sem fornecedor ficam em "Sem fornecedor". */
   supplier: string;
+  /** Marcas de produto (reais) presentes neste pedido — resumo do fornecedor. */
+  brands: string[];
   leadTimeDays: number;
   items: PurchaseOrderItem[];
   units: number;
@@ -676,24 +853,25 @@ export interface PurchaseOrdersPlan {
   orders: PurchaseOrder[];
 }
 
-const NO_BRAND = 'Sem marca';
+const NO_SUPPLIER = 'Sem fornecedor';
 
 /**
  * Consolida os itens com recomendação COMPRAR em rascunhos de ordem de
- * compra, um por fornecedor (marca): quantidades, capital total e a
- * data-limite (o item mais urgente manda). Fornecedores mais urgentes
- * primeiro — é a fila de pedidos do dia.
+ * compra, um por FORNECEDOR (campo "marca" do ERP). Cada item mostra a marca
+ * real do produto (extraída da descrição), então dentro do pedido de um
+ * fornecedor as várias marcas aparecem. Fornecedores mais urgentes primeiro.
  */
 export function buildPurchaseOrders(plans: ProductPlan[], days: number): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
   for (const p of plans) {
     if (p.recommendation !== 'BUY' || p.suggestedQty <= 0) continue;
-    const supplier = p.brand ?? NO_BRAND;
+    const supplier = p.brand ?? NO_SUPPLIER;
     const order =
       bySupplier.get(supplier) ??
       ({
         supplier,
+        brands: [],
         leadTimeDays: p.leadTimeDays,
         items: [],
         units: 0,
@@ -702,15 +880,19 @@ export function buildPurchaseOrders(plans: ProductPlan[], days: number): Purchas
         stockoutInDays: null,
       } as PurchaseOrder);
 
+    const productBrand = extractBrand(p.description);
+    if (productBrand && !order.brands.includes(productBrand)) order.brands.push(productBrand);
     order.items.push({
       productId: p.productId,
       description: p.description,
+      brand: productBrand,
       category: p.category,
       quantity: p.suggestedQty,
       unitCost: p.unitCost,
       total: p.capital,
       orderByInDays: p.orderByInDays,
       stockoutInDays: p.stockoutInDays,
+      confidence: p.confidence,
     });
     order.units += p.suggestedQty;
     order.total = round2(order.total + p.capital);

@@ -5,8 +5,12 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
+  decisionConfidence,
   DEFAULT_PLANNING_CONFIG,
+  extractBrand,
   forecastDemand,
+  isMadeToOrderLens,
+  matchesProductGroup,
   paretoSummary,
   type ProductMetricsInput,
 } from '../src/modules/planning/planning.math.js';
@@ -220,14 +224,14 @@ describe('buildPurchaseOrders (pedidos por fornecedor)', () => {
     expect(po.summary.total).toBe(po.orders.reduce((s, o) => s + o.total, 0));
   });
 
-  it('ignora itens que não são BUY e usa "Sem marca" para brand null', () => {
+  it('ignora itens que não são BUY e usa "Sem fornecedor" para brand null', () => {
     const plans = [
-      mkPlan(null, 14, 90, 5), // BUY sem marca
+      mkPlan(null, 14, 90, 5), // BUY sem fornecedor
       mkPlan('Hoya', 14, 0, 10), // LIQUIDATE — fora do pedido
     ];
     const po = buildPurchaseOrders(plans, 90);
     expect(po.orders).toHaveLength(1);
-    expect(po.orders[0].supplier).toBe('Sem marca');
+    expect(po.orders[0].supplier).toBe('Sem fornecedor');
   });
 
   it('ordena fornecedores pela ruptura mais próxima (itens BUY já estão no ponto)', () => {
@@ -348,5 +352,114 @@ describe('forecastDemand (suavização + sazonalidade)', () => {
     });
     expect(comForecast.forecast?.method).toBe('sazonal');
     expect(comForecast.reorderPoint).toBeGreaterThan(semForecast.reorderPoint);
+  });
+});
+
+describe('matchesProductGroup (recortes de cobertura)', () => {
+  it('cobertura principal = óculos + óculos de grau/armações + relógios', () => {
+    for (const cat of ['Óculos de Sol', 'OCULOS SOLAR', 'Armação', 'ARMACAO RX', 'Óculos de Grau', 'Relógio', 'RELOGIO']) {
+      expect(matchesProductGroup(cat, 'principal')).toBe(true);
+    }
+    for (const cat of ['Lente', 'LENTE PRONTA', 'Estojo', 'Acessório', null]) {
+      expect(matchesProductGroup(cat, 'principal')).toBe(false);
+    }
+  });
+
+  it('lentes isola qualquer categoria com "lente" — inclusive lente de grau', () => {
+    for (const cat of ['Lente', 'LENTES PRONTAS', 'Lente de contato', 'LENTE DE GRAU']) {
+      expect(matchesProductGroup(cat, 'lentes')).toBe(true);
+    }
+    expect(matchesProductGroup('Óculos de Grau', 'lentes')).toBe(false);
+    expect(matchesProductGroup('Armação', 'lentes')).toBe(false);
+  });
+
+  it('"lente" nunca vaza para o principal, mesmo citando grau', () => {
+    expect(matchesProductGroup('LENTE DE GRAU', 'principal')).toBe(false);
+  });
+
+  it('consolidado aceita tudo, inclusive sem categoria', () => {
+    for (const cat of ['Estojo', 'Acessório', 'Lente', 'Relógio', null, undefined]) {
+      expect(matchesProductGroup(cat, 'todos')).toBe(true);
+    }
+  });
+});
+
+describe('extractBrand (marca a partir da descrição)', () => {
+  it('pula a categoria e pega a marca (1 palavra)', () => {
+    expect(extractBrand('Armação Oakley Preto')).toBe('Oakley');
+    expect(extractBrand('Óculos de Sol Bulget Azul')).toBe('Bulget');
+  });
+
+  it('reconhece marcas de 2 palavras', () => {
+    expect(extractBrand('Armação Ray-Ban RB1234 Preto')).toBe('Ray-Ban');
+    expect(extractBrand('Óculos Chilli Beans Vermelho')).toBe('Chilli Beans');
+  });
+
+  it('para no código de modelo e na cor', () => {
+    expect(extractBrand('Lente Hoya 1.67')).toBe('Hoya');
+    expect(extractBrand('Armação Atitude Dourado AT2020')).toBe('Atitude');
+  });
+
+  it('retorna null quando não há marca discernível', () => {
+    expect(extractBrand('')).toBeNull();
+    expect(extractBrand(null)).toBeNull();
+    expect(extractBrand(undefined)).toBeNull();
+    expect(extractBrand('Óculos de Sol')).toBeNull();
+  });
+});
+
+describe('isMadeToOrderLens (lente por encomenda)', () => {
+  it('lente sem saldo de rede = por encomenda', () => {
+    expect(isMadeToOrderLens('Lente', 0)).toBe(true);
+    expect(isMadeToOrderLens('LENTE DE GRAU', -3)).toBe(true);
+  });
+
+  it('lente com saldo de rede NÃO é por encomenda', () => {
+    expect(isMadeToOrderLens('Lente', 5)).toBe(false);
+  });
+
+  it('categoria que não é lente nunca é por encomenda, mesmo com saldo 0', () => {
+    expect(isMadeToOrderLens('Armação', 0)).toBe(false);
+    expect(isMadeToOrderLens('Óculos de Sol', 0)).toBe(false);
+    expect(isMadeToOrderLens(null, 0)).toBe(false);
+  });
+});
+
+describe('decisionConfidence (confiabilidade 0–100)', () => {
+  it('fica sempre no intervalo [30, 97]', () => {
+    expect(decisionConfidence(0, 0, false, null)).toBeGreaterThanOrEqual(30);
+    expect(decisionConfidence(1000, 365, true, 'sazonal')).toBeLessThanOrEqual(97);
+  });
+
+  it('mais vendas e mais histórico = mais confiança', () => {
+    const pouca = decisionConfidence(2, 30, true, 'media');
+    const muita = decisionConfidence(60, 180, true, 'media');
+    expect(muita).toBeGreaterThan(pouca);
+  });
+
+  it('previsão sazonal soma bônus sobre a média simples', () => {
+    const media = decisionConfidence(20, 120, true, 'media');
+    const sazonal = decisionConfidence(20, 120, true, 'sazonal');
+    expect(sazonal).toBeGreaterThan(media);
+  });
+
+  it('sem giro, a certeza de "parado" cresce com o tempo observado', () => {
+    const recente = decisionConfidence(0, 10, false, null);
+    const antigo = decisionConfidence(0, 180, false, null);
+    expect(antigo).toBeGreaterThan(recente);
+  });
+});
+
+describe('analyzeProduct expõe explicação amigável e confiança', () => {
+  it('todo plano traz friendlyReason e confidence', () => {
+    const plan = analyzeProduct(
+      { ...base, description: 'Armação Oakley Preto', unitsSold: 40, currentStock: 3 },
+      90,
+      DEFAULT_PLANNING_CONFIG,
+    );
+    expect(typeof plan.friendlyReason).toBe('string');
+    expect(plan.friendlyReason.length).toBeGreaterThan(0);
+    expect(plan.confidence).toBeGreaterThanOrEqual(30);
+    expect(plan.confidence).toBeLessThanOrEqual(97);
   });
 });

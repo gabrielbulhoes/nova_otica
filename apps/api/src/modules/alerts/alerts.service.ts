@@ -1,4 +1,6 @@
 import { env } from '../../config/env.js';
+import { prisma } from '../../lib/prisma.js';
+import { isMadeToOrderLens } from '../planning/planning.math.js';
 import { listStock } from '../stock/stock.service.js';
 
 export type AlertLevel = 'OUT' | 'LOW';
@@ -40,8 +42,15 @@ export async function stockAlerts(storeId?: string): Promise<{
   const { rows } = await listStock({ storeIds: storeId ? [storeId] : undefined, limit: 100_000, skip: 0 });
   const def = env.DEFAULT_MIN_STOCK;
 
+  // Lentes por encomenda (grade da rede = 0) não entram na ruptura: são feitas
+  // sob demanda, então saldo 0 é o esperado, não uma falta. Estoque de REDE
+  // (sem filtro de loja) decide — é uma propriedade do produto.
+  const netStock = await prisma.stockItem.groupBy({ by: ['productId'], _sum: { quantity: true } });
+  const netById = new Map(netStock.map((n) => [n.productId, n._sum.quantity ?? 0]));
+
   const alerts: StockAlert[] = [];
   for (const r of rows) {
+    if (isMadeToOrderLens(r.category, netById.get(r.productId) ?? 0)) continue;
     const threshold = resolveThreshold(r.storeMinStock, r.minStock, def);
     if (r.availableNow > threshold) continue;
     alerts.push({
