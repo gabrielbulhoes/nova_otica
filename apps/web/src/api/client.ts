@@ -401,6 +401,10 @@ export interface ProductPlan {
   capital: number;
   stockoutInDays: number | null;
   reason: string;
+  /** Explicação curta e amigável do porquê da decisão. */
+  friendlyReason: string;
+  /** Confiabilidade da decisão (0–100). */
+  confidence: number;
   /** Unidades a caminho (pedidos enviados e não recebidos). */
   onOrderQty: number;
   /** Prazo de ressuprimento aplicado (do fornecedor/marca ou padrão). */
@@ -457,6 +461,10 @@ export interface RebalanceSuggestion {
   /** Previsão de ruptura no destino (dias), quando houver. */
   stockoutInDays: number | null;
   reason: string;
+  /** Explicação curta e amigável do porquê transferir. */
+  friendlyReason: string;
+  /** Confiabilidade da sugestão (0–100). */
+  confidence: number;
 }
 
 export interface RebalancePlan {
@@ -475,16 +483,21 @@ export interface SupplierSetting {
 export interface PurchaseOrderItem {
   productId: string;
   description: string;
+  /** Marca real do produto (extraída da descrição). */
+  brand: string | null;
   category: string | null;
   quantity: number;
   unitCost: number;
   total: number;
   orderByInDays: number | null;
   stockoutInDays: number | null;
+  confidence: number;
 }
 
 export interface PurchaseOrder {
   supplier: string;
+  /** Marcas de produto presentes neste pedido (resumo do fornecedor). */
+  brands: string[];
   leadTimeDays: number;
   items: PurchaseOrderItem[];
   units: number;
