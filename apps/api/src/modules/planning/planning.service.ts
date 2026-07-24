@@ -5,6 +5,7 @@ import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
 import {
   analyzeProduct,
+  buildDecisionCards,
   buildFairSplit,
   buildOverview,
   buildPurchaseOrders,
@@ -213,6 +214,19 @@ export async function purchaseSuggestions(days: number, storeId?: string, group:
 /** Rascunhos de ordem de compra agrupados por fornecedor (marca). */
 export async function purchaseOrders(days: number, storeId?: string, group: ProductGroup = 'todos') {
   return buildPurchaseOrders(await plans(days, storeId, group), days);
+}
+
+/**
+ * Feed unificado de cards de decisão (compra + remanejamento + liquidação),
+ * com tipo, prioridade e impacto — a visualização de "portal de decisões".
+ * Compra/liquidação respeitam o recorte de loja; o remanejamento é de rede.
+ */
+export async function decisionBoard(days: number, storeId?: string, group: ProductGroup = 'principal') {
+  const [productPlans, reb] = await Promise.all([
+    plans(days, storeId, group),
+    rebalancePlan(days, group),
+  ]);
+  return buildDecisionCards(productPlans, reb.rows);
 }
 
 /**

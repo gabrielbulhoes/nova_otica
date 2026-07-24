@@ -4,6 +4,7 @@ import {
   buildOverview,
   buildPurchaseOrders,
   buildRebalance,
+  buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
   DEFAULT_PLANNING_CONFIG,
@@ -461,5 +462,68 @@ describe('analyzeProduct expõe explicação amigável e confiança', () => {
     expect(plan.friendlyReason.length).toBeGreaterThan(0);
     expect(plan.confidence).toBeGreaterThanOrEqual(30);
     expect(plan.confidence).toBeLessThanOrEqual(97);
+  });
+});
+
+describe('buildDecisionCards (portal de decisões — cards)', () => {
+  const buy = analyzeProduct(
+    { ...base, productId: 'buy1', description: 'Armação Oakley Preto', brand: 'Oakley', unitsSold: 60, currentStock: 2 },
+    90, DEFAULT_PLANNING_CONFIG,
+  );
+  const liq = analyzeProduct(
+    { ...base, productId: 'liq1', description: 'Óculos Bulget Azul', brand: 'Bulget', unitsSold: 0, currentStock: 10 },
+    90, DEFAULT_PLANNING_CONFIG,
+  );
+  const hold = analyzeProduct(
+    { ...base, productId: 'hold1', description: 'Armação Atitude', brand: 'Atitude', unitsSold: 6, currentStock: 20 },
+    90, DEFAULT_PLANNING_CONFIG,
+  );
+  const reb = buildRebalance(
+    [
+      { storeId: 'A', storeName: 'Nova Ótica — São Paulo', productId: 'x', description: 'Armação Ray-Ban', brand: 'Ray-Ban', unitsSold: 30, currentStock: 0 },
+      { storeId: 'B', storeName: 'Nova Ótica — Campinas', productId: 'x', description: 'Armação Ray-Ban', brand: 'Ray-Ban', unitsSold: 0, currentStock: 20 },
+    ],
+    90, () => DEFAULT_PLANNING_CONFIG,
+  );
+
+  it('gera cards de compra, liquidação e remanejamento; ignora HOLD/DONT_BUY', () => {
+    const { cards, summary } = buildDecisionCards([buy, liq, hold], reb.rows);
+    const types = cards.map((c) => c.type);
+    expect(types).toContain('COMPRA');
+    expect(types).toContain('LIQUIDACAO');
+    expect(types).toContain('REMANEJAMENTO');
+    // HOLD não vira card
+    expect(cards.some((c) => c.productId === 'hold1')).toBe(false);
+    expect(summary.total).toBe(cards.length);
+    expect(summary.byType.compra + summary.byType.remanejamento + summary.byType.liquidacao).toBe(summary.total);
+  });
+
+  it('todo card tem id "#", prioridade válida, confiança 0–100 e explicação', () => {
+    const { cards } = buildDecisionCards([buy, liq], reb.rows);
+    for (const c of cards) {
+      expect(c.id.startsWith('#')).toBe(true);
+      expect(['ALTA', 'MEDIA', 'BAIXA']).toContain(c.priority);
+      expect(c.confidence).toBeGreaterThanOrEqual(0);
+      expect(c.confidence).toBeLessThanOrEqual(100);
+      expect(typeof c.reason).toBe('string');
+      expect(c.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('ordena por prioridade (ALTA antes de BAIXA)', () => {
+    const { cards } = buildDecisionCards([buy, liq], reb.rows);
+    const rank = { ALTA: 0, MEDIA: 1, BAIXA: 2 } as const;
+    const ranks = cards.map((c) => rank[c.priority]);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+  });
+
+  it('compra traz custo do pedido; liquidação traz capital a liberar', () => {
+    const { cards } = buildDecisionCards([buy, liq], []);
+    const compra = cards.find((c) => c.type === 'COMPRA')!;
+    const liquid = cards.find((c) => c.type === 'LIQUIDACAO')!;
+    expect(compra.impact).toBeGreaterThan(0);
+    expect(compra.impactLabel).toMatch(/pedido/i);
+    expect(liquid.impact).toBeGreaterThan(0);
+    expect(liquid.impactLabel).toMatch(/liberar/i);
   });
 });

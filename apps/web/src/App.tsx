@@ -17,6 +17,7 @@ import { Stores } from './pages/Stores';
 import { Sync } from './pages/Sync';
 import { Reports } from './pages/Reports';
 import { Planning } from './pages/Planning';
+import { Decisions } from './pages/Decisions';
 import { Alerts } from './pages/Alerts';
 import { Loja } from './pages/Loja';
 import { ProductPage } from './pages/ProductPage';
@@ -61,6 +62,7 @@ export function App() {
         <Route path="transferencias" element={<Movements />} />
         <Route path="alertas" element={<Alerts />} />
         <Route path="relatorios" element={<Reports />} />
+        <Route path="decisoes" element={<Decisions />} />
         <Route path="planejamento" element={<Planning />} />
         <Route path="vendas" element={<Sales />} />
         <Route path="usuarios" element={<Usuarios />} />

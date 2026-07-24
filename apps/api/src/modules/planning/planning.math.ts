@@ -1230,3 +1230,175 @@ export function abcFromItems(items: AbcItem[], days: number, dimension: AbcDimen
   });
   return { days, dimension, totalRevenue: round2(totalRevenue), summary, rows };
 }
+
+// ─── Cards de decisão (portal unificado — paridade Chico) ────────────────────
+//
+// Unifica compra, remanejamento e liquidação num único feed de "cards" com
+// tipo, prioridade, impacto em R$ e a explicação amigável — a visualização que
+// o cliente pediu. Puro: alimenta o backend e a demo com os MESMOS dados que já
+// calculamos (analyzeProduct + buildRebalance), sem consulta nova.
+
+export type DecisionType = 'COMPRA' | 'REMANEJAMENTO' | 'LIQUIDACAO';
+export type DecisionPriority = 'ALTA' | 'MEDIA' | 'BAIXA';
+
+export interface DecisionCard {
+  id: string;
+  type: DecisionType;
+  title: string;
+  priority: DecisionPriority;
+  productId: string;
+  description: string;
+  brand: string | null;
+  /** Loja-alvo ou rota (De → Para) do card. */
+  target: string;
+  /** Quantidade envolvida (a comprar/transferir), quando se aplica. */
+  quantity: number | null;
+  /** Explicação curta e amigável do porquê. */
+  reason: string;
+  confidence: number;
+  /** Impacto financeiro do card em R$ (custo do pedido ou capital a liberar). */
+  impact: number;
+  impactLabel: string;
+  /** Urgência em dias (ruptura próxima); menor = mais urgente. */
+  urgencyDays: number | null;
+}
+
+export interface DecisionSummary {
+  total: number;
+  byType: { compra: number; remanejamento: number; liquidacao: number };
+  byPriority: { alta: number; media: number; baixa: number };
+  /** Impacto total sob decisão (R$) — soma do impacto de todos os cards. */
+  impactTotal: number;
+  /** Cards críticos (ruptura em ~7 dias ou menos). */
+  criticos: number;
+}
+
+export interface DecisionBoard {
+  summary: DecisionSummary;
+  cards: DecisionCard[];
+}
+
+const PRIORITY_RANK: Record<DecisionPriority, number> = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
+const shortStore = (name: string) => name.replace(/^.*—\s*/, '').trim();
+
+/** ID curto e estável por card (estilo "#72D.A1"), derivado do conteúdo. */
+function cardId(type: DecisionType, seed: string): string {
+  let h = 2166136261;
+  const s = type + '|' + seed;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const code = (h >>> 0).toString(36).toUpperCase().padStart(6, '0').slice(-6);
+  const prefix = type === 'COMPRA' ? 'C' : type === 'REMANEJAMENTO' ? 'R' : 'L';
+  return `#${prefix}${code.slice(0, 2)}.${code.slice(2, 5)}`;
+}
+
+function buyPriority(orderByInDays: number | null, stockoutInDays: number | null): DecisionPriority {
+  const d = orderByInDays ?? stockoutInDays;
+  if (d !== null && d <= 0) return 'ALTA';
+  if (d !== null && d <= 7) return 'ALTA';
+  if (d !== null && d <= 21) return 'MEDIA';
+  return 'BAIXA';
+}
+function urgencyPriority(stockoutInDays: number | null): DecisionPriority {
+  if (stockoutInDays === null) return 'BAIXA';
+  if (stockoutInDays <= 7) return 'ALTA';
+  if (stockoutInDays <= 21) return 'MEDIA';
+  return 'BAIXA';
+}
+function capitalPriority(value: number): DecisionPriority {
+  if (value >= 1500) return 'ALTA';
+  if (value >= 400) return 'MEDIA';
+  return 'BAIXA';
+}
+
+/**
+ * Monta o feed de cards de decisão a partir dos planos por produto (compra e
+ * liquidação) e das sugestões de remanejamento. Ordena por prioridade e, dentro
+ * dela, pelo maior impacto.
+ */
+export function buildDecisionCards(plans: ProductPlan[], rebalance: RebalanceSuggestion[]): DecisionBoard {
+  const cards: DecisionCard[] = [];
+
+  for (const p of plans) {
+    if (p.recommendation === 'BUY') {
+      cards.push({
+        id: cardId('COMPRA', p.productId),
+        type: 'COMPRA',
+        title: 'Repor e evitar ruptura',
+        priority: buyPriority(p.orderByInDays, p.stockoutInDays),
+        productId: p.productId,
+        description: p.description,
+        brand: p.brand,
+        target: `Fornecedor: ${p.brand ?? '—'}`,
+        quantity: p.suggestedQty,
+        reason: p.friendlyReason,
+        confidence: p.confidence,
+        impact: round2(p.capital),
+        impactLabel: 'Custo do pedido',
+        urgencyDays: p.stockoutInDays,
+      });
+    } else if (p.recommendation === 'LIQUIDATE') {
+      cards.push({
+        id: cardId('LIQUIDACAO', p.productId),
+        type: 'LIQUIDACAO',
+        title: 'Reduzir excesso e liberar capital',
+        priority: capitalPriority(p.stockValue),
+        productId: p.productId,
+        description: p.description,
+        brand: p.brand,
+        target: p.brand ?? 'Excesso na rede',
+        quantity: p.currentStock,
+        reason: p.friendlyReason,
+        confidence: p.confidence,
+        impact: round2(p.stockValue),
+        impactLabel: 'Capital a liberar',
+        urgencyDays: null,
+      });
+    }
+  }
+
+  for (const s of rebalance) {
+    cards.push({
+      id: cardId('REMANEJAMENTO', `${s.productId}:${s.fromStoreId}:${s.toStoreId}`),
+      type: 'REMANEJAMENTO',
+      title: 'Transferir para loja com maior giro',
+      priority: urgencyPriority(s.stockoutInDays),
+      productId: s.productId,
+      description: s.description,
+      brand: s.brand,
+      target: `${shortStore(s.fromStoreName)} → ${shortStore(s.toStoreName)}`,
+      quantity: s.quantity,
+      reason: s.friendlyReason,
+      confidence: s.confidence,
+      impact: 0,
+      impactLabel: 'Giro (sem capital)',
+      urgencyDays: s.stockoutInDays,
+    });
+  }
+
+  cards.sort((a, b) => {
+    const pr = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+    if (pr !== 0) return pr;
+    return b.impact - a.impact;
+  });
+
+  const summary: DecisionSummary = {
+    total: cards.length,
+    byType: {
+      compra: cards.filter((c) => c.type === 'COMPRA').length,
+      remanejamento: cards.filter((c) => c.type === 'REMANEJAMENTO').length,
+      liquidacao: cards.filter((c) => c.type === 'LIQUIDACAO').length,
+    },
+    byPriority: {
+      alta: cards.filter((c) => c.priority === 'ALTA').length,
+      media: cards.filter((c) => c.priority === 'MEDIA').length,
+      baixa: cards.filter((c) => c.priority === 'BAIXA').length,
+    },
+    impactTotal: round2(cards.reduce((a, c) => a + c.impact, 0)),
+    criticos: cards.filter((c) => c.urgencyDays !== null && c.urgencyDays <= 7).length,
+  };
+
+  return { summary, cards };
+}

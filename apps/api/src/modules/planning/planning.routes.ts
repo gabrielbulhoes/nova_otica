@@ -5,6 +5,7 @@ import type { ProductGroup } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
+  decisionBoard,
   fairSplit,
   listSupplierSettings,
   planningOverview,
@@ -68,6 +69,20 @@ planningRouter.get(
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     res.json(await rebalancePlan(days(req.query.days), group(req.query.group)));
+  }),
+);
+
+/**
+ * GET /api/planning/decisions — portal de cards de decisão (compra +
+ * remanejamento + liquidação) com tipo, prioridade e impacto. ADMIN: inclui o
+ * remanejamento, que é de rede.
+ */
+planningRouter.get(
+  '/decisions',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await decisionBoard(days(req.query.days), storeId, group(req.query.group)));
   }),
 );
 

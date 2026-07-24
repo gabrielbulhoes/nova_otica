@@ -10,6 +10,7 @@
 import {
   abcFromItems,
   analyzeProduct,
+  buildDecisionCards,
   matchesProductGroup,
   buildBrandMix,
   buildFairSplit,
@@ -895,7 +896,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     }
     return rec;
   }
-  if (url === '/planning/rebalance') {
+  const rebalanceRows = () => {
     const inputs: StoreProductInput[] = [];
     for (const s of stores)
       for (const prod of products.filter(
@@ -911,6 +912,14 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           currentStock: stockQty.get(key(s.id, prod.id)) ?? 0,
         });
     return buildRebalance(inputs, planDays, cfgForBrand);
+  };
+  if (url === '/planning/decisions')
+    return buildDecisionCards(
+      planningPlans(planDays, one(params.storeId), planGroup),
+      rebalanceRows().rows,
+    );
+  if (url === '/planning/rebalance') {
+    return rebalanceRows();
   }
   if (url === '/planning/suppliers' && m === 'GET') {
     // Com dados reais, as marcas são as do catálogo carregado (as fictícias
