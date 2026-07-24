@@ -37,48 +37,45 @@ ou de **código** — exige refazer o build. Não é tempo real.
 
 ---
 
-## 2. O que mudou (pedido do cliente)
+## 2. O que mudou
 
-Três ajustes, todos na branch **`claude/frontend-project-access-vdaerz`**
-(PR **#26** → https://github.com/gabrielbulhoes/nova_otica/pull/26):
+Onde pegar o código: **tudo está na branch
+`claude/frontend-project-access-vdaerz`** (é a mais completa). O PR #26 já foi
+mergeado na `main`; os itens 4–6 abaixo são commits **posteriores**, ainda na
+branch. Faça o build a partir da branch (ver §3.1).
 
-1. **Marca vs. fornecedor nos relatórios.** A marca real do produto passa a
-   ser **extraída da descrição** (`extractBrand`) e usada em todos os
-   relatórios (ABC, cobertura, giro, análise de vendas). Nas **sugestões de
-   compra**, os itens seguem **agrupados por fornecedor** (o campo `marca` que
-   vem do ERP), mas cada item mostra a **marca real** — na tabela, no
-   cabeçalho do pedido e no CSV.
+**Já na `main` (PR #26):**
+1. **Marca vs. fornecedor.** Marca real **extraída da descrição**
+   (`extractBrand`) nos relatórios; compras seguem agrupadas por fornecedor,
+   mas cada item mostra a marca real (tabela, cabeçalho e CSV).
+2. **Lentes por encomenda** (grade da rede = 0) saem da ruptura e dos
+   relatórios de estoque; ficam só no faturamento.
+3. **Explicação + confiança** em cada decisão (💡 `friendlyReasonFor` +
+   `decisionConfidence`).
 
-2. **Lentes por encomenda.** Lentes sem posição de estoque na rede
-   (`isMadeToOrderLens` — soma da grade da rede = 0) saem dos **alertas de
-   ruptura** e dos **relatórios de estoque/cobertura/giro**; permanecem
-   **apenas no faturamento consolidado**.
+**Novo, na branch (feedback do Galbe + benchmark Chico):**
+4. **GMAIS fora da matemática.** Centro de distribuição não entra em
+   remanejamento, compra, ruptura, cobertura, giro nem relatórios. No
+   **snapshot estático** a exclusão é automática — `demo.ts` filtra lojas cujo
+   nome casa `/gmais/i` (nenhuma ação sua). No **backend vivo**, há a coluna
+   `Store.excludeFromPlanning` (migração `4_exclude_from_planning`) marcada no
+   sync por `PLANNING_EXCLUDED_STORE_PATTERN` (padrão `GMAIS`).
+5. **Lentes não se transferem.** O operacional (remanejamento/compra) usa por
+   padrão o recorte **`principal`** (óculos de grau/sol + relógio). Regra fixa:
+   lente nunca é transferida.
+6. **Página "Decisões" (cards).** Nova aba no estilo do concorrente: compra +
+   remanejamento + liquidação viram cards com prioridade, impacto em R$, ID,
+   explicação e confiança; filtros e KPIs; remanejamento com **Aprovar
+   transferência** (executa de verdade) e **Dispensar**. Com dados reais é que
+   aparecem os cards de **comprar** e **liberar capital com R$** (a base
+   fictícia só gera remanejamento).
 
-3. **Explicação + confiança.** Cada decisão (comprar / remanejar / não
-   comprar / liquidar) ganha um **texto curto e amigável** do porquê
-   (`friendlyReasonFor`, exibido com 💡) e uma **% de confiabilidade**
-   (`decisionConfidence`), mostrada como selo colorido por faixa.
+Estado na origem: typecheck (API+web) limpo, testes **44 planning / 24 web**
+passando, build OK, verificação visual OK.
 
-### Arquivos tocados (diff vs `main`)
-```
-apps/api/src/modules/planning/planning.math.ts     (funções puras: extractBrand, isMadeToOrderLens, decisionConfidence, friendlyReasonFor)
-apps/api/src/modules/planning/planning.routes.ts
-apps/api/src/modules/planning/planning.service.ts
-apps/api/src/modules/reports/reports.service.ts     (relatórios por marca; exclui lentes por encomenda)
-apps/api/src/modules/alerts/alerts.service.ts        (exclui lentes por encomenda da ruptura)
-apps/api/test/planning.test.ts                       (testes das novas funções)
-apps/web/src/api/client.ts                           (novos campos nas interfaces)
-apps/web/src/api/demo.ts                             (propaga campos; usa @planning)
-apps/web/src/pages/Planning.tsx                      (selos de confiança + notas 💡 + coluna Marca)
-```
-Estado no ambiente de origem: typecheck (API + web) limpo, testes 40 (planning)
-+ 22 (web) passando, build de produção OK, verificação visual na demo OK.
-
-> `extractBrand` é um **heurístico** calibrado para descrições no formato
-> "Categoria Marca Cor/Modelo". Ao rodar com os dados reais, **confira** se as
-> marcas saem corretas nos relatórios; se algum fornecedor usar outro padrão
-> de descrição, ajuste as listas `CATEGORY_WORDS`/`COLOR_WORDS` em
-> `planning.math.ts` (perto da função `extractBrand`).
+> `extractBrand` é um **heurístico** ("Categoria Marca Cor/Modelo"). Com os
+> dados reais, **confira** as marcas nos relatórios; se um fornecedor usar
+> outro padrão, ajuste `CATEGORY_WORDS`/`COLOR_WORDS` em `planning.math.ts`.
 
 ---
 
@@ -87,15 +84,12 @@ Estado no ambiente de origem: typecheck (API + web) limpo, testes 40 (planning)
 Rode **na sua máquina** (a que tem o snapshot / alcança a CDS), na raiz do repo.
 
 ### 3.1 Trazer o código novo
-Se o PR #26 **já foi mergeado** em `main`:
-```bash
-git checkout main && git pull
-```
-Se **ainda não foi mergeado**, use a branch direto:
+Use a **branch** — ela tem tudo (os itens 4–6 ainda não estão na `main`):
 ```bash
 git fetch origin claude/frontend-project-access-vdaerz
 git checkout claude/frontend-project-access-vdaerz && git pull
 ```
+(Se/quando essa branch for mergeada na `main`, aí sim `git checkout main && git pull` basta.)
 
 ### 3.2 Garantir o snapshot com dados reais
 - Se você **ainda tem** `apps/web/src/api/demo-real-data.json` da carga
