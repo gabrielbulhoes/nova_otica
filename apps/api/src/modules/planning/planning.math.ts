@@ -1251,6 +1251,9 @@ export interface DecisionCard {
   brand: string | null;
   /** Loja-alvo ou rota (De → Para) do card. */
   target: string;
+  /** IDs de loja para ação de 1 clique no remanejamento (origem → destino). */
+  fromStoreId?: string;
+  toStoreId?: string;
   /** Quantidade envolvida (a comprar/transferir), quando se aplica. */
   quantity: number | null;
   /** Explicação curta e amigável do porquê. */
@@ -1369,6 +1372,8 @@ export function buildDecisionCards(plans: ProductPlan[], rebalance: RebalanceSug
       description: s.description,
       brand: s.brand,
       target: `${shortStore(s.fromStoreName)} → ${shortStore(s.toStoreName)}`,
+      fromStoreId: s.fromStoreId,
+      toStoreId: s.toStoreId,
       quantity: s.quantity,
       reason: s.friendlyReason,
       confidence: s.confidence,

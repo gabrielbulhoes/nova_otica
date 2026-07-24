@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { getDecisionBoard, formatBRL } from '../api/client';
+import { useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getDecisionBoard, createMovement, formatBRL } from '../api/client';
 import type { DecisionCard, DecisionType, DecisionPriority } from '../api/client';
 import { Loading } from '../components/ui';
 
@@ -37,9 +38,36 @@ function Kpi({ label, value, hint, tone }: { label: string; value: string; hint?
   );
 }
 
-function Card({ c }: { c: DecisionCard }) {
+function Card({ c, onDismiss }: { c: DecisionCard; onDismiss: (id: string) => void }) {
   const t = typeMeta[c.type];
   const p = prioMeta[c.priority];
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [err, setErr] = useState('');
+
+  const approveTransfer = async () => {
+    if (!c.fromStoreId || !c.toStoreId || !c.quantity) return;
+    setState('loading');
+    try {
+      await createMovement({
+        type: 'TRANSFER',
+        productId: c.productId,
+        fromStoreId: c.fromStoreId,
+        toStoreId: c.toStoreId,
+        quantity: c.quantity,
+        reason: 'Aprovado no portal de Decisões (remanejamento por giro).',
+      });
+      setState('done');
+      qc.invalidateQueries({ queryKey: ['movements'] });
+      qc.invalidateQueries({ queryKey: ['decisions'] });
+    } catch (e) {
+      setState('error');
+      const ex = e as { response?: { data?: { error?: string } } };
+      setErr(ex.response?.data?.error ?? 'Falha ao solicitar. Tente novamente.');
+    }
+  };
+
   return (
     <div
       className="card"
@@ -101,6 +129,31 @@ function Card({ c }: { c: DecisionCard }) {
         </div>
         <Confidence value={c.confidence} />
       </div>
+
+      <div
+        style={{
+          padding: '10px 15px', borderTop: '1px solid var(--border)', background: 'var(--panel-2)',
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        }}
+      >
+        {c.type === 'REMANEJAMENTO' ? (
+          state === 'done' ? (
+            <span className="badge green">Transferência solicitada ✓</span>
+          ) : (
+            <button className="btn sm" onClick={approveTransfer} disabled={state === 'loading'}>
+              {state === 'loading' ? 'Solicitando…' : 'Aprovar transferência'}
+            </button>
+          )
+        ) : (
+          <button className="btn sm ghost" onClick={() => navigate('/admin/planejamento')}>
+            Abrir em Compras
+          </button>
+        )}
+        {state !== 'done' && (
+          <button className="btn sm ghost" onClick={() => onDismiss(c.id)}>Dispensar</button>
+        )}
+        {state === 'error' && <div style={{ fontSize: 11, color: 'var(--red)' }}>{err}</div>}
+      </div>
     </div>
   );
 }
@@ -108,13 +161,20 @@ function Card({ c }: { c: DecisionCard }) {
 export function Decisions() {
   const [typeF, setTypeF] = useState<TypeFilter>('ALL');
   const [prioF, setPrioF] = useState<PrioFilter>('ALL');
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const params = { days: 90, group: 'principal' };
   const board = useQuery({ queryKey: ['decisions', params], queryFn: () => getDecisionBoard(params) });
 
   const cards = useMemo(() => {
     const all = board.data?.cards ?? [];
-    return all.filter((c) => (typeF === 'ALL' || c.type === typeF) && (prioF === 'ALL' || c.priority === prioF));
-  }, [board.data, typeF, prioF]);
+    return all.filter(
+      (c) =>
+        !dismissed.has(c.id) &&
+        (typeF === 'ALL' || c.type === typeF) &&
+        (prioF === 'ALL' || c.priority === prioF),
+    );
+  }, [board.data, typeF, prioF, dismissed]);
+  const dismiss = (id: string) => setDismissed((prev) => new Set(prev).add(id));
 
   const s = board.data?.summary;
 
@@ -162,7 +222,7 @@ export function Decisions() {
             <div className="empty">Nenhum card nesta seleção — rede bem ajustada por aqui. 👏</div>
           ) : (
             <div className="grid grid-3">
-              {cards.map((c) => <Card key={c.id} c={c} />)}
+              {cards.map((c) => <Card key={c.id} c={c} onDismiss={dismiss} />)}
             </div>
           )}
         </>

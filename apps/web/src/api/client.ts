@@ -524,6 +524,8 @@ export interface DecisionCard {
   description: string;
   brand: string | null;
   target: string;
+  fromStoreId?: string;
+  toStoreId?: string;
   quantity: number | null;
   reason: string;
   confidence: number;
