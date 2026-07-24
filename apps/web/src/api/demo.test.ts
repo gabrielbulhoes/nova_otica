@@ -159,3 +159,23 @@ describe('demo: Onda 3 (mix por bandeira + Modo Feira)', () => {
     expect(get('/planning/fair-split', { qty: '10' }).__status).toBe(400);
   });
 });
+
+describe('demo: Onda 4 (feedback Galbe — lentes fora do remanejamento)', () => {
+  const isLensDesc = (d: string) => /^lente/i.test(d.trim());
+
+  it('remanejamento nunca transfere lentes, nem no consolidado (group=todos)', () => {
+    for (const group of [undefined, 'principal', 'todos']) {
+      const r = get('/planning/rebalance', group ? { group } : undefined);
+      for (const row of r.rows as { description: string }[]) {
+        expect(isLensDesc(row.description), `lente sugerida p/ transferência (${row.description})`).toBe(false);
+      }
+    }
+  });
+
+  it('sugestões de compra usam "principal" por padrão (sem lentes)', () => {
+    const rows = get('/planning/purchase-suggestions').rows as { description: string }[];
+    for (const row of rows) {
+      expect(isLensDesc(row.description), `lente na compra padrão (${row.description})`).toBe(false);
+    }
+  });
+});

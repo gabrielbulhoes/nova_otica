@@ -26,6 +26,10 @@ const schema = z.object({
   JWT_SECRET: z.string().min(1).default(DEV_JWT_SECRET),
   JWT_EXPIRES_IN: z.string().default('8h'),
   DEFAULT_MIN_STOCK: z.coerce.number().int().nonnegative().default(3),
+  // Filiais que são centro de distribuição (ex.: GMAIS) e não entram na
+  // matemática de planejamento. Regex (case-insensitive) casada com o nome da
+  // loja no sync; vazio desliga a marcação automática.
+  PLANNING_EXCLUDED_STORE_PATTERN: z.string().default('GMAIS'),
   SEED_ADMIN_EMAIL: z.string().default('admin@novaotica.com'),
   SEED_ADMIN_PASSWORD: z.string().default('admin123'),
 

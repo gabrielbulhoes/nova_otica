@@ -22,9 +22,11 @@ export const planningRouter = Router();
 // Janela padrão do planejamento: 90 dias de histórico de vendas.
 const days = (v: unknown) => parseDays(v, 90);
 
-// Recorte de cobertura (?group=): principal | lentes | todos (padrão).
+// Recorte de cobertura (?group=): principal (padrão) | lentes | todos.
+// Operacional começa em 'principal' (óculos de grau/sol + relógio); lentes e
+// consolidado só quando pedidos explicitamente.
 const group = (v: unknown): ProductGroup =>
-  v === 'principal' || v === 'lentes' ? v : 'todos';
+  v === 'lentes' || v === 'todos' ? v : 'principal';
 
 /** GET /api/planning/overview — capital imobilizado + Pareto + giro. */
 planningRouter.get(

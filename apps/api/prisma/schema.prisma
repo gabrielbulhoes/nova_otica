@@ -25,6 +25,11 @@ model Store {
   phone      String?
   active     Boolean @default(true)
 
+  // Centro de distribuição (ex.: GMAIS) e outras filiais que não devem entrar
+  // na matemática de planejamento (remanejamento, compra, ruptura, cobertura).
+  // Continuam no cadastro/histórico, mas ficam fora das contas das lojas.
+  excludeFromPlanning Boolean @default(false)
+
   syncedAt  DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -39,6 +44,7 @@ model Store {
   movementsTo   InventoryMovement[] @relation("MovementToStore")
 
   @@index([active])
+  @@index([excludeFromPlanning])
 }
 
 enum Role {

@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
+import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
 import {
   analyzeProduct,
   buildFairSplit,
@@ -54,7 +55,8 @@ export async function planningInputs(
   storeId?: string,
   group: ProductGroup = 'todos',
 ): Promise<ProductMetricsInput[]> {
-  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) } };
+  // GMAIS e outros CDs ficam fora da matemática (escopo de lojas planejáveis).
+  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) }, store: PLANNED_STORE_WHERE };
   if (storeId) saleFilter.storeId = storeId;
 
   const sold = await prisma.saleItem.groupBy({
@@ -64,7 +66,7 @@ export async function planningInputs(
   });
   const soldBy = new Map(sold.map((s) => [s.productId as string, s._sum.quantity ?? 0]));
 
-  const stockWhere: Prisma.StockItemWhereInput = {};
+  const stockWhere: Prisma.StockItemWhereInput = { ...stockPlannedWhere };
   if (storeId) stockWhere.storeId = storeId;
   const stock = await prisma.stockItem.groupBy({
     by: ['productId'],
@@ -75,7 +77,7 @@ export async function planningInputs(
 
   // Janela recente (até 30 dias) para a suavização com peso recente.
   const recentDays = Math.min(30, days);
-  const recentFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(recentDays) } };
+  const recentFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(recentDays) }, store: PLANNED_STORE_WHERE };
   if (storeId) recentFilter.storeId = storeId;
   const soldRecent = await prisma.saleItem.groupBy({
     by: ['productId'],
@@ -151,6 +153,7 @@ async function monthlyHistoryByProduct(
                  SUM(si.quantity)::int AS units
           FROM "SaleItem" si
           JOIN "Sale" s ON s.id = si."saleId"
+          JOIN "Store" st ON st.id = s."storeId" AND st."excludeFromPlanning" = false
           WHERE si."productId" IS NOT NULL
             AND s."saleDate" >= NOW() - INTERVAL '24 months'
           GROUP BY pid, to_char(s."saleDate", 'YYYY-MM'), month`,
@@ -238,12 +241,12 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     prisma.saleItem.findMany({
       where: {
         productId: { not: null },
-        sale: { saleDate: { gte: periodStart(days) }, storeId: { not: null } },
+        sale: { saleDate: { gte: periodStart(days) }, storeId: { not: null }, store: PLANNED_STORE_WHERE },
       },
       select: { productId: true, quantity: true, sale: { select: { storeId: true } } },
     }),
-    prisma.stockItem.findMany({ select: { storeId: true, productId: true, quantity: true } }),
-    prisma.store.findMany({ select: { id: true, name: true } }),
+    prisma.stockItem.findMany({ where: stockPlannedWhere, select: { storeId: true, productId: true, quantity: true } }),
+    prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
     supplierConfigResolver(),
   ]);
 
@@ -280,6 +283,9 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     const product = productBy.get(pos.productId);
     if (!product) continue;
     if (!matchesProductGroup(product.category, group)) continue;
+    // Regra absoluta da rede: lentes não se transferem entre lojas — só óculos
+    // de grau/sol e relógio. Vale mesmo no consolidado ('todos').
+    if (matchesProductGroup(product.category, 'lentes')) continue;
     inputs.push({
       storeId: pos.storeId,
       storeName: storeName.get(pos.storeId) ?? '—',
@@ -415,6 +421,7 @@ export async function fairSplit(days: number, filter: FairSplitFilter, totalQty:
       SELECT s."storeId" AS "storeId", COALESCE(SUM(si.quantity), 0)::bigint AS units
       FROM "SaleItem" si
       JOIN "Sale" s ON s.id = si."saleId"
+      JOIN "Store" lo ON lo.id = s."storeId" AND lo."excludeFromPlanning" = false
       JOIN "Product" p ON p.id = si."productId"
       WHERE s."saleDate" >= ${periodStart(days)} AND ${field} = ${value}
       GROUP BY s."storeId"
@@ -422,11 +429,12 @@ export async function fairSplit(days: number, filter: FairSplitFilter, totalQty:
     prisma.$queryRaw<{ storeId: string; units: bigint }[]>(Prisma.sql`
       SELECT st."storeId" AS "storeId", COALESCE(SUM(st.quantity), 0)::bigint AS units
       FROM "StockItem" st
+      JOIN "Store" lo ON lo.id = st."storeId" AND lo."excludeFromPlanning" = false
       JOIN "Product" p ON p.id = st."productId"
       WHERE ${field} = ${value}
       GROUP BY st."storeId"
     `),
-    prisma.store.findMany({ select: { id: true, name: true } }),
+    prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
   ]);
   const soldById = new Map(soldRows.filter((r) => r.storeId).map((r) => [r.storeId as string, Number(r.units)]));
   const stockById = new Map(stockRows.map((r) => [r.storeId, Number(r.units)]));

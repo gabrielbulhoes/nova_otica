@@ -245,16 +245,23 @@ async function productIdMap(): Promise<Map<string, string>> {
 
 type Client = ReturnType<typeof getSellbieClient>;
 
+// Centros de distribuição (ex.: GMAIS) são marcados por nome para ficarem fora
+// da matemática de planejamento. Regex vazio desliga a marcação automática.
+const cdPattern = env.PLANNING_EXCLUDED_STORE_PATTERN.trim()
+  ? new RegExp(env.PLANNING_EXCLUDED_STORE_PATTERN, 'i')
+  : null;
+
 async function syncStores(client: Client) {
   const rows = await client.getLojas();
   let written = 0;
   for (const raw of rows) {
     const d = map.mapLoja(raw);
     if (!d.externalId) continue;
+    const excludeFromPlanning = cdPattern ? cdPattern.test(d.name ?? '') : false;
     await prisma.store.upsert({
       where: { externalId: d.externalId },
-      create: { ...d, syncedAt: new Date() },
-      update: { ...d, syncedAt: new Date() },
+      create: { ...d, excludeFromPlanning, syncedAt: new Date() },
+      update: { ...d, excludeFromPlanning, syncedAt: new Date() },
     });
     written += 1;
   }

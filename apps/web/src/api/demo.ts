@@ -105,7 +105,7 @@ const STORE_NAMES: [string, string, string][] = [
   ['4', 'Belo Horizonte', 'MG'],
 ];
 
-const stores: Store[] = real
+const allStores: Store[] = real
   ? real.stores.map((s) => ({
       id: `st_${s.externalId}`,
       externalId: s.externalId,
@@ -122,6 +122,10 @@ const stores: Store[] = real
       state,
       active: true,
     }));
+
+// GMAIS e afins (centro de distribuição) ficam fora da matemática de lojas,
+// igual ao backend real (Store.excludeFromPlanning).
+const stores: Store[] = allStores.filter((s) => !/gmais/i.test(s.name));
 
 const products: Product[] = real
   ? real.products.map((p) => ({
@@ -842,7 +846,9 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   };
   const planDays = Number(one(params.days)) || 90;
   const rawGroup = one(params.group);
-  const planGroup: ProductGroup = rawGroup === 'principal' || rawGroup === 'lentes' ? rawGroup : 'todos';
+  // Padrão operacional: 'principal' (óculos de grau/sol + relógio). Lentes só
+  // entram quando pedidas explicitamente (faturamento/consolidado).
+  const planGroup: ProductGroup = rawGroup === 'lentes' || rawGroup === 'todos' ? rawGroup : 'principal';
   if (url === '/planning/overview')
     return buildOverview(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-suggestions')
@@ -892,7 +898,9 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/planning/rebalance') {
     const inputs: StoreProductInput[] = [];
     for (const s of stores)
-      for (const prod of products.filter((x) => matchesProductGroup(x.category, planGroup)))
+      for (const prod of products.filter(
+        (x) => matchesProductGroup(x.category, planGroup) && !matchesProductGroup(x.category, 'lentes'),
+      ))
         inputs.push({
           storeId: s.id,
           storeName: s.name,
