@@ -5,6 +5,7 @@ import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
 import {
   analyzeProduct,
+  buildCommercialStrategy,
   buildDecisionCards,
   buildFairSplit,
   buildOverview,
@@ -227,6 +228,20 @@ export async function decisionBoard(days: number, storeId?: string, group: Produ
     rebalancePlan(days, group),
   ]);
   return buildDecisionCards(productPlans, reb.rows);
+}
+
+/**
+ * Motor de estratégia comercial: valida o piso de compra contra a capacidade
+ * (demanda projetada da rede na janela) e divide em segmentos por risco.
+ * Roda sobre o recorte operacional ('principal': óculos + relógio).
+ */
+export async function commercialStrategy(
+  days: number,
+  params: { floorUnits: number; windowMonths: number; risk: 'conservador' | 'equilibrado' | 'agressivo' },
+  storeId?: string,
+) {
+  const productPlans = await plans(days, storeId, 'principal');
+  return buildCommercialStrategy(productPlans, params);
 }
 
 /**

@@ -5,6 +5,7 @@ import type { ProductGroup } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
+  commercialStrategy,
   decisionBoard,
   fairSplit,
   listSupplierSettings,
@@ -83,6 +84,28 @@ planningRouter.get(
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     res.json(await decisionBoard(days(req.query.days), storeId, group(req.query.group)));
+  }),
+);
+
+/**
+ * GET /api/planning/strategy — motor de estratégia comercial (piso · risco ·
+ * janela): divide o piso em best-seller/lançamento/aposta e valida o lastro
+ * contra a capacidade da rede. ADMIN (visão de rede).
+ */
+planningRouter.get(
+  '/strategy',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const floorUnits = Math.trunc(Number(req.query.floor));
+    if (!Number.isFinite(floorUnits) || floorUnits < 0 || floorUnits > 10_000_000) {
+      res.status(400).json({ error: 'floor deve ser um inteiro entre 0 e 10000000.' });
+      return;
+    }
+    const windowMonths = Math.trunc(Number(req.query.window)) || 9;
+    const r = String(req.query.risk ?? 'equilibrado');
+    const risk = r === 'conservador' || r === 'agressivo' ? r : 'equilibrado';
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await commercialStrategy(days(req.query.days), { floorUnits, windowMonths, risk }, storeId));
   }),
 );
 

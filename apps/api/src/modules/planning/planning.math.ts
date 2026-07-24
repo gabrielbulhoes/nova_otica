@@ -1407,3 +1407,97 @@ export function buildDecisionCards(plans: ProductPlan[], rebalance: RebalanceSug
 
   return { summary, cards };
 }
+
+// ─── Motor de estratégia comercial (piso · risco · janela) ───────────────────
+//
+// Planejador de compra top-down (paridade com a tela "Estratégia comercial" do
+// concorrente): dado um PISO (total de unidades a comprar), um PERFIL DE RISCO e
+// uma JANELA de venda, valida o piso contra a CAPACIDADE da rede (demanda
+// projetada na janela) e divide o piso em segmentos de intenção.
+
+export type RiskProfile = 'conservador' | 'equilibrado' | 'agressivo';
+
+export interface StrategyParams {
+  /** Piso de compra: total de unidades a adquirir para a janela. */
+  floorUnits: number;
+  /** Janela de venda em meses (horizonte do planejamento). */
+  windowMonths: number;
+  risk: RiskProfile;
+}
+
+export interface StrategySegment {
+  key: 'best-seller' | 'lancamento' | 'aposta';
+  label: string;
+  rationale: string;
+  units: number;
+  pct: number; // participação no piso (0–100)
+}
+
+export interface CommercialStrategy {
+  floorUnits: number;
+  windowMonths: number;
+  risk: RiskProfile;
+  /** Demanda projetada da rede na janela (unidades) — o "lastro". */
+  capacity: number;
+  /** Piso ÷ capacidade (0–100+). */
+  capacityUsedPct: number;
+  /** Piso cabe na capacidade da rede? */
+  viable: boolean;
+  /** Unidades do piso acima da demanda projetada (0 quando viável). */
+  withoutBacking: number;
+  /** % com lastro = best-seller + lançamento (aposta é especulação). */
+  backedPct: number;
+  segments: StrategySegment[];
+  /** Texto da "decisão do motor". */
+  verdict: string;
+}
+
+const RISK_SPLIT: Record<RiskProfile, { bs: number; lanc: number; aposta: number }> = {
+  conservador: { bs: 0.6, lanc: 0.3, aposta: 0.1 },
+  equilibrado: { bs: 0.45, lanc: 0.35, aposta: 0.2 },
+  agressivo: { bs: 0.3, lanc: 0.4, aposta: 0.3 },
+};
+
+const clampInt = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(n)));
+
+/**
+ * Monta a estratégia de compra a partir dos planos por produto (que trazem a
+ * demanda diária) e dos parâmetros de piso/risco/janela. Puro e determinístico.
+ */
+export function buildCommercialStrategy(plans: ProductPlan[], params: StrategyParams): CommercialStrategy {
+  const windowMonths = clampInt(params.windowMonths, 1, 24);
+  const floorUnits = Math.max(0, Math.round(params.floorUnits));
+  const risk = RISK_SPLIT[params.risk] ? params.risk : 'equilibrado';
+
+  const dailyDemand = plans.reduce((a, p) => a + p.dailyDemand, 0);
+  const capacity = Math.round(dailyDemand * windowMonths * 30);
+
+  const split = RISK_SPLIT[risk];
+  const bs = Math.round(floorUnits * split.bs);
+  const lanc = Math.round(floorUnits * split.lanc);
+  const aposta = Math.max(0, floorUnits - bs - lanc); // resto fecha o total exato
+  const pctOf = (n: number) => (floorUnits > 0 ? round1((n / floorUnits) * 100) : 0);
+
+  const segments: StrategySegment[] = [
+    { key: 'best-seller', label: 'Best-seller', rationale: 'reposição do que já vende', units: bs, pct: pctOf(bs) },
+    { key: 'lancamento', label: 'Lançamento', rationale: 'quota por segmento', units: lanc, pct: pctOf(lanc) },
+    { key: 'aposta', label: 'Aposta', rationale: 'especulação dirigida', units: aposta, pct: pctOf(aposta) },
+  ];
+
+  const withoutBacking = Math.max(0, floorUnits - capacity);
+  const backedPct = floorUnits > 0 ? round1(((bs + lanc) / floorUnits) * 100) : 0;
+  const capacityUsedPct = capacity > 0 ? round1((floorUnits / capacity) * 100) : 0;
+  const viable = capacity > 0 && floorUnits <= capacity;
+
+  const verdict = capacity <= 0
+    ? 'Sem histórico de vendas suficiente para projetar a capacidade — carregue o período ou amplie a janela.'
+    : viable
+      ? `O piso (${floorUnits}) é ${capacityUsedPct}% da capacidade (${capacity}) da rede na janela — com lastro e viável.`
+      : `O piso (${floorUnits}) passa a capacidade da rede (${capacity}): ${withoutBacking} un. ficariam sem lastro. Reduza o piso ou amplie a janela.`;
+
+  return {
+    floorUnits, windowMonths, risk,
+    capacity, capacityUsedPct, viable, withoutBacking, backedPct,
+    segments, verdict,
+  };
+}

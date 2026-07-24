@@ -4,6 +4,7 @@ import {
   buildOverview,
   buildPurchaseOrders,
   buildRebalance,
+  buildCommercialStrategy,
   buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
@@ -525,5 +526,50 @@ describe('buildDecisionCards (portal de decisões — cards)', () => {
     expect(compra.impactLabel).toMatch(/pedido/i);
     expect(liquid.impact).toBeGreaterThan(0);
     expect(liquid.impactLabel).toMatch(/liberar/i);
+  });
+});
+
+describe('buildCommercialStrategy (motor piso · risco · janela)', () => {
+  // Rede vendendo ~2/dia no total (dois produtos a 90 un./90 dias).
+  const plans = [
+    analyzeProduct({ ...base, productId: 's1', unitsSold: 90, currentStock: 30 }, 90, DEFAULT_PLANNING_CONFIG),
+    analyzeProduct({ ...base, productId: 's2', unitsSold: 90, currentStock: 30 }, 90, DEFAULT_PLANNING_CONFIG),
+  ];
+
+  it('capacidade = demanda diária da rede × janela (meses × 30)', () => {
+    const st = buildCommercialStrategy(plans, { floorUnits: 300, windowMonths: 9, risk: 'equilibrado' });
+    // 2/dia × 270 dias = 540
+    expect(st.capacity).toBe(540);
+    expect(st.viable).toBe(true); // 300 <= 540
+    expect(st.capacityUsedPct).toBeCloseTo((300 / 540) * 100, 1);
+    expect(st.withoutBacking).toBe(0);
+  });
+
+  it('segmentos somam exatamente o piso e variam com o risco', () => {
+    for (const risk of ['conservador', 'equilibrado', 'agressivo'] as const) {
+      const st = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk });
+      const soma = st.segments.reduce((a, x) => a + x.units, 0);
+      expect(soma).toBe(1000);
+    }
+    const cons = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'conservador' });
+    const agr = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'agressivo' });
+    const bs = (x: typeof cons) => x.segments.find((s) => s.key === 'best-seller')!.units;
+    const ap = (x: typeof cons) => x.segments.find((s) => s.key === 'aposta')!.units;
+    expect(bs(cons)).toBeGreaterThan(bs(agr)); // conservador reforça best-seller
+    expect(ap(agr)).toBeGreaterThan(ap(cons)); // agressivo aposta mais
+  });
+
+  it('piso acima da capacidade fica sem lastro e não é viável', () => {
+    const st = buildCommercialStrategy(plans, { floorUnits: 800, windowMonths: 9, risk: 'equilibrado' });
+    expect(st.viable).toBe(false); // 800 > 540
+    expect(st.withoutBacking).toBe(260); // 800 - 540
+    expect(st.verdict).toMatch(/sem lastro|passa a capacidade/i);
+  });
+
+  it('com lastro = best-seller + lançamento (aposta é especulação)', () => {
+    const st = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'equilibrado' });
+    const bs = st.segments.find((s) => s.key === 'best-seller')!.units;
+    const lanc = st.segments.find((s) => s.key === 'lancamento')!.units;
+    expect(st.backedPct).toBeCloseTo(((bs + lanc) / 1000) * 100, 1);
   });
 });

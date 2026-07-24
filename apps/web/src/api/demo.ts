@@ -10,6 +10,7 @@
 import {
   abcFromItems,
   analyzeProduct,
+  buildCommercialStrategy,
   buildDecisionCards,
   matchesProductGroup,
   buildBrandMix,
@@ -918,6 +919,16 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       planningPlans(planDays, one(params.storeId), planGroup),
       rebalanceRows().rows,
     );
+  if (url === '/planning/strategy') {
+    const floorUnits = Math.max(0, Math.trunc(Number(one(params.floor))) || 0);
+    const windowMonths = Math.trunc(Number(one(params.window))) || 9;
+    const r = one(params.risk);
+    const risk = r === 'conservador' || r === 'agressivo' ? r : 'equilibrado';
+    return buildCommercialStrategy(
+      planningPlans(planDays, one(params.storeId), 'principal'),
+      { floorUnits, windowMonths, risk },
+    );
+  }
   if (url === '/planning/rebalance') {
     return rebalanceRows();
   }
