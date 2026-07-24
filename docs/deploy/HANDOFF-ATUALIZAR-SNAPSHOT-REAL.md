@@ -69,6 +69,11 @@ branch. Faça o build a partir da branch (ver §3.1).
    transferência** (executa de verdade) e **Dispensar**. Com dados reais é que
    aparecem os cards de **comprar** e **liberar capital com R$** (a base
    fictícia só gera remanejamento).
+7. **Página "Estratégia comercial" (piso · risco · janela).** Planejador de
+   compra top-down: define o piso (total a comprar), o perfil de risco e a
+   janela; o motor valida contra a capacidade da rede (demanda projetada) e
+   divide em **best-seller / lançamento / aposta**. Com dados reais a
+   capacidade fica realista (na base fictícia ela é pequena).
 
 Estado na origem: typecheck (API+web) limpo, testes **44 planning / 24 web**
 passando, build OK, verificação visual OK.
