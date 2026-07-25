@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
+import { loadBrandCatalog } from './brandCatalog.js';
 import {
   analyzeProduct,
   buildCommercialStrategy,
@@ -12,6 +13,9 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
+  extractBrand,
+  supplierFor,
+  storeCarriesBrand,
   DEFAULT_PLANNING_CONFIG,
   matchesProductGroup,
   type FairSplitInput,
@@ -212,9 +216,15 @@ export async function purchaseSuggestions(days: number, storeId?: string, group:
   return buildSuggestions(await plans(days, storeId, group), days);
 }
 
-/** Rascunhos de ordem de compra agrupados por fornecedor (marca). */
+/** Rascunhos de ordem de compra agrupados pelo fornecedor canônico (catálogo). */
 export async function purchaseOrders(days: number, storeId?: string, group: ProductGroup = 'todos') {
-  return buildPurchaseOrders(await plans(days, storeId, group), days);
+  const [productPlans, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
+  // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
+  // sem ele, cai no campo "marca" do ERP (comportamento anterior).
+  const resolve = catalog
+    ? (p: ProductPlan) => supplierFor(extractBrand(p.description) ?? p.brand, catalog)
+    : undefined;
+  return buildPurchaseOrders(productPlans, days, resolve);
 }
 
 /**
@@ -326,7 +336,28 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     });
   }
 
-  return buildRebalance(inputs, days, cfgFor);
+  const plan = buildRebalance(inputs, days, cfgFor);
+
+  // Regra de mix: não transferir uma grife premium para uma loja que não a
+  // trabalha (catálogo). Marcas correntes (fora do catálogo) valem para todas.
+  const catalog = loadBrandCatalog();
+  if (catalog) {
+    plan.rows = plan.rows.filter((r) =>
+      storeCarriesBrand(extractBrand(r.description) ?? r.brand, r.toStoreName, catalog),
+    );
+    const involved = new Set<string>();
+    for (const r of plan.rows) {
+      involved.add(r.fromStoreId);
+      involved.add(r.toStoreId);
+    }
+    plan.summary = {
+      suggestions: plan.rows.length,
+      units: plan.rows.reduce((a, r) => a + r.quantity, 0),
+      storesInvolved: involved.size,
+    };
+  }
+
+  return plan;
 }
 
 /** Fornecedores (marcas) com seus prazos: cadastrados ou padrão da rede. */

@@ -5,6 +5,8 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildCommercialStrategy,
+  supplierFor,
+  storeCarriesBrand,
   buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
@@ -571,5 +573,46 @@ describe('buildCommercialStrategy (motor piso · risco · janela)', () => {
     const bs = st.segments.find((s) => s.key === 'best-seller')!.units;
     const lanc = st.segments.find((s) => s.key === 'lancamento')!.units;
     expect(st.backedPct).toBeCloseTo(((bs + lanc) / 1000) * 100, 1);
+  });
+});
+
+describe('catálogo de marcas (fornecedor + mix por loja)', () => {
+  const catalog = {
+    supplierByBrand: { GUCCI: 'Kering', DIOR: 'Marcolin', 'RAY BAN': 'Luxottica' },
+    premiumStores: {
+      GUCCI: ['A GRACIOSA IGUATEMI', 'GRAND OPTICAL PETROPOLIS'],
+      DIOR: ['A GRACIOSA NATAL SHOPPING'],
+    },
+  };
+
+  it('supplierFor resolve fornecedor canônico (case/acentos)', () => {
+    expect(supplierFor('Gucci', catalog)).toBe('Kering');
+    expect(supplierFor('DIOR', catalog)).toBe('Marcolin');
+    expect(supplierFor('Marca Inexistente', catalog)).toBeNull();
+    expect(supplierFor('Gucci', null)).toBeNull();
+  });
+
+  it('grife premium só é trabalhada nas lojas listadas', () => {
+    expect(storeCarriesBrand('Gucci', 'A Graciosa Iguatemi', catalog)).toBe(true);
+    expect(storeCarriesBrand('Gucci', 'Oticalli Midway Mall', catalog)).toBe(false);
+    // casamento tolerante ao nome vindo do ERP
+    expect(storeCarriesBrand('Gucci', 'Grand Optical Petropolis - RJ', catalog)).toBe(true);
+  });
+
+  it('marca fora do catálogo (corrente) vale para todas as lojas', () => {
+    expect(storeCarriesBrand('Chilli Beans', 'Qualquer Loja', catalog)).toBe(true);
+    expect(storeCarriesBrand('Ray Ban', 'Qualquer Loja', catalog)).toBe(true); // tem fornecedor mas não é premium
+  });
+
+  it('sem catálogo, nada é restrito', () => {
+    expect(storeCarriesBrand('Gucci', 'Oticalli Midway Mall', null)).toBe(true);
+  });
+
+  it('buildPurchaseOrders agrupa pelo fornecedor canônico quando há resolver', () => {
+    const p1 = analyzeProduct({ ...base, productId: 'g1', description: 'Óculos Gucci GG0011 Preto', brand: 'Kering', unitsSold: 90, currentStock: 2 }, 90);
+    const p2 = analyzeProduct({ ...base, productId: 'd1', description: 'Armação Dior CD1234', brand: 'Marcolin', unitsSold: 90, currentStock: 2 }, 90);
+    const resolve = (p: typeof p1) => supplierFor(extractBrand(p.description), catalog);
+    const po = buildPurchaseOrders([p1, p2], 90, resolve);
+    expect(po.orders.map((o) => o.supplier).sort()).toEqual(['Kering', 'Marcolin']);
   });
 });

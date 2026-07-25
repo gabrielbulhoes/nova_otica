@@ -30,6 +30,9 @@ const schema = z.object({
   // matemática de planejamento. Regex (case-insensitive) casada com o nome da
   // loja no sync; vazio desliga a marcação automática.
   PLANNING_EXCLUDED_STORE_PATTERN: z.string().default('GMAIS'),
+  // Caminho do catálogo de marcas (fornecedor + mix por loja). Vazio = procura
+  // em apps/api/data/brand-catalog.json. Ausente = sem restrição de mix.
+  BRAND_CATALOG_PATH: z.string().optional().default(''),
   SEED_ADMIN_EMAIL: z.string().default('admin@novaotica.com'),
   SEED_ADMIN_PASSWORD: z.string().default('admin123'),
 

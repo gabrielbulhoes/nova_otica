@@ -861,12 +861,18 @@ const NO_SUPPLIER = 'Sem fornecedor';
  * real do produto (extraída da descrição), então dentro do pedido de um
  * fornecedor as várias marcas aparecem. Fornecedores mais urgentes primeiro.
  */
-export function buildPurchaseOrders(plans: ProductPlan[], days: number): PurchaseOrdersPlan {
+export function buildPurchaseOrders(
+  plans: ProductPlan[],
+  days: number,
+  /** Opcional: fornecedor canônico por plano (catálogo de marcas). Sem ele,
+   *  agrupa pelo campo do ERP (p.brand). */
+  resolveSupplier?: (p: ProductPlan) => string | null,
+): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
   for (const p of plans) {
     if (p.recommendation !== 'BUY' || p.suggestedQty <= 0) continue;
-    const supplier = p.brand ?? NO_SUPPLIER;
+    const supplier = resolveSupplier?.(p) ?? p.brand ?? NO_SUPPLIER;
     const order =
       bySupplier.get(supplier) ??
       ({
@@ -1500,4 +1506,54 @@ export function buildCommercialStrategy(plans: ProductPlan[], params: StrategyPa
     capacity, capacityUsedPct, viable, withoutBacking, backedPct,
     segments, verdict,
   };
+}
+
+// ─── Catálogo de marcas: fornecedor canônico + mix por loja ──────────────────
+//
+// Vem da planilha real "PDVs_Grifes" (Loja · Grife · Grupo · Fornecedor). Duas
+// regras que o cliente confirmou:
+//  1. Fornecedor é derivado da MARCA (grife), 1:1 — no ERP o campo "marca"
+//     traz o fornecedor, mas a marca real é a grife da descrição.
+//  2. Mix: as grifes PREMIUM (as que aparecem na planilha) só existem nas lojas
+//     listadas; qualquer marca fora da planilha (linhas correntes: Ray-Ban,
+//     Chilli Beans, Technos…) é vendida em TODAS as lojas.
+//
+// O JSON é gitignorado (dado comercial real); gerado por
+// scripts/build-brand-catalog.mjs. Sem catálogo carregado, tudo é permissivo.
+
+export interface BrandCatalog {
+  /** Marca (grife) normalizada → fornecedor canônico. */
+  supplierByBrand: Record<string, string>;
+  /** Grife premium normalizada → nomes de loja (normalizados) que a trabalham. */
+  premiumStores: Record<string, string[]>;
+}
+
+/** Chave de comparação: MAIÚSCULA, sem acento, espaços colapsados. */
+export function normBrandKey(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Fornecedor canônico de uma marca (null quando não há catálogo ou marca desconhecida). */
+export function supplierFor(brand: string | null | undefined, catalog: BrandCatalog | null): string | null {
+  if (!brand || !catalog) return null;
+  return catalog.supplierByBrand[normBrandKey(brand)] ?? null;
+}
+
+/**
+ * A loja trabalha a marca? Grife premium → só nas lojas listadas; marca fora
+ * da lista (corrente) → todas. Sem catálogo ou marca vazia → permissivo (true).
+ * O casamento de loja é tolerante (inclusão em qualquer direção) porque o nome
+ * da planilha pode diferir levemente do nome vindo do ERP.
+ */
+export function storeCarriesBrand(
+  brand: string | null | undefined,
+  storeName: string | null | undefined,
+  catalog: BrandCatalog | null,
+): boolean {
+  if (!catalog || !brand) return true;
+  const stores = catalog.premiumStores[normBrandKey(brand)];
+  if (!stores || stores.length === 0) return true; // não é grife premium → universal
+  const sn = normBrandKey(storeName ?? '');
+  if (!sn) return true;
+  return stores.some((s) => sn === s || sn.includes(s) || s.includes(sn));
 }
