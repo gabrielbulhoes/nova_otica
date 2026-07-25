@@ -36,8 +36,9 @@ loja online com **provador virtual (AR)**.
 
 - **Branch de trabalho:** `claude/frontend-project-access-vdaerz`.
 - **`main`** já tem o PR #26 (marca/fornecedor, lentes por encomenda, confiança/
-  explicação). **Todo o resto abaixo está só na branch** (7 commits além da main)
-  — buildar/deployar a partir da **branch**.
+  explicação). **Todo o resto abaixo está na branch, aberto no PR #27**
+  (https://github.com/gabrielbulhoes/nova_otica/pull/27) → `main`, CI verde
+  (build-test + db-migrations). Até mergear, buildar/deployar a partir da **branch**.
 - Typecheck (API+web) limpo; testes **53 (planning) / 24 (web)**; build OK.
 
 ```
@@ -47,7 +48,8 @@ b735794 Decisões: cards de remanejamento acionáveis (aprovar/dispensar)
 a8a172d Portal de Decisões: cards unificados (compra + remanejamento + liquidação)
 b8a79d7 Tira GMAIS (CD) da matemática e lentes do remanejamento
 ```
-> Ainda **não há PR** desta branch para a `main`. Abrir quando quiser consolidar.
+> **PR #27** consolida esta branch na `main` (CI verde). Mergear para o sócio
+> pegar tudo com um `git pull` da `main`.
 
 ---
 
@@ -185,7 +187,7 @@ Rodar as migrações do Prisma (inclui `4_exclude_from_planning`).
   (aprovado/recusado/crítico >1mês) + gráfico aprovados×recusados (Dashboard
   Gerencial do Chico).
 
-**Próximo passo sugerido:** abrir o PR da branch para a `main`, depois #42
+**Próximo passo sugerido:** mergear o PR #27 na `main`, depois #42
 (fornecedor no relatório + catálogo na demo) ou #47 (persistência dos cards).
 
 ---
