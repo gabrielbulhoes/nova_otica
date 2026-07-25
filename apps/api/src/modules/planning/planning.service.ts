@@ -2,13 +2,20 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
+import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
+import { loadBrandCatalog } from './brandCatalog.js';
 import {
   analyzeProduct,
+  buildCommercialStrategy,
+  buildDecisionCards,
   buildFairSplit,
   buildOverview,
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
+  extractBrand,
+  supplierFor,
+  storeCarriesBrand,
   DEFAULT_PLANNING_CONFIG,
   matchesProductGroup,
   type FairSplitInput,
@@ -54,7 +61,8 @@ export async function planningInputs(
   storeId?: string,
   group: ProductGroup = 'todos',
 ): Promise<ProductMetricsInput[]> {
-  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) } };
+  // GMAIS e outros CDs ficam fora da matemática (escopo de lojas planejáveis).
+  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) }, store: PLANNED_STORE_WHERE };
   if (storeId) saleFilter.storeId = storeId;
 
   const sold = await prisma.saleItem.groupBy({
@@ -64,7 +72,7 @@ export async function planningInputs(
   });
   const soldBy = new Map(sold.map((s) => [s.productId as string, s._sum.quantity ?? 0]));
 
-  const stockWhere: Prisma.StockItemWhereInput = {};
+  const stockWhere: Prisma.StockItemWhereInput = { ...stockPlannedWhere };
   if (storeId) stockWhere.storeId = storeId;
   const stock = await prisma.stockItem.groupBy({
     by: ['productId'],
@@ -75,7 +83,7 @@ export async function planningInputs(
 
   // Janela recente (até 30 dias) para a suavização com peso recente.
   const recentDays = Math.min(30, days);
-  const recentFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(recentDays) } };
+  const recentFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(recentDays) }, store: PLANNED_STORE_WHERE };
   if (storeId) recentFilter.storeId = storeId;
   const soldRecent = await prisma.saleItem.groupBy({
     by: ['productId'],
@@ -151,6 +159,7 @@ async function monthlyHistoryByProduct(
                  SUM(si.quantity)::int AS units
           FROM "SaleItem" si
           JOIN "Sale" s ON s.id = si."saleId"
+          JOIN "Store" st ON st.id = s."storeId" AND st."excludeFromPlanning" = false
           WHERE si."productId" IS NOT NULL
             AND s."saleDate" >= NOW() - INTERVAL '24 months'
           GROUP BY pid, to_char(s."saleDate", 'YYYY-MM'), month`,
@@ -207,9 +216,42 @@ export async function purchaseSuggestions(days: number, storeId?: string, group:
   return buildSuggestions(await plans(days, storeId, group), days);
 }
 
-/** Rascunhos de ordem de compra agrupados por fornecedor (marca). */
+/** Rascunhos de ordem de compra agrupados pelo fornecedor canônico (catálogo). */
 export async function purchaseOrders(days: number, storeId?: string, group: ProductGroup = 'todos') {
-  return buildPurchaseOrders(await plans(days, storeId, group), days);
+  const [productPlans, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
+  // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
+  // sem ele, cai no campo "marca" do ERP (comportamento anterior).
+  const resolve = catalog
+    ? (p: ProductPlan) => supplierFor(extractBrand(p.description) ?? p.brand, catalog)
+    : undefined;
+  return buildPurchaseOrders(productPlans, days, resolve);
+}
+
+/**
+ * Feed unificado de cards de decisão (compra + remanejamento + liquidação),
+ * com tipo, prioridade e impacto — a visualização de "portal de decisões".
+ * Compra/liquidação respeitam o recorte de loja; o remanejamento é de rede.
+ */
+export async function decisionBoard(days: number, storeId?: string, group: ProductGroup = 'principal') {
+  const [productPlans, reb] = await Promise.all([
+    plans(days, storeId, group),
+    rebalancePlan(days, group),
+  ]);
+  return buildDecisionCards(productPlans, reb.rows);
+}
+
+/**
+ * Motor de estratégia comercial: valida o piso de compra contra a capacidade
+ * (demanda projetada da rede na janela) e divide em segmentos por risco.
+ * Roda sobre o recorte operacional ('principal': óculos + relógio).
+ */
+export async function commercialStrategy(
+  days: number,
+  params: { floorUnits: number; windowMonths: number; risk: 'conservador' | 'equilibrado' | 'agressivo' },
+  storeId?: string,
+) {
+  const productPlans = await plans(days, storeId, 'principal');
+  return buildCommercialStrategy(productPlans, params);
 }
 
 /**
@@ -238,12 +280,12 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     prisma.saleItem.findMany({
       where: {
         productId: { not: null },
-        sale: { saleDate: { gte: periodStart(days) }, storeId: { not: null } },
+        sale: { saleDate: { gte: periodStart(days) }, storeId: { not: null }, store: PLANNED_STORE_WHERE },
       },
       select: { productId: true, quantity: true, sale: { select: { storeId: true } } },
     }),
-    prisma.stockItem.findMany({ select: { storeId: true, productId: true, quantity: true } }),
-    prisma.store.findMany({ select: { id: true, name: true } }),
+    prisma.stockItem.findMany({ where: stockPlannedWhere, select: { storeId: true, productId: true, quantity: true } }),
+    prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
     supplierConfigResolver(),
   ]);
 
@@ -280,6 +322,9 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     const product = productBy.get(pos.productId);
     if (!product) continue;
     if (!matchesProductGroup(product.category, group)) continue;
+    // Regra absoluta da rede: lentes não se transferem entre lojas — só óculos
+    // de grau/sol e relógio. Vale mesmo no consolidado ('todos').
+    if (matchesProductGroup(product.category, 'lentes')) continue;
     inputs.push({
       storeId: pos.storeId,
       storeName: storeName.get(pos.storeId) ?? '—',
@@ -291,7 +336,28 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     });
   }
 
-  return buildRebalance(inputs, days, cfgFor);
+  const plan = buildRebalance(inputs, days, cfgFor);
+
+  // Regra de mix: não transferir uma grife premium para uma loja que não a
+  // trabalha (catálogo). Marcas correntes (fora do catálogo) valem para todas.
+  const catalog = loadBrandCatalog();
+  if (catalog) {
+    plan.rows = plan.rows.filter((r) =>
+      storeCarriesBrand(extractBrand(r.description) ?? r.brand, r.toStoreName, catalog),
+    );
+    const involved = new Set<string>();
+    for (const r of plan.rows) {
+      involved.add(r.fromStoreId);
+      involved.add(r.toStoreId);
+    }
+    plan.summary = {
+      suggestions: plan.rows.length,
+      units: plan.rows.reduce((a, r) => a + r.quantity, 0),
+      storesInvolved: involved.size,
+    };
+  }
+
+  return plan;
 }
 
 /** Fornecedores (marcas) com seus prazos: cadastrados ou padrão da rede. */
@@ -415,6 +481,7 @@ export async function fairSplit(days: number, filter: FairSplitFilter, totalQty:
       SELECT s."storeId" AS "storeId", COALESCE(SUM(si.quantity), 0)::bigint AS units
       FROM "SaleItem" si
       JOIN "Sale" s ON s.id = si."saleId"
+      JOIN "Store" lo ON lo.id = s."storeId" AND lo."excludeFromPlanning" = false
       JOIN "Product" p ON p.id = si."productId"
       WHERE s."saleDate" >= ${periodStart(days)} AND ${field} = ${value}
       GROUP BY s."storeId"
@@ -422,11 +489,12 @@ export async function fairSplit(days: number, filter: FairSplitFilter, totalQty:
     prisma.$queryRaw<{ storeId: string; units: bigint }[]>(Prisma.sql`
       SELECT st."storeId" AS "storeId", COALESCE(SUM(st.quantity), 0)::bigint AS units
       FROM "StockItem" st
+      JOIN "Store" lo ON lo.id = st."storeId" AND lo."excludeFromPlanning" = false
       JOIN "Product" p ON p.id = st."productId"
       WHERE ${field} = ${value}
       GROUP BY st."storeId"
     `),
-    prisma.store.findMany({ select: { id: true, name: true } }),
+    prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
   ]);
   const soldById = new Map(soldRows.filter((r) => r.storeId).map((r) => [r.storeId as string, Number(r.units)]));
   const stockById = new Map(stockRows.map((r) => [r.storeId, Number(r.units)]));

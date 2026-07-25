@@ -861,12 +861,18 @@ const NO_SUPPLIER = 'Sem fornecedor';
  * real do produto (extraída da descrição), então dentro do pedido de um
  * fornecedor as várias marcas aparecem. Fornecedores mais urgentes primeiro.
  */
-export function buildPurchaseOrders(plans: ProductPlan[], days: number): PurchaseOrdersPlan {
+export function buildPurchaseOrders(
+  plans: ProductPlan[],
+  days: number,
+  /** Opcional: fornecedor canônico por plano (catálogo de marcas). Sem ele,
+   *  agrupa pelo campo do ERP (p.brand). */
+  resolveSupplier?: (p: ProductPlan) => string | null,
+): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
   for (const p of plans) {
     if (p.recommendation !== 'BUY' || p.suggestedQty <= 0) continue;
-    const supplier = p.brand ?? NO_SUPPLIER;
+    const supplier = resolveSupplier?.(p) ?? p.brand ?? NO_SUPPLIER;
     const order =
       bySupplier.get(supplier) ??
       ({
@@ -1229,4 +1235,325 @@ export function abcFromItems(items: AbcItem[], days: number, dimension: AbcDimen
     };
   });
   return { days, dimension, totalRevenue: round2(totalRevenue), summary, rows };
+}
+
+// ─── Cards de decisão (portal unificado — paridade Chico) ────────────────────
+//
+// Unifica compra, remanejamento e liquidação num único feed de "cards" com
+// tipo, prioridade, impacto em R$ e a explicação amigável — a visualização que
+// o cliente pediu. Puro: alimenta o backend e a demo com os MESMOS dados que já
+// calculamos (analyzeProduct + buildRebalance), sem consulta nova.
+
+export type DecisionType = 'COMPRA' | 'REMANEJAMENTO' | 'LIQUIDACAO';
+export type DecisionPriority = 'ALTA' | 'MEDIA' | 'BAIXA';
+
+export interface DecisionCard {
+  id: string;
+  type: DecisionType;
+  title: string;
+  priority: DecisionPriority;
+  productId: string;
+  description: string;
+  brand: string | null;
+  /** Loja-alvo ou rota (De → Para) do card. */
+  target: string;
+  /** IDs de loja para ação de 1 clique no remanejamento (origem → destino). */
+  fromStoreId?: string;
+  toStoreId?: string;
+  /** Quantidade envolvida (a comprar/transferir), quando se aplica. */
+  quantity: number | null;
+  /** Explicação curta e amigável do porquê. */
+  reason: string;
+  confidence: number;
+  /** Impacto financeiro do card em R$ (custo do pedido ou capital a liberar). */
+  impact: number;
+  impactLabel: string;
+  /** Urgência em dias (ruptura próxima); menor = mais urgente. */
+  urgencyDays: number | null;
+}
+
+export interface DecisionSummary {
+  total: number;
+  byType: { compra: number; remanejamento: number; liquidacao: number };
+  byPriority: { alta: number; media: number; baixa: number };
+  /** Impacto total sob decisão (R$) — soma do impacto de todos os cards. */
+  impactTotal: number;
+  /** Cards críticos (ruptura em ~7 dias ou menos). */
+  criticos: number;
+}
+
+export interface DecisionBoard {
+  summary: DecisionSummary;
+  cards: DecisionCard[];
+}
+
+const PRIORITY_RANK: Record<DecisionPriority, number> = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
+const shortStore = (name: string) => name.replace(/^.*—\s*/, '').trim();
+
+/** ID curto e estável por card (estilo "#72D.A1"), derivado do conteúdo. */
+function cardId(type: DecisionType, seed: string): string {
+  let h = 2166136261;
+  const s = type + '|' + seed;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const code = (h >>> 0).toString(36).toUpperCase().padStart(6, '0').slice(-6);
+  const prefix = type === 'COMPRA' ? 'C' : type === 'REMANEJAMENTO' ? 'R' : 'L';
+  return `#${prefix}${code.slice(0, 2)}.${code.slice(2, 5)}`;
+}
+
+function buyPriority(orderByInDays: number | null, stockoutInDays: number | null): DecisionPriority {
+  const d = orderByInDays ?? stockoutInDays;
+  if (d !== null && d <= 0) return 'ALTA';
+  if (d !== null && d <= 7) return 'ALTA';
+  if (d !== null && d <= 21) return 'MEDIA';
+  return 'BAIXA';
+}
+function urgencyPriority(stockoutInDays: number | null): DecisionPriority {
+  if (stockoutInDays === null) return 'BAIXA';
+  if (stockoutInDays <= 7) return 'ALTA';
+  if (stockoutInDays <= 21) return 'MEDIA';
+  return 'BAIXA';
+}
+function capitalPriority(value: number): DecisionPriority {
+  if (value >= 1500) return 'ALTA';
+  if (value >= 400) return 'MEDIA';
+  return 'BAIXA';
+}
+
+/**
+ * Monta o feed de cards de decisão a partir dos planos por produto (compra e
+ * liquidação) e das sugestões de remanejamento. Ordena por prioridade e, dentro
+ * dela, pelo maior impacto.
+ */
+export function buildDecisionCards(plans: ProductPlan[], rebalance: RebalanceSuggestion[]): DecisionBoard {
+  const cards: DecisionCard[] = [];
+
+  for (const p of plans) {
+    if (p.recommendation === 'BUY') {
+      cards.push({
+        id: cardId('COMPRA', p.productId),
+        type: 'COMPRA',
+        title: 'Repor e evitar ruptura',
+        priority: buyPriority(p.orderByInDays, p.stockoutInDays),
+        productId: p.productId,
+        description: p.description,
+        brand: p.brand,
+        target: `Fornecedor: ${p.brand ?? '—'}`,
+        quantity: p.suggestedQty,
+        reason: p.friendlyReason,
+        confidence: p.confidence,
+        impact: round2(p.capital),
+        impactLabel: 'Custo do pedido',
+        urgencyDays: p.stockoutInDays,
+      });
+    } else if (p.recommendation === 'LIQUIDATE') {
+      cards.push({
+        id: cardId('LIQUIDACAO', p.productId),
+        type: 'LIQUIDACAO',
+        title: 'Reduzir excesso e liberar capital',
+        priority: capitalPriority(p.stockValue),
+        productId: p.productId,
+        description: p.description,
+        brand: p.brand,
+        target: p.brand ?? 'Excesso na rede',
+        quantity: p.currentStock,
+        reason: p.friendlyReason,
+        confidence: p.confidence,
+        impact: round2(p.stockValue),
+        impactLabel: 'Capital a liberar',
+        urgencyDays: null,
+      });
+    }
+  }
+
+  for (const s of rebalance) {
+    cards.push({
+      id: cardId('REMANEJAMENTO', `${s.productId}:${s.fromStoreId}:${s.toStoreId}`),
+      type: 'REMANEJAMENTO',
+      title: 'Transferir para loja com maior giro',
+      priority: urgencyPriority(s.stockoutInDays),
+      productId: s.productId,
+      description: s.description,
+      brand: s.brand,
+      target: `${shortStore(s.fromStoreName)} → ${shortStore(s.toStoreName)}`,
+      fromStoreId: s.fromStoreId,
+      toStoreId: s.toStoreId,
+      quantity: s.quantity,
+      reason: s.friendlyReason,
+      confidence: s.confidence,
+      impact: 0,
+      impactLabel: 'Giro (sem capital)',
+      urgencyDays: s.stockoutInDays,
+    });
+  }
+
+  cards.sort((a, b) => {
+    const pr = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+    if (pr !== 0) return pr;
+    return b.impact - a.impact;
+  });
+
+  const summary: DecisionSummary = {
+    total: cards.length,
+    byType: {
+      compra: cards.filter((c) => c.type === 'COMPRA').length,
+      remanejamento: cards.filter((c) => c.type === 'REMANEJAMENTO').length,
+      liquidacao: cards.filter((c) => c.type === 'LIQUIDACAO').length,
+    },
+    byPriority: {
+      alta: cards.filter((c) => c.priority === 'ALTA').length,
+      media: cards.filter((c) => c.priority === 'MEDIA').length,
+      baixa: cards.filter((c) => c.priority === 'BAIXA').length,
+    },
+    impactTotal: round2(cards.reduce((a, c) => a + c.impact, 0)),
+    criticos: cards.filter((c) => c.urgencyDays !== null && c.urgencyDays <= 7).length,
+  };
+
+  return { summary, cards };
+}
+
+// ─── Motor de estratégia comercial (piso · risco · janela) ───────────────────
+//
+// Planejador de compra top-down (paridade com a tela "Estratégia comercial" do
+// concorrente): dado um PISO (total de unidades a comprar), um PERFIL DE RISCO e
+// uma JANELA de venda, valida o piso contra a CAPACIDADE da rede (demanda
+// projetada na janela) e divide o piso em segmentos de intenção.
+
+export type RiskProfile = 'conservador' | 'equilibrado' | 'agressivo';
+
+export interface StrategyParams {
+  /** Piso de compra: total de unidades a adquirir para a janela. */
+  floorUnits: number;
+  /** Janela de venda em meses (horizonte do planejamento). */
+  windowMonths: number;
+  risk: RiskProfile;
+}
+
+export interface StrategySegment {
+  key: 'best-seller' | 'lancamento' | 'aposta';
+  label: string;
+  rationale: string;
+  units: number;
+  pct: number; // participação no piso (0–100)
+}
+
+export interface CommercialStrategy {
+  floorUnits: number;
+  windowMonths: number;
+  risk: RiskProfile;
+  /** Demanda projetada da rede na janela (unidades) — o "lastro". */
+  capacity: number;
+  /** Piso ÷ capacidade (0–100+). */
+  capacityUsedPct: number;
+  /** Piso cabe na capacidade da rede? */
+  viable: boolean;
+  /** Unidades do piso acima da demanda projetada (0 quando viável). */
+  withoutBacking: number;
+  /** % com lastro = best-seller + lançamento (aposta é especulação). */
+  backedPct: number;
+  segments: StrategySegment[];
+  /** Texto da "decisão do motor". */
+  verdict: string;
+}
+
+const RISK_SPLIT: Record<RiskProfile, { bs: number; lanc: number; aposta: number }> = {
+  conservador: { bs: 0.6, lanc: 0.3, aposta: 0.1 },
+  equilibrado: { bs: 0.45, lanc: 0.35, aposta: 0.2 },
+  agressivo: { bs: 0.3, lanc: 0.4, aposta: 0.3 },
+};
+
+const clampInt = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(n)));
+
+/**
+ * Monta a estratégia de compra a partir dos planos por produto (que trazem a
+ * demanda diária) e dos parâmetros de piso/risco/janela. Puro e determinístico.
+ */
+export function buildCommercialStrategy(plans: ProductPlan[], params: StrategyParams): CommercialStrategy {
+  const windowMonths = clampInt(params.windowMonths, 1, 24);
+  const floorUnits = Math.max(0, Math.round(params.floorUnits));
+  const risk = RISK_SPLIT[params.risk] ? params.risk : 'equilibrado';
+
+  const dailyDemand = plans.reduce((a, p) => a + p.dailyDemand, 0);
+  const capacity = Math.round(dailyDemand * windowMonths * 30);
+
+  const split = RISK_SPLIT[risk];
+  const bs = Math.round(floorUnits * split.bs);
+  const lanc = Math.round(floorUnits * split.lanc);
+  const aposta = Math.max(0, floorUnits - bs - lanc); // resto fecha o total exato
+  const pctOf = (n: number) => (floorUnits > 0 ? round1((n / floorUnits) * 100) : 0);
+
+  const segments: StrategySegment[] = [
+    { key: 'best-seller', label: 'Best-seller', rationale: 'reposição do que já vende', units: bs, pct: pctOf(bs) },
+    { key: 'lancamento', label: 'Lançamento', rationale: 'quota por segmento', units: lanc, pct: pctOf(lanc) },
+    { key: 'aposta', label: 'Aposta', rationale: 'especulação dirigida', units: aposta, pct: pctOf(aposta) },
+  ];
+
+  const withoutBacking = Math.max(0, floorUnits - capacity);
+  const backedPct = floorUnits > 0 ? round1(((bs + lanc) / floorUnits) * 100) : 0;
+  const capacityUsedPct = capacity > 0 ? round1((floorUnits / capacity) * 100) : 0;
+  const viable = capacity > 0 && floorUnits <= capacity;
+
+  const verdict = capacity <= 0
+    ? 'Sem histórico de vendas suficiente para projetar a capacidade — carregue o período ou amplie a janela.'
+    : viable
+      ? `O piso (${floorUnits}) é ${capacityUsedPct}% da capacidade (${capacity}) da rede na janela — com lastro e viável.`
+      : `O piso (${floorUnits}) passa a capacidade da rede (${capacity}): ${withoutBacking} un. ficariam sem lastro. Reduza o piso ou amplie a janela.`;
+
+  return {
+    floorUnits, windowMonths, risk,
+    capacity, capacityUsedPct, viable, withoutBacking, backedPct,
+    segments, verdict,
+  };
+}
+
+// ─── Catálogo de marcas: fornecedor canônico + mix por loja ──────────────────
+//
+// Vem da planilha real "PDVs_Grifes" (Loja · Grife · Grupo · Fornecedor). Duas
+// regras que o cliente confirmou:
+//  1. Fornecedor é derivado da MARCA (grife), 1:1 — no ERP o campo "marca"
+//     traz o fornecedor, mas a marca real é a grife da descrição.
+//  2. Mix: as grifes PREMIUM (as que aparecem na planilha) só existem nas lojas
+//     listadas; qualquer marca fora da planilha (linhas correntes: Ray-Ban,
+//     Chilli Beans, Technos…) é vendida em TODAS as lojas.
+//
+// O JSON é gitignorado (dado comercial real); gerado por
+// scripts/build-brand-catalog.mjs. Sem catálogo carregado, tudo é permissivo.
+
+export interface BrandCatalog {
+  /** Marca (grife) normalizada → fornecedor canônico. */
+  supplierByBrand: Record<string, string>;
+  /** Grife premium normalizada → nomes de loja (normalizados) que a trabalham. */
+  premiumStores: Record<string, string[]>;
+}
+
+/** Chave de comparação: MAIÚSCULA, sem acento, espaços colapsados. */
+export function normBrandKey(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Fornecedor canônico de uma marca (null quando não há catálogo ou marca desconhecida). */
+export function supplierFor(brand: string | null | undefined, catalog: BrandCatalog | null): string | null {
+  if (!brand || !catalog) return null;
+  return catalog.supplierByBrand[normBrandKey(brand)] ?? null;
+}
+
+/**
+ * A loja trabalha a marca? Grife premium → só nas lojas listadas; marca fora
+ * da lista (corrente) → todas. Sem catálogo ou marca vazia → permissivo (true).
+ * O casamento de loja é tolerante (inclusão em qualquer direção) porque o nome
+ * da planilha pode diferir levemente do nome vindo do ERP.
+ */
+export function storeCarriesBrand(
+  brand: string | null | undefined,
+  storeName: string | null | undefined,
+  catalog: BrandCatalog | null,
+): boolean {
+  if (!catalog || !brand) return true;
+  const stores = catalog.premiumStores[normBrandKey(brand)];
+  if (!stores || stores.length === 0) return true; // não é grife premium → universal
+  const sn = normBrandKey(storeName ?? '');
+  if (!sn) return true;
+  return stores.some((s) => sn === s || sn.includes(s) || s.includes(sn));
 }

@@ -10,6 +10,8 @@
 import {
   abcFromItems,
   analyzeProduct,
+  buildCommercialStrategy,
+  buildDecisionCards,
   matchesProductGroup,
   buildBrandMix,
   buildFairSplit,
@@ -105,7 +107,7 @@ const STORE_NAMES: [string, string, string][] = [
   ['4', 'Belo Horizonte', 'MG'],
 ];
 
-const stores: Store[] = real
+const allStores: Store[] = real
   ? real.stores.map((s) => ({
       id: `st_${s.externalId}`,
       externalId: s.externalId,
@@ -122,6 +124,12 @@ const stores: Store[] = real
       state,
       active: true,
     }));
+
+// GMAIS (centro de distribuição) e unidades não-varejo (assistência técnica,
+// estoque de compras) ficam fora da matemática de lojas, igual ao backend
+// real (Store.excludeFromPlanning / PLANNING_EXCLUDED_STORE_PATTERN).
+const PLANNING_EXCLUDED_STORE_PATTERN = /gmais|assistencia|estoque compras/i;
+const stores: Store[] = allStores.filter((s) => !PLANNING_EXCLUDED_STORE_PATTERN.test(s.name));
 
 const products: Product[] = real
   ? real.products.map((p) => ({
@@ -842,7 +850,9 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   };
   const planDays = Number(one(params.days)) || 90;
   const rawGroup = one(params.group);
-  const planGroup: ProductGroup = rawGroup === 'principal' || rawGroup === 'lentes' ? rawGroup : 'todos';
+  // Padrão operacional: 'principal' (óculos de grau/sol + relógio). Lentes só
+  // entram quando pedidas explicitamente (faturamento/consolidado).
+  const planGroup: ProductGroup = rawGroup === 'lentes' || rawGroup === 'todos' ? rawGroup : 'principal';
   if (url === '/planning/overview')
     return buildOverview(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-suggestions')
@@ -889,10 +899,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     }
     return rec;
   }
-  if (url === '/planning/rebalance') {
+  const rebalanceRows = () => {
     const inputs: StoreProductInput[] = [];
     for (const s of stores)
-      for (const prod of products.filter((x) => matchesProductGroup(x.category, planGroup)))
+      for (const prod of products.filter(
+        (x) => matchesProductGroup(x.category, planGroup) && !matchesProductGroup(x.category, 'lentes'),
+      ))
         inputs.push({
           storeId: s.id,
           storeName: s.name,
@@ -903,6 +915,24 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           currentStock: stockQty.get(key(s.id, prod.id)) ?? 0,
         });
     return buildRebalance(inputs, planDays, cfgForBrand);
+  };
+  if (url === '/planning/decisions')
+    return buildDecisionCards(
+      planningPlans(planDays, one(params.storeId), planGroup),
+      rebalanceRows().rows,
+    );
+  if (url === '/planning/strategy') {
+    const floorUnits = Math.max(0, Math.trunc(Number(one(params.floor))) || 0);
+    const windowMonths = Math.trunc(Number(one(params.window))) || 9;
+    const r = one(params.risk);
+    const risk = r === 'conservador' || r === 'agressivo' ? r : 'equilibrado';
+    return buildCommercialStrategy(
+      planningPlans(planDays, one(params.storeId), 'principal'),
+      { floorUnits, windowMonths, risk },
+    );
+  }
+  if (url === '/planning/rebalance') {
+    return rebalanceRows();
   }
   if (url === '/planning/suppliers' && m === 'GET') {
     // Com dados reais, as marcas são as do catálogo carregado (as fictícias

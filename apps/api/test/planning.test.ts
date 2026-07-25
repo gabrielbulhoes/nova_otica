@@ -4,6 +4,10 @@ import {
   buildOverview,
   buildPurchaseOrders,
   buildRebalance,
+  buildCommercialStrategy,
+  supplierFor,
+  storeCarriesBrand,
+  buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
   DEFAULT_PLANNING_CONFIG,
@@ -461,5 +465,154 @@ describe('analyzeProduct expõe explicação amigável e confiança', () => {
     expect(plan.friendlyReason.length).toBeGreaterThan(0);
     expect(plan.confidence).toBeGreaterThanOrEqual(30);
     expect(plan.confidence).toBeLessThanOrEqual(97);
+  });
+});
+
+describe('buildDecisionCards (portal de decisões — cards)', () => {
+  const buy = analyzeProduct(
+    { ...base, productId: 'buy1', description: 'Armação Oakley Preto', brand: 'Oakley', unitsSold: 60, currentStock: 2 },
+    90, DEFAULT_PLANNING_CONFIG,
+  );
+  const liq = analyzeProduct(
+    { ...base, productId: 'liq1', description: 'Óculos Bulget Azul', brand: 'Bulget', unitsSold: 0, currentStock: 10 },
+    90, DEFAULT_PLANNING_CONFIG,
+  );
+  const hold = analyzeProduct(
+    { ...base, productId: 'hold1', description: 'Armação Atitude', brand: 'Atitude', unitsSold: 6, currentStock: 20 },
+    90, DEFAULT_PLANNING_CONFIG,
+  );
+  const reb = buildRebalance(
+    [
+      { storeId: 'A', storeName: 'Nova Ótica — São Paulo', productId: 'x', description: 'Armação Ray-Ban', brand: 'Ray-Ban', unitsSold: 30, currentStock: 0 },
+      { storeId: 'B', storeName: 'Nova Ótica — Campinas', productId: 'x', description: 'Armação Ray-Ban', brand: 'Ray-Ban', unitsSold: 0, currentStock: 20 },
+    ],
+    90, () => DEFAULT_PLANNING_CONFIG,
+  );
+
+  it('gera cards de compra, liquidação e remanejamento; ignora HOLD/DONT_BUY', () => {
+    const { cards, summary } = buildDecisionCards([buy, liq, hold], reb.rows);
+    const types = cards.map((c) => c.type);
+    expect(types).toContain('COMPRA');
+    expect(types).toContain('LIQUIDACAO');
+    expect(types).toContain('REMANEJAMENTO');
+    // HOLD não vira card
+    expect(cards.some((c) => c.productId === 'hold1')).toBe(false);
+    expect(summary.total).toBe(cards.length);
+    expect(summary.byType.compra + summary.byType.remanejamento + summary.byType.liquidacao).toBe(summary.total);
+  });
+
+  it('todo card tem id "#", prioridade válida, confiança 0–100 e explicação', () => {
+    const { cards } = buildDecisionCards([buy, liq], reb.rows);
+    for (const c of cards) {
+      expect(c.id.startsWith('#')).toBe(true);
+      expect(['ALTA', 'MEDIA', 'BAIXA']).toContain(c.priority);
+      expect(c.confidence).toBeGreaterThanOrEqual(0);
+      expect(c.confidence).toBeLessThanOrEqual(100);
+      expect(typeof c.reason).toBe('string');
+      expect(c.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('ordena por prioridade (ALTA antes de BAIXA)', () => {
+    const { cards } = buildDecisionCards([buy, liq], reb.rows);
+    const rank = { ALTA: 0, MEDIA: 1, BAIXA: 2 } as const;
+    const ranks = cards.map((c) => rank[c.priority]);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+  });
+
+  it('compra traz custo do pedido; liquidação traz capital a liberar', () => {
+    const { cards } = buildDecisionCards([buy, liq], []);
+    const compra = cards.find((c) => c.type === 'COMPRA')!;
+    const liquid = cards.find((c) => c.type === 'LIQUIDACAO')!;
+    expect(compra.impact).toBeGreaterThan(0);
+    expect(compra.impactLabel).toMatch(/pedido/i);
+    expect(liquid.impact).toBeGreaterThan(0);
+    expect(liquid.impactLabel).toMatch(/liberar/i);
+  });
+});
+
+describe('buildCommercialStrategy (motor piso · risco · janela)', () => {
+  // Rede vendendo ~2/dia no total (dois produtos a 90 un./90 dias).
+  const plans = [
+    analyzeProduct({ ...base, productId: 's1', unitsSold: 90, currentStock: 30 }, 90, DEFAULT_PLANNING_CONFIG),
+    analyzeProduct({ ...base, productId: 's2', unitsSold: 90, currentStock: 30 }, 90, DEFAULT_PLANNING_CONFIG),
+  ];
+
+  it('capacidade = demanda diária da rede × janela (meses × 30)', () => {
+    const st = buildCommercialStrategy(plans, { floorUnits: 300, windowMonths: 9, risk: 'equilibrado' });
+    // 2/dia × 270 dias = 540
+    expect(st.capacity).toBe(540);
+    expect(st.viable).toBe(true); // 300 <= 540
+    expect(st.capacityUsedPct).toBeCloseTo((300 / 540) * 100, 1);
+    expect(st.withoutBacking).toBe(0);
+  });
+
+  it('segmentos somam exatamente o piso e variam com o risco', () => {
+    for (const risk of ['conservador', 'equilibrado', 'agressivo'] as const) {
+      const st = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk });
+      const soma = st.segments.reduce((a, x) => a + x.units, 0);
+      expect(soma).toBe(1000);
+    }
+    const cons = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'conservador' });
+    const agr = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'agressivo' });
+    const bs = (x: typeof cons) => x.segments.find((s) => s.key === 'best-seller')!.units;
+    const ap = (x: typeof cons) => x.segments.find((s) => s.key === 'aposta')!.units;
+    expect(bs(cons)).toBeGreaterThan(bs(agr)); // conservador reforça best-seller
+    expect(ap(agr)).toBeGreaterThan(ap(cons)); // agressivo aposta mais
+  });
+
+  it('piso acima da capacidade fica sem lastro e não é viável', () => {
+    const st = buildCommercialStrategy(plans, { floorUnits: 800, windowMonths: 9, risk: 'equilibrado' });
+    expect(st.viable).toBe(false); // 800 > 540
+    expect(st.withoutBacking).toBe(260); // 800 - 540
+    expect(st.verdict).toMatch(/sem lastro|passa a capacidade/i);
+  });
+
+  it('com lastro = best-seller + lançamento (aposta é especulação)', () => {
+    const st = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'equilibrado' });
+    const bs = st.segments.find((s) => s.key === 'best-seller')!.units;
+    const lanc = st.segments.find((s) => s.key === 'lancamento')!.units;
+    expect(st.backedPct).toBeCloseTo(((bs + lanc) / 1000) * 100, 1);
+  });
+});
+
+describe('catálogo de marcas (fornecedor + mix por loja)', () => {
+  const catalog = {
+    supplierByBrand: { GUCCI: 'Kering', DIOR: 'Marcolin', 'RAY BAN': 'Luxottica' },
+    premiumStores: {
+      GUCCI: ['A GRACIOSA IGUATEMI', 'GRAND OPTICAL PETROPOLIS'],
+      DIOR: ['A GRACIOSA NATAL SHOPPING'],
+    },
+  };
+
+  it('supplierFor resolve fornecedor canônico (case/acentos)', () => {
+    expect(supplierFor('Gucci', catalog)).toBe('Kering');
+    expect(supplierFor('DIOR', catalog)).toBe('Marcolin');
+    expect(supplierFor('Marca Inexistente', catalog)).toBeNull();
+    expect(supplierFor('Gucci', null)).toBeNull();
+  });
+
+  it('grife premium só é trabalhada nas lojas listadas', () => {
+    expect(storeCarriesBrand('Gucci', 'A Graciosa Iguatemi', catalog)).toBe(true);
+    expect(storeCarriesBrand('Gucci', 'Oticalli Midway Mall', catalog)).toBe(false);
+    // casamento tolerante ao nome vindo do ERP
+    expect(storeCarriesBrand('Gucci', 'Grand Optical Petropolis - RJ', catalog)).toBe(true);
+  });
+
+  it('marca fora do catálogo (corrente) vale para todas as lojas', () => {
+    expect(storeCarriesBrand('Chilli Beans', 'Qualquer Loja', catalog)).toBe(true);
+    expect(storeCarriesBrand('Ray Ban', 'Qualquer Loja', catalog)).toBe(true); // tem fornecedor mas não é premium
+  });
+
+  it('sem catálogo, nada é restrito', () => {
+    expect(storeCarriesBrand('Gucci', 'Oticalli Midway Mall', null)).toBe(true);
+  });
+
+  it('buildPurchaseOrders agrupa pelo fornecedor canônico quando há resolver', () => {
+    const p1 = analyzeProduct({ ...base, productId: 'g1', description: 'Óculos Gucci GG0011 Preto', brand: 'Kering', unitsSold: 90, currentStock: 2 }, 90);
+    const p2 = analyzeProduct({ ...base, productId: 'd1', description: 'Armação Dior CD1234', brand: 'Marcolin', unitsSold: 90, currentStock: 2 }, 90);
+    const resolve = (p: typeof p1) => supplierFor(extractBrand(p.description), catalog);
+    const po = buildPurchaseOrders([p1, p2], 90, resolve);
+    expect(po.orders.map((o) => o.supplier).sort()).toEqual(['Kering', 'Marcolin']);
   });
 });

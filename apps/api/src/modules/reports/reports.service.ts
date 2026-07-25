@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { toNumber } from '../../http/helpers.js';
+import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
 import {
   abcFromItems,
   buildBrandMix,
@@ -119,18 +120,20 @@ export interface BrandCoverageResult {
  * grade do CDS não traz fornecedor; o backfill do sistema vivo preenche).
  */
 export async function coverageByBrand(days: number, storeId?: string): Promise<BrandCoverageResult> {
-  const stockWhere: Prisma.StockItemWhereInput = storeId ? { storeId } : {};
+  // GMAIS e outros CDs ficam fora da cobertura (matemática de lojas).
+  const stockWhere: Prisma.StockItemWhereInput = storeId ? { storeId } : { ...stockPlannedWhere };
+  const saleScope = storeId ? { storeId } : { store: PLANNED_STORE_WHERE };
   const [displayStock, sold, netStock] = await Promise.all([
     // Estoque exibido (respeita o filtro de loja).
     prisma.stockItem.groupBy({ by: ['productId'], where: stockWhere, _sum: { quantity: true } }),
     // Vendas do período (respeita o filtro de loja).
     prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { saleDate: { gte: periodStart(days) }, ...(storeId ? { storeId } : {}) }, productId: { not: null } },
+      where: { sale: { saleDate: { gte: periodStart(days) }, ...saleScope }, productId: { not: null } },
       _sum: { quantity: true },
     }),
-    // Estoque da REDE inteira (sem filtro) — decide "lente por encomenda".
-    prisma.stockItem.groupBy({ by: ['productId'], _sum: { quantity: true } }),
+    // Estoque da REDE planejável (sem CDs) — decide "lente por encomenda".
+    prisma.stockItem.groupBy({ by: ['productId'], where: stockPlannedWhere, _sum: { quantity: true } }),
   ]);
 
   const netById = new Map(netStock.map((r) => [r.productId, r._sum.quantity ?? 0]));
@@ -199,13 +202,16 @@ export async function salesAnalysis(
   storeId?: string,
 ): Promise<{ days: number; by: AnalysisDimension; rows: AnalysisRow[] }> {
   const since = periodStart(days);
-  const storeCond = storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty;
+  // GMAIS/CDs fora da análise por loja; loja específica já delimita o escopo.
+  const storeCond = storeId
+    ? Prisma.sql`AND s."storeId" = ${storeId}`
+    : Prisma.sql`AND s."storeId" IN (SELECT id FROM "Store" WHERE "excludeFromPlanning" = false)`;
 
   // SKU agrupa pelo ID do produto (descrições colidem entre modelos).
   if (by === 'product') {
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) }, productId: { not: null } },
+      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) }, productId: { not: null } },
       _sum: { quantity: true, total: true },
       orderBy: { _sum: { quantity: 'desc' } },
       take: ANALYSIS_LIMIT,
@@ -234,7 +240,7 @@ export async function salesAnalysis(
   if (by === 'brand') {
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) }, productId: { not: null } },
+      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) }, productId: { not: null } },
       _sum: { quantity: true, total: true },
     });
     const products = await prisma.product.findMany({
@@ -318,7 +324,8 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
   days: number;
   rows: TurnoverRow[];
 }> {
-  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) } };
+  // GMAIS e outros CDs ficam fora do giro (matemática de lojas).
+  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) }, store: PLANNED_STORE_WHERE };
   if (storeId) saleFilter.storeId = storeId;
 
   const sold = await prisma.saleItem.groupBy({
@@ -328,7 +335,7 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
   });
   const soldByProduct = new Map(sold.map((s) => [s.productId as string, s._sum.quantity ?? 0]));
 
-  const stockWhere: Prisma.StockItemWhereInput = {};
+  const stockWhere: Prisma.StockItemWhereInput = { ...stockPlannedWhere };
   if (storeId) stockWhere.storeId = storeId;
   const stock = await prisma.stockItem.groupBy({
     by: ['productId'],
@@ -337,8 +344,8 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
   });
   const stockByProduct = new Map(stock.map((s) => [s.productId, s._sum.quantity ?? 0]));
 
-  // Estoque da rede (sem filtro) — exclui lentes por encomenda do giro.
-  const netStock = await prisma.stockItem.groupBy({ by: ['productId'], _sum: { quantity: true } });
+  // Estoque da rede planejável (sem CDs) — exclui lentes por encomenda do giro.
+  const netStock = await prisma.stockItem.groupBy({ by: ['productId'], where: stockPlannedWhere, _sum: { quantity: true } });
   const netById = new Map(netStock.map((n) => [n.productId, n._sum.quantity ?? 0]));
 
   const productIds = Array.from(new Set([...soldByProduct.keys(), ...stockByProduct.keys()]));
@@ -386,6 +393,7 @@ export async function brandMix(days: number) {
     prisma.$queryRaw<{ storeId: string; brand: string | null; units: bigint }[]>(Prisma.sql`
       SELECT st."storeId" AS "storeId", p.brand AS brand, COALESCE(SUM(st.quantity), 0)::bigint AS units
       FROM "StockItem" st
+      JOIN "Store" lo ON lo.id = st."storeId" AND lo."excludeFromPlanning" = false
       LEFT JOIN "Product" p ON p.id = st."productId"
       GROUP BY st."storeId", p.brand
     `),
@@ -393,11 +401,12 @@ export async function brandMix(days: number) {
       SELECT s."storeId" AS "storeId", p.brand AS brand, COALESCE(SUM(si.quantity), 0)::bigint AS units
       FROM "SaleItem" si
       JOIN "Sale" s ON s.id = si."saleId"
+      JOIN "Store" lo ON lo.id = s."storeId" AND lo."excludeFromPlanning" = false
       LEFT JOIN "Product" p ON p.id = si."productId"
       WHERE s."saleDate" >= ${periodStart(days)}
       GROUP BY s."storeId", p.brand
     `),
-    prisma.store.findMany({ select: { id: true, name: true } }),
+    prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
   ]);
   const nameById = new Map(stores.map((s) => [s.id, s.name]));
 

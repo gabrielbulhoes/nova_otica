@@ -42,3 +42,6 @@ novaotica-demo-*.zip
 # Amostras capturadas da CDS (podem conter dados de clientes) — nunca versionar
 apps/api/tmp/
 apps/web/src/api/demo-real-data.json
+
+# Catálogo de marcas (dado comercial real — gerado de PDVs_Grifes)
+apps/api/data/brand-catalog.json

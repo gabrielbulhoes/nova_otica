@@ -512,6 +512,62 @@ export interface PurchaseOrdersPlan {
   orders: PurchaseOrder[];
 }
 
+export type DecisionType = 'COMPRA' | 'REMANEJAMENTO' | 'LIQUIDACAO';
+export type DecisionPriority = 'ALTA' | 'MEDIA' | 'BAIXA';
+
+export interface DecisionCard {
+  id: string;
+  type: DecisionType;
+  title: string;
+  priority: DecisionPriority;
+  productId: string;
+  description: string;
+  brand: string | null;
+  target: string;
+  fromStoreId?: string;
+  toStoreId?: string;
+  quantity: number | null;
+  reason: string;
+  confidence: number;
+  impact: number;
+  impactLabel: string;
+  urgencyDays: number | null;
+}
+
+export interface DecisionBoard {
+  summary: {
+    total: number;
+    byType: { compra: number; remanejamento: number; liquidacao: number };
+    byPriority: { alta: number; media: number; baixa: number };
+    impactTotal: number;
+    criticos: number;
+  };
+  cards: DecisionCard[];
+}
+
+export type RiskProfile = 'conservador' | 'equilibrado' | 'agressivo';
+
+export interface StrategySegment {
+  key: 'best-seller' | 'lancamento' | 'aposta';
+  label: string;
+  rationale: string;
+  units: number;
+  pct: number;
+}
+
+export interface CommercialStrategy {
+  floorUnits: number;
+  windowMonths: number;
+  risk: RiskProfile;
+  capacity: number;
+  capacityUsedPct: number;
+  viable: boolean;
+  withoutBacking: number;
+  backedPct: number;
+  segments: StrategySegment[];
+  verdict: string;
+}
+
 type PlanParams = Record<string, string | number | undefined>;
 
 export const getPlanningOverview = (params: PlanParams) =>
@@ -520,6 +576,10 @@ export const getPurchaseSuggestions = (params: PlanParams) =>
   api.get<PurchaseSuggestions>('/planning/purchase-suggestions', { params }).then((r) => r.data);
 export const getRebalancePlan = (params: PlanParams) =>
   api.get<RebalancePlan>('/planning/rebalance', { params }).then((r) => r.data);
+export const getDecisionBoard = (params: PlanParams) =>
+  api.get<DecisionBoard>('/planning/decisions', { params }).then((r) => r.data);
+export const getCommercialStrategy = (params: PlanParams) =>
+  api.get<CommercialStrategy>('/planning/strategy', { params }).then((r) => r.data);
 export const getPurchaseOrders = (params: PlanParams) =>
   api.get<PurchaseOrdersPlan>('/planning/purchase-orders', { params }).then((r) => r.data);
 

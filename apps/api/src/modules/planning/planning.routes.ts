@@ -5,6 +5,8 @@ import type { ProductGroup } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
+  commercialStrategy,
+  decisionBoard,
   fairSplit,
   listSupplierSettings,
   planningOverview,
@@ -22,9 +24,11 @@ export const planningRouter = Router();
 // Janela padrão do planejamento: 90 dias de histórico de vendas.
 const days = (v: unknown) => parseDays(v, 90);
 
-// Recorte de cobertura (?group=): principal | lentes | todos (padrão).
+// Recorte de cobertura (?group=): principal (padrão) | lentes | todos.
+// Operacional começa em 'principal' (óculos de grau/sol + relógio); lentes e
+// consolidado só quando pedidos explicitamente.
 const group = (v: unknown): ProductGroup =>
-  v === 'principal' || v === 'lentes' ? v : 'todos';
+  v === 'lentes' || v === 'todos' ? v : 'principal';
 
 /** GET /api/planning/overview — capital imobilizado + Pareto + giro. */
 planningRouter.get(
@@ -66,6 +70,42 @@ planningRouter.get(
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     res.json(await rebalancePlan(days(req.query.days), group(req.query.group)));
+  }),
+);
+
+/**
+ * GET /api/planning/decisions — portal de cards de decisão (compra +
+ * remanejamento + liquidação) com tipo, prioridade e impacto. ADMIN: inclui o
+ * remanejamento, que é de rede.
+ */
+planningRouter.get(
+  '/decisions',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await decisionBoard(days(req.query.days), storeId, group(req.query.group)));
+  }),
+);
+
+/**
+ * GET /api/planning/strategy — motor de estratégia comercial (piso · risco ·
+ * janela): divide o piso em best-seller/lançamento/aposta e valida o lastro
+ * contra a capacidade da rede. ADMIN (visão de rede).
+ */
+planningRouter.get(
+  '/strategy',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const floorUnits = Math.trunc(Number(req.query.floor));
+    if (!Number.isFinite(floorUnits) || floorUnits < 0 || floorUnits > 10_000_000) {
+      res.status(400).json({ error: 'floor deve ser um inteiro entre 0 e 10000000.' });
+      return;
+    }
+    const windowMonths = Math.trunc(Number(req.query.window)) || 9;
+    const r = String(req.query.risk ?? 'equilibrado');
+    const risk = r === 'conservador' || r === 'agressivo' ? r : 'equilibrado';
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await commercialStrategy(days(req.query.days), { floorUnits, windowMonths, risk }, storeId));
   }),
 );
 
