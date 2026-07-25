@@ -26,10 +26,11 @@ const schema = z.object({
   JWT_SECRET: z.string().min(1).default(DEV_JWT_SECRET),
   JWT_EXPIRES_IN: z.string().default('8h'),
   DEFAULT_MIN_STOCK: z.coerce.number().int().nonnegative().default(3),
-  // Filiais que são centro de distribuição (ex.: GMAIS) e não entram na
-  // matemática de planejamento. Regex (case-insensitive) casada com o nome da
-  // loja no sync; vazio desliga a marcação automática.
-  PLANNING_EXCLUDED_STORE_PATTERN: z.string().default('GMAIS'),
+  // Filiais que são centro de distribuição ou unidade não-varejo (ex.: GMAIS,
+  // ASSISTENCIA, ESTOQUE COMPRAS) e não entram na matemática de planejamento.
+  // Regex (case-insensitive) casada com o nome da loja no sync; vazio desliga
+  // a marcação automática.
+  PLANNING_EXCLUDED_STORE_PATTERN: z.string().default('GMAIS|ASSISTENCIA|ESTOQUE COMPRAS'),
   // Caminho do catálogo de marcas (fornecedor + mix por loja). Vazio = procura
   // em apps/api/data/brand-catalog.json. Ausente = sem restrição de mix.
   BRAND_CATALOG_PATH: z.string().optional().default(''),

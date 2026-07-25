@@ -125,9 +125,11 @@ const allStores: Store[] = real
       active: true,
     }));
 
-// GMAIS e afins (centro de distribuição) ficam fora da matemática de lojas,
-// igual ao backend real (Store.excludeFromPlanning).
-const stores: Store[] = allStores.filter((s) => !/gmais/i.test(s.name));
+// GMAIS (centro de distribuição) e unidades não-varejo (assistência técnica,
+// estoque de compras) ficam fora da matemática de lojas, igual ao backend
+// real (Store.excludeFromPlanning / PLANNING_EXCLUDED_STORE_PATTERN).
+const PLANNING_EXCLUDED_STORE_PATTERN = /gmais|assistencia|estoque compras/i;
+const stores: Store[] = allStores.filter((s) => !PLANNING_EXCLUDED_STORE_PATTERN.test(s.name));
 
 const products: Product[] = real
   ? real.products.map((p) => ({
