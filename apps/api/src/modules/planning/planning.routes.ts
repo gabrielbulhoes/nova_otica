@@ -5,6 +5,12 @@ import type { ProductGroup } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
+  DecisionValidationError,
+  decisionHistory,
+  decisionStats,
+  recordDecision,
+} from './decisions.service.js';
+import {
   commercialStrategy,
   decisionBoard,
   fairSplit,
@@ -199,5 +205,60 @@ planningRouter.get(
     const brand = (req.query.brand as string | undefined)?.trim() || undefined;
     const category = (req.query.category as string | undefined)?.trim() || undefined;
     res.json(await fairSplit(days(req.query.days), { brand, category }, qty));
+  }),
+);
+
+// ─── Governança da decisão (Onda 1 · trilha TB) ──────────────────────────────
+
+const decisionSchema = z.object({
+  cardId: z.string().min(1).max(120),
+  cardType: z.string().min(1).max(40),
+  outcome: z.enum(['APPROVED', 'REJECTED']),
+  impact: z.number().finite().default(0),
+  note: z.string().max(2000).optional(),
+  cardSeenAt: z.coerce.date().optional(),
+  productId: z.string().min(1).optional(),
+  storeId: z.string().min(1).optional(),
+});
+
+/**
+ * POST /api/planning/decisions — registra a decisão sobre um card.
+ * Recusar exige justificativa (regra no serviço).
+ */
+planningRouter.post(
+  '/decisions',
+  asyncHandler(async (req, res) => {
+    const input = decisionSchema.parse(req.body);
+    try {
+      const rec = await recordDecision(input, req.user!.id);
+      publish({ type: 'decision.recorded', recordId: rec.id });
+      res.status(201).json(rec);
+    } catch (e) {
+      if (e instanceof DecisionValidationError) {
+        res.status(400).json({ error: e.message });
+        return;
+      }
+      throw e;
+    }
+  }),
+);
+
+/** GET /api/planning/decisions/history — trilha de auditoria (ADMIN vê todos). */
+planningRouter.get(
+  '/decisions/history',
+  asyncHandler(async (req, res) => {
+    const limit = Number(req.query.limit) || 200;
+    // Gestor de loja só enxerga as próprias decisões.
+    const scoped = req.user!.role === 'ADMIN' ? undefined : req.user!.id;
+    res.json(await decisionHistory(limit, scoped));
+  }),
+);
+
+/** GET /api/planning/decisions/stats — série, SLA e painel da equipe (ADMIN). */
+planningRouter.get(
+  '/decisions/stats',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    res.json(await decisionStats(parseDays(req.query.days, 30)));
   }),
 );
