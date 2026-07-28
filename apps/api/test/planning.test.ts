@@ -15,6 +15,10 @@ import {
   forecastDemand,
   isMadeToOrderLens,
   matchesProductGroup,
+  carryingCost,
+  marginPct,
+  expectedMargin,
+  buildPriceBands,
   paretoSummary,
   type ProductMetricsInput,
 } from '../src/modules/planning/planning.math.js';
@@ -385,6 +389,61 @@ describe('matchesProductGroup (recortes de cobertura)', () => {
     for (const cat of ['Estojo', 'Acessório', 'Lente', 'Relógio', null, undefined]) {
       expect(matchesProductGroup(cat, 'todos')).toBe(true);
     }
+  });
+});
+
+describe('economia da decisão (custo de carregar, margem e faixas)', () => {
+  it('custo de carregamento: R$ 100k parados por 30 dias a 25%/ano', () => {
+    expect(carryingCost(100_000, 30)).toBeCloseTo(2054.79, 1);
+    // proporcional ao tempo: 90 dias custa 3x o de 30
+    expect(carryingCost(100_000, 90)).toBeCloseTo(carryingCost(100_000, 30) * 3, 0);
+  });
+
+  it('custo de carregamento é 0 sem capital ou sem tempo', () => {
+    expect(carryingCost(0, 30)).toBe(0);
+    expect(carryingCost(-500, 30)).toBe(0);
+    expect(carryingCost(100_000, 0)).toBe(0);
+  });
+
+  it('respeita a taxa configurada', () => {
+    const caro = { ...DEFAULT_PLANNING_CONFIG, carryingCostAnnualPct: 50 };
+    expect(carryingCost(100_000, 30, caro)).toBeCloseTo(carryingCost(100_000, 30) * 2, 0);
+  });
+
+  it('margem em % do preço e margem esperada em R$', () => {
+    expect(marginPct(200, 80)).toBe(60);
+    expect(marginPct(0, 80)).toBe(0); // preço inválido não quebra
+    expect(expectedMargin(10, 200, 80)).toBe(1200);
+    expect(expectedMargin(0, 200, 80)).toBe(0);
+  });
+
+  it('faixas de preço saem dos preços OBSERVADOS, por quartil', () => {
+    const precos = [300, 400, 500, 700, 800, 1000, 1500, 2000, 2600, 3000, 4000, 4600];
+    const bands = buildPriceBands(precos);
+    expect(bands).toHaveLength(4);
+    expect(bands.map((b) => b.key)).toEqual(['acessivel', 'premium_acessivel', 'premium', 'luxo']);
+    expect(bands[0].min).toBe(300);
+    expect(bands[3].max).toBe(4600);
+    // as faixas cobrem todos os SKUs observados, sem sobreposição
+    expect(bands.reduce((a, b) => a + b.count, 0)).toBe(precos.length);
+    for (let i = 1; i < bands.length; i++) expect(bands[i].min).toBeGreaterThanOrEqual(bands[i - 1].max);
+  });
+
+  it('faixas ignoram preço inválido e devolvem vazio sem dado', () => {
+    expect(buildPriceBands([])).toEqual([]);
+    expect(buildPriceBands([0, -10, NaN])).toEqual([]);
+  });
+
+  it('cada plano carrega o custo de carregar e a margem', () => {
+    // 90 vendidas/90d = 1/dia, estoque 5 -> compra sugerida; custo 100, preço 200
+    const p = analyzeProduct({ ...base, unitsSold: 90, currentStock: 5 }, 90);
+    expect(p.marginPct).toBe(50);
+    expect(p.expectedMargin).toBe(p.suggestedQty * 100);
+    expect(p.carryingCost30d).toBeCloseTo(carryingCost(p.stockValue, 30), 2);
+    // item parado: o excesso é todo o estoque, logo os dois custos batem
+    const parado = analyzeProduct({ ...base, unitsSold: 0, currentStock: 10 }, 90);
+    expect(parado.excessCarryingCost30d).toBe(parado.carryingCost30d);
+    expect(parado.expectedMargin).toBe(0); // não se compra o que está parado
   });
 });
 
