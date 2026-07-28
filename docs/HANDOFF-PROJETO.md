@@ -121,6 +121,7 @@ b8a79d7 Tira GMAIS (CD) da matemática e lentes do remanejamento
 
 ```bash
 npm install
+npx prisma generate --schema apps/api/prisma/schema.prisma   # OBRIGATÓRIO após clonar/trocar de branch
 npm run typecheck -w @nova-otica/api && npm run typecheck -w @nova-otica/web
 npx vitest run --root apps/api          # 53 testes de planning + demais
 npm run test -w @nova-otica/web         # 24 testes
@@ -132,7 +133,7 @@ VITE_DEMO=1 npm run dev -w @nova-otica/web
 **Publicar no `novaotica.gb.app.br` (snapshot estático com dados reais):** siga
 [`deploy/HANDOFF-ATUALIZAR-SNAPSHOT-REAL.md`](./deploy/HANDOFF-ATUALIZAR-SNAPSHOT-REAL.md)
 — resumo: na máquina que tem o snapshot, `git checkout` da branch → garantir/
-gerar `demo-real-data.json` → `VITE_DEMO=1 VITE_HASH_ROUTER=1 VITE_BASE=./ npm run build -w @nova-otica/web`
+gerar `demo-real-data.json` → `VITE_DEMO=1 VITE_HASH_ROUTER=1 VITE_BASE=./ VITE_DEMO_LABEL="Dados reais da rede" VITE_DEMO_USERS="Nome:senha,..." npm run build -w @nova-otica/web`
 → zipar o conteúdo de `apps/web/dist/` e subir no HostGator.
 
 **Sistema real (Docker):** `docker compose -f docker-compose.prod.yml up --build -d`

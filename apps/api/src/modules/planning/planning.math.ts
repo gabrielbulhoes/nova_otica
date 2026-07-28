@@ -70,6 +70,9 @@ export function matchesProductGroup(category: string | null | undefined, group: 
   const isLente = c.includes('lente');
   if (group === 'lentes') return isLente;
   if (isLente) return false;
+  // Acessórios que citam "óculos" no nome (PORTA OCULOS, LENCO DE OCULOS…)
+  // não são óculos: entram só no consolidado, nunca no recorte principal.
+  if (/\b(porta|estojo|case|lenco|cordao|corrente|limpa)\b/.test(c)) return false;
   return (
     c.includes('oculos') ||
     c.includes('armacao') ||

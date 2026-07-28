@@ -388,6 +388,22 @@ describe('matchesProductGroup (recortes de cobertura)', () => {
   });
 });
 
+describe('matchesProductGroup · acessórios que citam "óculos"', () => {
+  it('PORTA OCULOS é acessório, não entra no recorte principal', () => {
+    expect(matchesProductGroup('PORTA OCULOS', 'principal')).toBe(false);
+    expect(matchesProductGroup('PORTA OCULOS', 'lentes')).toBe(false);
+    expect(matchesProductGroup('PORTA OCULOS', 'todos')).toBe(true);
+    expect(matchesProductGroup('ESTOJO PARA OCULOS', 'principal')).toBe(false);
+    expect(matchesProductGroup('CORDAO DE OCULOS', 'principal')).toBe(false);
+  });
+
+  it('produto de moda de verdade segue no principal', () => {
+    expect(matchesProductGroup('OCULOS', 'principal')).toBe(true);
+    expect(matchesProductGroup('ARMACAO', 'principal')).toBe(true);
+    expect(matchesProductGroup('RELOGIO', 'principal')).toBe(true);
+  });
+});
+
 describe('extractBrand (marca a partir da descrição)', () => {
   it('pula a categoria e pega a marca (1 palavra)', () => {
     expect(extractBrand('Armação Oakley Preto')).toBe('Oakley');

@@ -38,6 +38,8 @@ coverage/
 .cache/
 # Zips de demo (inclusive variantes com dados reais — nunca versionar)
 novaotica-demo-*.zip
+# Qualquer pacote da demo/real: nunca versionar (contém faturamento e estoque)
+novaotica-*.zip
 
 # Amostras capturadas da CDS (podem conter dados de clientes) — nunca versionar
 apps/api/tmp/
