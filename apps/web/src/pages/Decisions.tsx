@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getDecisionBoard, createMovement, formatBRL } from '../api/client';
+import { getDecisionBoard, createMovement, formatBRL ,
+  recordDecision,
+} from '../api/client';
 import type { DecisionCard, DecisionType, DecisionPriority } from '../api/client';
 import { Loading } from '../components/ui';
 
@@ -38,12 +40,41 @@ function Kpi({ label, value, hint, tone }: { label: string; value: string; hint?
   );
 }
 
-function Card({ c, onDismiss }: { c: DecisionCard; onDismiss: (id: string) => void }) {
+function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
   const t = typeMeta[c.type];
   const p = prioMeta[c.priority];
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  // Decisão persistida (trilha de auditoria). Recusar exige justificativa.
+  const [decided, setDecided] = useState<'APPROVED' | 'REJECTED' | null>(null);
+  const [rejecting, setRejecting] = useState(false);
+  const [note, setNote] = useState('');
+  const [deciding, setDeciding] = useState(false);
+  const [decErr, setDecErr] = useState('');
+
+  const decide = async (outcome: 'APPROVED' | 'REJECTED') => {
+    setDeciding(true);
+    setDecErr('');
+    try {
+      await recordDecision({
+        cardId: c.id,
+        cardType: c.type,
+        outcome,
+        impact: c.impact,
+        note: outcome === 'REJECTED' ? note.trim() : undefined,
+        productId: c.productId,
+        storeId: c.toStoreId ?? c.fromStoreId,
+      });
+      setDecided(outcome);
+      setRejecting(false);
+      onDecided();
+    } catch (e) {
+      setDecErr(e instanceof Error ? e.message : 'Não foi possível registrar a decisão.');
+    } finally {
+      setDeciding(false);
+    }
+  };
   const [err, setErr] = useState('');
 
   const approveTransfer = async () => {
@@ -150,9 +181,53 @@ function Card({ c, onDismiss }: { c: DecisionCard; onDismiss: (id: string) => vo
           </button>
         )}
         {state !== 'done' && (
-          <button className="btn sm ghost" onClick={() => onDismiss(c.id)}>Dispensar</button>
+          <>
+            {c.type !== 'REMANEJAMENTO' && (
+              <button
+                className="btn sm"
+                disabled={deciding}
+                onClick={() => decide('APPROVED')}
+                title="Registra a aprovação na trilha de auditoria"
+              >
+                {deciding ? 'Registrando…' : '✓ Aprovar'}
+              </button>
+            )}
+            <button
+              className="btn sm ghost"
+              disabled={deciding}
+              onClick={() => setRejecting((v) => !v)}
+            >
+              ✗ Recusar
+            </button>
+          </>
+        )}
+        {decided && (
+          <span className={`badge ${decided === 'APPROVED' ? 'green' : 'gray'}`}>
+            {decided === 'APPROVED' ? 'Aprovado ✓' : 'Recusado — registrado'}
+          </span>
         )}
         {state === 'error' && <div style={{ fontSize: 11, color: 'var(--red)' }}>{err}</div>}
+        {decErr && <div style={{ fontSize: 11, color: 'var(--red)', flexBasis: '100%' }}>{decErr}</div>}
+        {rejecting && !decided && (
+          <div style={{ flexBasis: '100%', display: 'flex', gap: 6, marginTop: 6 }}>
+            <input
+              className="input"
+              style={{ flex: 1, fontSize: 12 }}
+              placeholder="Por que recusar? (obrigatório — fica no histórico)"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && note.trim()) decide('REJECTED'); }}
+              autoFocus
+            />
+            <button
+              className="btn sm"
+              disabled={!note.trim() || deciding}
+              onClick={() => decide('REJECTED')}
+            >
+              Confirmar recusa
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -161,20 +236,15 @@ function Card({ c, onDismiss }: { c: DecisionCard; onDismiss: (id: string) => vo
 export function Decisions() {
   const [typeF, setTypeF] = useState<TypeFilter>('ALL');
   const [prioF, setPrioF] = useState<PrioFilter>('ALL');
-  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const params = { days: 90, group: 'principal' };
   const board = useQuery({ queryKey: ['decisions', params], queryFn: () => getDecisionBoard(params) });
 
   const cards = useMemo(() => {
     const all = board.data?.cards ?? [];
     return all.filter(
-      (c) =>
-        !dismissed.has(c.id) &&
-        (typeF === 'ALL' || c.type === typeF) &&
-        (prioF === 'ALL' || c.priority === prioF),
+      (c) => (typeF === 'ALL' || c.type === typeF) && (prioF === 'ALL' || c.priority === prioF),
     );
-  }, [board.data, typeF, prioF, dismissed]);
-  const dismiss = (id: string) => setDismissed((prev) => new Set(prev).add(id));
+  }, [board.data, typeF, prioF]);
 
   const s = board.data?.summary;
 
@@ -222,7 +292,7 @@ export function Decisions() {
             <div className="empty">Nenhum card nesta seleção — rede bem ajustada por aqui. 👏</div>
           ) : (
             <div className="grid grid-3">
-              {cards.map((c) => <Card key={c.id} c={c} onDismiss={dismiss} />)}
+              {cards.map((c) => <Card key={c.id} c={c} onDecided={() => board.refetch()} />)}
             </div>
           )}
         </>

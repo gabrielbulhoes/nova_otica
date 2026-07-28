@@ -545,6 +545,57 @@ export interface DecisionBoard {
   cards: DecisionCard[];
 }
 
+// ─── Governança da decisão (Onda 1 · TB) ─────────────────────────────────────
+
+export type DecisionOutcome = 'APPROVED' | 'REJECTED';
+
+export interface DecisionHistoryRow {
+  id: string;
+  cardId: string;
+  cardType: string;
+  outcome: DecisionOutcome;
+  note: string | null;
+  impact: number;
+  decidedAt: string;
+  decidedByName: string;
+  daysToDecide: number | null;
+}
+
+export interface DecisionStats {
+  slaDays: number;
+  approved: number;
+  rejected: number;
+  approvedImpact: number;
+  rejectedImpact: number;
+  avgDaysToDecide: number | null;
+  series: { date: string; approved: number; rejected: number }[];
+  byUser: { userId: string; name: string; approved: number; rejected: number; impact: number }[];
+}
+
+/** Registra a decisão sobre um card. Recusar exige justificativa. */
+export async function recordDecision(input: {
+  cardId: string;
+  cardType: string;
+  outcome: DecisionOutcome;
+  impact: number;
+  note?: string;
+  productId?: string;
+  storeId?: string;
+}): Promise<{ id: string }> {
+  const { data } = await api.post('/planning/decisions', input);
+  return data;
+}
+
+export async function getDecisionHistory(limit = 200): Promise<DecisionHistoryRow[]> {
+  const { data } = await api.get('/planning/decisions/history', { params: { limit } });
+  return data;
+}
+
+export async function getDecisionStats(days = 30): Promise<DecisionStats> {
+  const { data } = await api.get('/planning/decisions/stats', { params: { days } });
+  return data;
+}
+
 export type RiskProfile = 'conservador' | 'equilibrado' | 'agressivo';
 
 export interface StrategySegment {
