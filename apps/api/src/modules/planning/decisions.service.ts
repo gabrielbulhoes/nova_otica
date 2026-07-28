@@ -30,6 +30,26 @@ export class DecisionValidationError extends Error {
 }
 
 /**
+ * Tipos de card que o usuário pode decidir. Lista vazia = todos — assim
+ * nenhum usuário existente perde acesso quando o campo é introduzido.
+ */
+export async function assertCanDecide(userId: string, cardType: string): Promise<void> {
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { allowedCardTypes: true },
+  });
+  if (!u) throw new DecisionValidationError('Usuário não encontrado.');
+  if (u.allowedCardTypes.length === 0) return; // sem restrição configurada
+  if (!u.allowedCardTypes.includes(cardType)) {
+    const e = new DecisionValidationError(
+      `Seu perfil não decide cards do tipo ${cardType}.`,
+    );
+    e.status = 403;
+    throw e;
+  }
+}
+
+/**
  * Registra a decisão. Recusar EXIGE justificativa — sem isso a trilha não
  * serve para nada depois ("por que recusamos R$ 116 mil em liberação?").
  * Aprovar não exige: o card já traz o porquê.
@@ -40,6 +60,7 @@ export async function recordDecision(input: RecordDecisionInput, userId: string)
     throw new DecisionValidationError('Recusar um card exige justificativa.');
   }
   if (!input.cardId.trim()) throw new DecisionValidationError('cardId é obrigatório.');
+  await assertCanDecide(userId, input.cardType);
 
   return prisma.decisionRecord.create({
     data: {

@@ -8,6 +8,7 @@ import {
   decisionStats,
   isCriticallyOverdue,
   recordDecision,
+  assertCanDecide,
 } from '../src/modules/planning/decisions.service.js';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
@@ -106,6 +107,26 @@ d('governança da decisão (integração com Postgres)', () => {
     const hoje = st.series[st.series.length - 1];
     expect(hoje.approved + hoje.rejected).toBeGreaterThan(0);
     expect(st.byUser.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('permissão por tipo: lista vazia libera todos os tipos', async () => {
+    await prisma.user.update({ where: { id: userId }, data: { allowedCardTypes: [] } });
+    await expect(assertCanDecide(userId, 'COMPRA')).resolves.toBeUndefined();
+    await expect(assertCanDecide(userId, 'LIQUIDACAO')).resolves.toBeUndefined();
+  });
+
+  it('permissão por tipo: lista restrita bloqueia o que não está nela', async () => {
+    await prisma.user.update({ where: { id: userId }, data: { allowedCardTypes: ['COMPRA'] } });
+    await expect(assertCanDecide(userId, 'COMPRA')).resolves.toBeUndefined();
+    await expect(assertCanDecide(userId, 'LIQUIDACAO')).rejects.toMatchObject({ status: 403 });
+    // e a gravação também é barrada, não só a checagem isolada
+    await expect(
+      recordDecision(
+        { cardId: 'TESTE-P', cardType: 'LIQUIDACAO', outcome: 'APPROVED', impact: 1 },
+        userId,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    await prisma.user.update({ where: { id: userId }, data: { allowedCardTypes: [] } });
   });
 
   it('SLA: card em aberto além de 30 dias é crítico', () => {
