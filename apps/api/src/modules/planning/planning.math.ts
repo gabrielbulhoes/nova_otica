@@ -70,6 +70,9 @@ export function matchesProductGroup(category: string | null | undefined, group: 
   const isLente = c.includes('lente');
   if (group === 'lentes') return isLente;
   if (isLente) return false;
+  // Acessórios que citam "óculos" no nome (PORTA OCULOS, LENCO DE OCULOS…)
+  // não são óculos: entram só no consolidado, nunca no recorte principal.
+  if (/\b(porta|estojo|case|lenco|cordao|corrente|limpa)\b/.test(c)) return false;
   return (
     c.includes('oculos') ||
     c.includes('armacao') ||
@@ -104,7 +107,18 @@ const COLOR_WORDS = new Set([
 const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-export function extractBrand(description: string | null | undefined): string | null {
+export function extractBrand(
+  description: string | null | undefined,
+  category?: string | null,
+): string | null {
+  // Grife só existe em produto de moda (óculos, armação, relógio). Em lente,
+  // tratamento e serviço a descrição é a LINHA do produto — "MULTIGRESSIV
+  // MONOFOCAIS…", "ZEISS ANTIRREFLEXO", "HILUX LENTES PRONTAS…" — e extrair
+  // dali fragmenta um mesmo fabricante em dezenas de pseudo-marcas (a ZEISS
+  // virava dezesseis). Nesses casos devolvemos null para o chamador cair no
+  // fornecedor (p.brand), que é o dado confiável ali.
+  // Sem categoria informada, mantém o comportamento antigo (extrai sempre).
+  if (category != null && !matchesProductGroup(category, 'principal')) return null;
   const raw = (description ?? '').trim();
   if (!raw) return null;
   const tokens = raw.split(/\s+/);
@@ -136,12 +150,26 @@ export function extractBrand(description: string | null | undefined): string | n
 // ─── Lentes por encomenda (sem posição de estoque) ──────────────────────────
 
 /**
- * Lente feita sob demanda: categoria de lente cuja grade nunca tem saldo na
- * rede (soma de estoque = 0). Elas não devem entrar nos alertas de ruptura nem
- * nos relatórios de estoque/cobertura — só no faturamento consolidado.
+ * Lente feita sob demanda: não entra nos alertas de ruptura nem nos relatórios
+ * de estoque/cobertura — só no faturamento consolidado.
+ *
+ * O sinal correto é a CATEGORIA, não o saldo: no CDS as grades separam
+ * "…PEDIDO" (sob encomenda) de "…PRONTA(S)"/"…ESTOQUE" (lente de prateleira).
+ * Usar só `saldo = 0` confundia uma lente PRONTA que zerou na rede inteira com
+ * uma lente por encomenda — e o alerta de ruptura sumia justamente quando mais
+ * importa. Categoria ambígua cai num heurístico conservador (ver corpo).
  */
-export function isMadeToOrderLens(category: string | null | undefined, networkStockQty: number): boolean {
-  return matchesProductGroup(category, 'lentes') && networkStockQty <= 0;
+export function isMadeToOrderLens(
+  category: string | null | undefined,
+  networkStockQty: number,
+  networkSoldQty = 0,
+): boolean {
+  if (!matchesProductGroup(category, 'lentes')) return false;
+  const c = normCategory(category ?? '');
+  if (/pedido|encomenda/.test(c)) return true; // explícito: sob encomenda
+  if (/pronta|estoque/.test(c)) return false; // explícito: lente de prateleira
+  // Categoria ambígua: só é encomenda se nunca teve saldo E nunca vendeu.
+  return networkStockQty <= 0 && networkSoldQty <= 0;
 }
 
 // ─── Previsão de demanda (suavização + sazonalidade) ────────────────────────

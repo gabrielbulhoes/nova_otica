@@ -116,7 +116,10 @@ ls -la apps/web/src/api/demo-real-data.json
 
 ### 3.3 Build do snapshot estático (dados reais + 3 alterações)
 ```bash
-VITE_DEMO=1 VITE_HASH_ROUTER=1 VITE_BASE=./ npm run build -w @nova-otica/web
+VITE_DEMO=1 VITE_HASH_ROUTER=1 VITE_BASE=./ \
+  VITE_DEMO_LABEL="Dados reais da rede" \
+  VITE_DEMO_USERS="Galbe:SENHA,Gabriel:SENHA,Victor:SENHA" \
+  npm run build -w @nova-otica/web
 ```
 `VITE_DEMO=1` + `demo-real-data.json` presente = dados reais. `VITE_HASH_ROUTER=1`
 e `VITE_BASE=./` = compatível com hospedagem estática em qualquer
@@ -124,7 +127,10 @@ subpasta/subdomínio (sem `.htaccess`).
 
 **Confira que o snapshot entrou no bundle** (não pode cair no fictício):
 ```bash
-grep -l "" apps/web/dist/index.html >/dev/null && echo "index ok"
+# Verificação real: o dataset tem de estar DENTRO do bundle, e o selo/contas
+# precisam ter sido embarcados (senão o zip sai destravado e mentindo).
+grep -rql "brandCoverage" apps/web/dist/assets/*.js && echo "dados reais no bundle ok"
+grep -rql "Dados reais da rede" apps/web/dist/assets/*.js && echo "selo ok"
 # abra o site após subir e cheque os totais reais (faturamento, nº de lojas)
 ```
 

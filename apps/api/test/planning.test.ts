@@ -388,6 +388,22 @@ describe('matchesProductGroup (recortes de cobertura)', () => {
   });
 });
 
+describe('matchesProductGroup · acessórios que citam "óculos"', () => {
+  it('PORTA OCULOS é acessório, não entra no recorte principal', () => {
+    expect(matchesProductGroup('PORTA OCULOS', 'principal')).toBe(false);
+    expect(matchesProductGroup('PORTA OCULOS', 'lentes')).toBe(false);
+    expect(matchesProductGroup('PORTA OCULOS', 'todos')).toBe(true);
+    expect(matchesProductGroup('ESTOJO PARA OCULOS', 'principal')).toBe(false);
+    expect(matchesProductGroup('CORDAO DE OCULOS', 'principal')).toBe(false);
+  });
+
+  it('produto de moda de verdade segue no principal', () => {
+    expect(matchesProductGroup('OCULOS', 'principal')).toBe(true);
+    expect(matchesProductGroup('ARMACAO', 'principal')).toBe(true);
+    expect(matchesProductGroup('RELOGIO', 'principal')).toBe(true);
+  });
+});
+
 describe('extractBrand (marca a partir da descrição)', () => {
   it('pula a categoria e pega a marca (1 palavra)', () => {
     expect(extractBrand('Armação Oakley Preto')).toBe('Oakley');
@@ -410,10 +426,34 @@ describe('extractBrand (marca a partir da descrição)', () => {
     expect(extractBrand(undefined)).toBeNull();
     expect(extractBrand('Óculos de Sol')).toBeNull();
   });
+
+  // ─── Regressão: grife só existe em produto de moda ────────────────────────
+  it('em LENTE devolve null — a descrição é a linha, não a marca', () => {
+    // Sem o recorte, estes viravam pseudo-marcas distintas do mesmo fabricante.
+    expect(extractBrand('MULTIGRESSIV MONOFOCAIS B.I.G. NORM 1,50', 'LENTES')).toBeNull();
+    expect(extractBrand('HILUX LENTES PRONTAS ESFERICAS 1.56', 'LENTES PRONTAS')).toBeNull();
+    expect(extractBrand('IMPRESSION B.I.G. NORM 1,67 LAYR', 'LENTES VISAO SIMPLES')).toBeNull();
+  });
+
+  it('em tratamento/serviço também devolve null', () => {
+    expect(extractBrand('ZEISS ANTIRREFLEXO X-TRA CLEAN', 'TRATAMENTO')).toBeNull();
+    expect(extractBrand('ZEISS COLORACAO', 'TRATAMENTO')).toBeNull();
+  });
+
+  it('em óculos/armação/relógio segue extraindo a grife', () => {
+    expect(extractBrand('RB3548NL 001 54 OCULOS RAY BAN', 'OCULOS')).toBe('RAY BAN');
+    expect(extractBrand('MU05VV 11Q1O1 55 ARMACAO MIU MIU', 'ARMACAO')).toBe('MIU MIU');
+    expect(extractBrand('2035NCO/0M RELOGIO TECHNOS', 'RELOGIO')).toBe('TECHNOS');
+  });
+
+  it('sem categoria informada mantém o comportamento antigo', () => {
+    expect(extractBrand('RB3548NL 001 54 OCULOS RAY BAN')).toBe('RAY BAN');
+    expect(extractBrand('MULTIGRESSIV MONOFOCAIS B.I.G.')).toBe('MULTIGRESSIV MONOFOCAIS');
+  });
 });
 
 describe('isMadeToOrderLens (lente por encomenda)', () => {
-  it('lente sem saldo de rede = por encomenda', () => {
+  it('lente ambígua sem saldo e sem venda = por encomenda', () => {
     expect(isMadeToOrderLens('Lente', 0)).toBe(true);
     expect(isMadeToOrderLens('LENTE DE GRAU', -3)).toBe(true);
   });
@@ -426,6 +466,27 @@ describe('isMadeToOrderLens (lente por encomenda)', () => {
     expect(isMadeToOrderLens('Armação', 0)).toBe(false);
     expect(isMadeToOrderLens('Óculos de Sol', 0)).toBe(false);
     expect(isMadeToOrderLens(null, 0)).toBe(false);
+  });
+
+  // ─── Regressão: o alerta de ruptura sumia quando mais importava ───────────
+  it('a CATEGORIA manda: …PEDIDO é encomenda mesmo com saldo', () => {
+    expect(isMadeToOrderLens('LENTES DE CONTATO PEDIDO', 40)).toBe(true);
+    expect(isMadeToOrderLens('LENTES SOB ENCOMENDA', 10)).toBe(true);
+  });
+
+  it('lente PRONTA/ESTOQUE que zerou na rede é RUPTURA, não encomenda', () => {
+    // Era o bug: saldo 0 numa lente de prateleira suprimia o alerta OUT.
+    expect(isMadeToOrderLens('LENTES PRONTAS', 0)).toBe(false);
+    expect(isMadeToOrderLens('LENTE PRONTA', 0)).toBe(false);
+    expect(isMadeToOrderLens('LENTES PRONTAS ESTOQUE', 0)).toBe(false);
+    expect(isMadeToOrderLens('LENTES DE CONTATO ESTOQUE', 0)).toBe(false);
+  });
+
+  it('categoria ambígua que JÁ VENDEU e zerou é ruptura, não encomenda', () => {
+    expect(isMadeToOrderLens('LENTES GRIFES', 0, 12)).toBe(false);
+    expect(isMadeToOrderLens('LENTES VISAO SIMPLES', 0, 1)).toBe(false);
+    // sem venda nenhuma, segue como encomenda
+    expect(isMadeToOrderLens('LENTES GRIFES', 0, 0)).toBe(true);
   });
 });
 
