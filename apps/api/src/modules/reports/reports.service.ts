@@ -45,19 +45,23 @@ export async function abcCurve(
   if (dimension === 'brand') {
     // Marca REAL do produto, extraída da descrição (o campo p.brand carrega o
     // fornecedor). Receita/unidades são reagrupadas por marca extraída.
+    // Itens sem produto casado entram como "Sem marca" — a base de itens é a
+    // mesma da dimensão SKU, então a receita total fecha entre as duas.
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: saleFilter, productId: { not: null } },
+      where: { sale: saleFilter },
       _sum: { total: true, quantity: true },
     });
+    const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
     const products = await prisma.product.findMany({
-      where: { id: { in: grouped.map((g) => g.productId as string) } },
+      where: { id: { in: ids } },
       select: { id: true, description: true },
     });
     const descById = new Map(products.map((p) => [p.id, p.description]));
     const byBrand = new Map<string, { revenue: number; units: number }>();
     for (const g of grouped) {
-      const brand = extractBrand(descById.get(g.productId as string)) ?? 'Sem marca';
+      const brand =
+        (g.productId === null ? null : extractBrand(descById.get(g.productId))) ?? 'Sem marca';
       const cur = byBrand.get(brand) ?? { revenue: 0, units: 0 };
       cur.revenue += toNumber(g._sum.total) ?? 0;
       cur.units += g._sum.quantity ?? 0;
@@ -237,20 +241,25 @@ export async function salesAnalysis(
   }
 
   // Marca: agrupa pela marca REAL extraída da descrição (p.brand = fornecedor).
+  // Itens SEM produto casado entram como "Sem marca" em vez de sumir — as
+  // outras dimensões usam LEFT JOIN e os mantêm, então filtrá-los aqui
+  // quebraria a reconciliação de totais entre as dimensões.
   if (by === 'brand') {
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) }, productId: { not: null } },
+      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) } },
       _sum: { quantity: true, total: true },
     });
+    const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
     const products = await prisma.product.findMany({
-      where: { id: { in: grouped.map((g) => g.productId as string) } },
+      where: { id: { in: ids } },
       select: { id: true, description: true },
     });
     const descById = new Map(products.map((p) => [p.id, p.description]));
     const byBrand = new Map<string, { units: number; revenue: number }>();
     for (const g of grouped) {
-      const brand = extractBrand(descById.get(g.productId as string)) ?? 'Sem marca';
+      const brand =
+        (g.productId === null ? null : extractBrand(descById.get(g.productId))) ?? 'Sem marca';
       const cur = byBrand.get(brand) ?? { units: 0, revenue: 0 };
       cur.units += g._sum.quantity ?? 0;
       cur.revenue += toNumber(g._sum.total) ?? 0;
