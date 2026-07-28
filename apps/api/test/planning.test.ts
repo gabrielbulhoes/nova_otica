@@ -413,7 +413,7 @@ describe('extractBrand (marca a partir da descrição)', () => {
 });
 
 describe('isMadeToOrderLens (lente por encomenda)', () => {
-  it('lente sem saldo de rede = por encomenda', () => {
+  it('lente ambígua sem saldo e sem venda = por encomenda', () => {
     expect(isMadeToOrderLens('Lente', 0)).toBe(true);
     expect(isMadeToOrderLens('LENTE DE GRAU', -3)).toBe(true);
   });
@@ -426,6 +426,27 @@ describe('isMadeToOrderLens (lente por encomenda)', () => {
     expect(isMadeToOrderLens('Armação', 0)).toBe(false);
     expect(isMadeToOrderLens('Óculos de Sol', 0)).toBe(false);
     expect(isMadeToOrderLens(null, 0)).toBe(false);
+  });
+
+  // ─── Regressão: o alerta de ruptura sumia quando mais importava ───────────
+  it('a CATEGORIA manda: …PEDIDO é encomenda mesmo com saldo', () => {
+    expect(isMadeToOrderLens('LENTES DE CONTATO PEDIDO', 40)).toBe(true);
+    expect(isMadeToOrderLens('LENTES SOB ENCOMENDA', 10)).toBe(true);
+  });
+
+  it('lente PRONTA/ESTOQUE que zerou na rede é RUPTURA, não encomenda', () => {
+    // Era o bug: saldo 0 numa lente de prateleira suprimia o alerta OUT.
+    expect(isMadeToOrderLens('LENTES PRONTAS', 0)).toBe(false);
+    expect(isMadeToOrderLens('LENTE PRONTA', 0)).toBe(false);
+    expect(isMadeToOrderLens('LENTES PRONTAS ESTOQUE', 0)).toBe(false);
+    expect(isMadeToOrderLens('LENTES DE CONTATO ESTOQUE', 0)).toBe(false);
+  });
+
+  it('categoria ambígua que JÁ VENDEU e zerou é ruptura, não encomenda', () => {
+    expect(isMadeToOrderLens('LENTES GRIFES', 0, 12)).toBe(false);
+    expect(isMadeToOrderLens('LENTES VISAO SIMPLES', 0, 1)).toBe(false);
+    // sem venda nenhuma, segue como encomenda
+    expect(isMadeToOrderLens('LENTES GRIFES', 0, 0)).toBe(true);
   });
 });
 

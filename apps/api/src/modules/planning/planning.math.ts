@@ -136,12 +136,26 @@ export function extractBrand(description: string | null | undefined): string | n
 // ─── Lentes por encomenda (sem posição de estoque) ──────────────────────────
 
 /**
- * Lente feita sob demanda: categoria de lente cuja grade nunca tem saldo na
- * rede (soma de estoque = 0). Elas não devem entrar nos alertas de ruptura nem
- * nos relatórios de estoque/cobertura — só no faturamento consolidado.
+ * Lente feita sob demanda: não entra nos alertas de ruptura nem nos relatórios
+ * de estoque/cobertura — só no faturamento consolidado.
+ *
+ * O sinal correto é a CATEGORIA, não o saldo: no CDS as grades separam
+ * "…PEDIDO" (sob encomenda) de "…PRONTA(S)"/"…ESTOQUE" (lente de prateleira).
+ * Usar só `saldo = 0` confundia uma lente PRONTA que zerou na rede inteira com
+ * uma lente por encomenda — e o alerta de ruptura sumia justamente quando mais
+ * importa. Categoria ambígua cai num heurístico conservador (ver corpo).
  */
-export function isMadeToOrderLens(category: string | null | undefined, networkStockQty: number): boolean {
-  return matchesProductGroup(category, 'lentes') && networkStockQty <= 0;
+export function isMadeToOrderLens(
+  category: string | null | undefined,
+  networkStockQty: number,
+  networkSoldQty = 0,
+): boolean {
+  if (!matchesProductGroup(category, 'lentes')) return false;
+  const c = normCategory(category ?? '');
+  if (/pedido|encomenda/.test(c)) return true; // explícito: sob encomenda
+  if (/pronta|estoque/.test(c)) return false; // explícito: lente de prateleira
+  // Categoria ambígua: só é encomenda se nunca teve saldo E nunca vendeu.
+  return networkStockQty <= 0 && networkSoldQty <= 0;
 }
 
 // ─── Previsão de demanda (suavização + sazonalidade) ────────────────────────

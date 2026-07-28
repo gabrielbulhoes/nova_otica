@@ -1,7 +1,7 @@
 import { env } from '../../config/env.js';
 import { prisma } from '../../lib/prisma.js';
 import { isMadeToOrderLens } from '../planning/planning.math.js';
-import { plannedStoreIds, stockPlannedWhere } from '../stores/store.scope.js';
+import { plannedStoreIds, salePlannedWhere, stockPlannedWhere } from '../stores/store.scope.js';
 import { listStock } from '../stock/stock.service.js';
 
 export type AlertLevel = 'OUT' | 'LOW';
@@ -46,15 +46,24 @@ export async function stockAlerts(storeId?: string): Promise<{
   const { rows } = await listStock({ storeIds, limit: 100_000, skip: 0 });
   const def = env.DEFAULT_MIN_STOCK;
 
-  // Lentes por encomenda (grade da rede = 0) não entram na ruptura: são feitas
-  // sob demanda, então saldo 0 é o esperado, não uma falta. Estoque de REDE
-  // (só lojas planejáveis) decide — é uma propriedade do produto.
-  const netStock = await prisma.stockItem.groupBy({ by: ['productId'], where: stockPlannedWhere, _sum: { quantity: true } });
+  // Lentes por encomenda não entram na ruptura: são feitas sob demanda, então
+  // saldo 0 é o esperado, não uma falta. A categoria decide (…PEDIDO vs
+  // …PRONTA/ESTOQUE); quando ela é ambígua, entram estoque E venda da REDE —
+  // uma lente que VENDEU e zerou é ruptura de verdade, não encomenda.
+  const [netStock, netSold] = await Promise.all([
+    prisma.stockItem.groupBy({ by: ['productId'], where: stockPlannedWhere, _sum: { quantity: true } }),
+    prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: { productId: { not: null }, sale: salePlannedWhere },
+      _sum: { quantity: true },
+    }),
+  ]);
   const netById = new Map(netStock.map((n) => [n.productId, n._sum.quantity ?? 0]));
+  const soldById = new Map(netSold.map((n) => [n.productId as string, n._sum.quantity ?? 0]));
 
   const alerts: StockAlert[] = [];
   for (const r of rows) {
-    if (isMadeToOrderLens(r.category, netById.get(r.productId) ?? 0)) continue;
+    if (isMadeToOrderLens(r.category, netById.get(r.productId) ?? 0, soldById.get(r.productId) ?? 0)) continue;
     const threshold = resolveThreshold(r.storeMinStock, r.minStock, def);
     if (r.availableNow > threshold) continue;
     alerts.push({
