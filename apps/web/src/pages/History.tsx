@@ -149,6 +149,13 @@ export function History() {
               </button>
             ))}
           </div>
+          <button
+            className="btn ghost no-print"
+            onClick={() => window.print()}
+            title="Abre o diálogo de impressão — escolha 'Salvar como PDF'"
+          >
+            ⎙ Exportar PDF
+          </button>
           <ExportCsv<DecisionHistoryRow>
             rows={rows}
             filename="decisoes"
