@@ -104,7 +104,18 @@ const COLOR_WORDS = new Set([
 const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-export function extractBrand(description: string | null | undefined): string | null {
+export function extractBrand(
+  description: string | null | undefined,
+  category?: string | null,
+): string | null {
+  // Grife só existe em produto de moda (óculos, armação, relógio). Em lente,
+  // tratamento e serviço a descrição é a LINHA do produto — "MULTIGRESSIV
+  // MONOFOCAIS…", "ZEISS ANTIRREFLEXO", "HILUX LENTES PRONTAS…" — e extrair
+  // dali fragmenta um mesmo fabricante em dezenas de pseudo-marcas (a ZEISS
+  // virava dezesseis). Nesses casos devolvemos null para o chamador cair no
+  // fornecedor (p.brand), que é o dado confiável ali.
+  // Sem categoria informada, mantém o comportamento antigo (extrai sempre).
+  if (category != null && !matchesProductGroup(category, 'principal')) return null;
   const raw = (description ?? '').trim();
   if (!raw) return null;
   const tokens = raw.split(/\s+/);

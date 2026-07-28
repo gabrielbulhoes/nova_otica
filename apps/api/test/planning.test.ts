@@ -410,6 +410,30 @@ describe('extractBrand (marca a partir da descrição)', () => {
     expect(extractBrand(undefined)).toBeNull();
     expect(extractBrand('Óculos de Sol')).toBeNull();
   });
+
+  // ─── Regressão: grife só existe em produto de moda ────────────────────────
+  it('em LENTE devolve null — a descrição é a linha, não a marca', () => {
+    // Sem o recorte, estes viravam pseudo-marcas distintas do mesmo fabricante.
+    expect(extractBrand('MULTIGRESSIV MONOFOCAIS B.I.G. NORM 1,50', 'LENTES')).toBeNull();
+    expect(extractBrand('HILUX LENTES PRONTAS ESFERICAS 1.56', 'LENTES PRONTAS')).toBeNull();
+    expect(extractBrand('IMPRESSION B.I.G. NORM 1,67 LAYR', 'LENTES VISAO SIMPLES')).toBeNull();
+  });
+
+  it('em tratamento/serviço também devolve null', () => {
+    expect(extractBrand('ZEISS ANTIRREFLEXO X-TRA CLEAN', 'TRATAMENTO')).toBeNull();
+    expect(extractBrand('ZEISS COLORACAO', 'TRATAMENTO')).toBeNull();
+  });
+
+  it('em óculos/armação/relógio segue extraindo a grife', () => {
+    expect(extractBrand('RB3548NL 001 54 OCULOS RAY BAN', 'OCULOS')).toBe('RAY BAN');
+    expect(extractBrand('MU05VV 11Q1O1 55 ARMACAO MIU MIU', 'ARMACAO')).toBe('MIU MIU');
+    expect(extractBrand('2035NCO/0M RELOGIO TECHNOS', 'RELOGIO')).toBe('TECHNOS');
+  });
+
+  it('sem categoria informada mantém o comportamento antigo', () => {
+    expect(extractBrand('RB3548NL 001 54 OCULOS RAY BAN')).toBe('RAY BAN');
+    expect(extractBrand('MULTIGRESSIV MONOFOCAIS B.I.G.')).toBe('MULTIGRESSIV MONOFOCAIS');
+  });
 });
 
 describe('isMadeToOrderLens (lente por encomenda)', () => {

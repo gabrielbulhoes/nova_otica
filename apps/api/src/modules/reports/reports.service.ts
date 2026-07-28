@@ -33,6 +33,20 @@ function periodStart(days: number): Date {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+/**
+ * Marca de exibição de um produto, na ordem de confiança:
+ *  1. marca REAL extraída da descrição (grifes de armação/óculos/relógio);
+ *  2. fornecedor (p.brand) — é o dado bom em LENTE, onde a descrição é a
+ *     linha do produto e extrair dali fragmenta o fabricante;
+ *  3. "Sem marca".
+ */
+function brandOf(
+  p?: { description: string | null; brand: string | null; category: string | null } | null,
+): string {
+  if (!p) return 'Sem marca';
+  return extractBrand(p.description, p.category) ?? p.brand?.trim() ?? 'Sem marca';
+}
+
 /** Curva ABC por receita no período — por SKU ou por MARCA (opcionalmente por loja). */
 export async function abcCurve(
   days: number,
@@ -55,13 +69,13 @@ export async function abcCurve(
     const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
     const products = await prisma.product.findMany({
       where: { id: { in: ids } },
-      select: { id: true, description: true },
+      select: { id: true, description: true, brand: true, category: true },
     });
-    const descById = new Map(products.map((p) => [p.id, p.description]));
+    const metaById = new Map(products.map((p) => [p.id, p]));
     const byBrand = new Map<string, { revenue: number; units: number }>();
     for (const g of grouped) {
       const brand =
-        (g.productId === null ? null : extractBrand(descById.get(g.productId))) ?? 'Sem marca';
+        brandOf(g.productId === null ? undefined : metaById.get(g.productId));
       const cur = byBrand.get(brand) ?? { revenue: 0, units: 0 };
       cur.revenue += toNumber(g._sum.total) ?? 0;
       cur.units += g._sum.quantity ?? 0;
@@ -144,7 +158,7 @@ export async function coverageByBrand(days: number, storeId?: string): Promise<B
   const ids = Array.from(new Set([...displayStock.map((r) => r.productId), ...sold.map((r) => r.productId as string)]));
   const products = await prisma.product.findMany({
     where: { id: { in: ids } },
-    select: { id: true, description: true, category: true },
+    select: { id: true, description: true, brand: true, category: true },
   });
   const metaById = new Map(products.map((p) => [p.id, p]));
   const displayById = new Map(displayStock.map((r) => [r.productId, r._sum.quantity ?? 0]));
@@ -156,7 +170,7 @@ export async function coverageByBrand(days: number, storeId?: string): Promise<B
     if (!meta) continue;
     // Lente por encomenda (grade da rede = 0) sai da cobertura de estoque.
     if (isMadeToOrderLens(meta.category, netById.get(id) ?? 0)) continue;
-    const brand = extractBrand(meta.description) ?? 'Sem marca';
+    const brand = brandOf(meta);
     const cur = byBrand.get(brand) ?? { stockUnits: 0, unitsSold: 0 };
     cur.stockUnits += displayById.get(id) ?? 0;
     cur.unitsSold += soldById.get(id) ?? 0;
@@ -253,13 +267,13 @@ export async function salesAnalysis(
     const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
     const products = await prisma.product.findMany({
       where: { id: { in: ids } },
-      select: { id: true, description: true },
+      select: { id: true, description: true, brand: true, category: true },
     });
-    const descById = new Map(products.map((p) => [p.id, p.description]));
+    const metaById = new Map(products.map((p) => [p.id, p]));
     const byBrand = new Map<string, { units: number; revenue: number }>();
     for (const g of grouped) {
       const brand =
-        (g.productId === null ? null : extractBrand(descById.get(g.productId))) ?? 'Sem marca';
+        brandOf(g.productId === null ? undefined : metaById.get(g.productId));
       const cur = byBrand.get(brand) ?? { units: 0, revenue: 0 };
       cur.units += g._sum.quantity ?? 0;
       cur.revenue += toNumber(g._sum.total) ?? 0;
