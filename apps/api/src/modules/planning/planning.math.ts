@@ -45,6 +45,23 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   carryingCostAnnualPct: 25,
 };
 
+/**
+ * A análise de MARCA vale só para produto de moda (óculos, armação, relógio).
+ *
+ * Decisão do cliente (Galbe, 28/07): lente e tratamento não entram na análise
+ * de marca — "Zeiss é fornecedor de lente, portanto não deve entrar nas
+ * análises nesse momento". Elas terão módulo próprio, o do setor de produção
+ * (o laboratório da rede).
+ *
+ * Consequência assumida: as visões por marca cobrem uma base MENOR que as
+ * visões por SKU/loja/vendedor (nos dados reais, ~43% da receita). Isso é
+ * recorte declarado, não perda silenciosa — os serviços devolvem o total
+ * excluído para a tela poder dizer o que ficou de fora.
+ */
+export function isBrandAnalysable(category: string | null | undefined): boolean {
+  return matchesProductGroup(category, 'principal');
+}
+
 // ─── Economia da decisão: carregamento, margem e faixas de preço ─────────────
 
 /**

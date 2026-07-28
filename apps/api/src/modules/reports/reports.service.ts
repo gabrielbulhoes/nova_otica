@@ -7,6 +7,7 @@ import {
   buildBrandMix,
   computeCoverage,
   extractBrand,
+  isBrandAnalysable,
   isMadeToOrderLens,
   type AbcDimension,
   type AbcResult,
@@ -59,8 +60,11 @@ export async function abcCurve(
   if (dimension === 'brand') {
     // Marca REAL do produto, extraída da descrição (o campo p.brand carrega o
     // fornecedor). Receita/unidades são reagrupadas por marca extraída.
-    // Itens sem produto casado entram como "Sem marca" — a base de itens é a
-    // mesma da dimensão SKU, então a receita total fecha entre as duas.
+    //
+    // RECORTE DECLARADO: só óculos, armação e relógio. Lente e tratamento
+    // saem da análise de marca por decisão do cliente (terão módulo próprio,
+    // o do laboratório). Logo, o total desta dimensão é MENOR que o da
+    // dimensão SKU — de propósito, e a tela diz isso.
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
       where: { sale: saleFilter },
@@ -74,8 +78,10 @@ export async function abcCurve(
     const metaById = new Map(products.map((p) => [p.id, p]));
     const byBrand = new Map<string, { revenue: number; units: number }>();
     for (const g of grouped) {
-      const brand =
-        brandOf(g.productId === null ? undefined : metaById.get(g.productId));
+      const meta = g.productId === null ? undefined : metaById.get(g.productId);
+      // Lente e tratamento ficam fora da análise de marca (módulo próprio).
+      if (!meta || !isBrandAnalysable(meta.category)) continue;
+      const brand = brandOf(meta);
       const cur = byBrand.get(brand) ?? { revenue: 0, units: 0 };
       cur.revenue += toNumber(g._sum.total) ?? 0;
       cur.units += g._sum.quantity ?? 0;
@@ -136,6 +142,9 @@ export interface BrandCoverageResult {
  * Cobertura por marca: unidades em estoque ÷ média mensal vendida, agregadas
  * pela marca do produto. Produtos sem marca caem no balde "Sem marca" (a
  * grade do CDS não traz fornecedor; o backfill do sistema vivo preenche).
+ *
+ * RECORTE DECLARADO: só óculos, armação e relógio — lente e tratamento têm
+ * módulo próprio. A linha GERAL soma apenas o que está no recorte.
  */
 export async function coverageByBrand(days: number, storeId?: string): Promise<BrandCoverageResult> {
   // GMAIS e outros CDs ficam fora da cobertura (matemática de lojas).
@@ -168,6 +177,8 @@ export async function coverageByBrand(days: number, storeId?: string): Promise<B
   for (const id of ids) {
     const meta = metaById.get(id);
     if (!meta) continue;
+    // Lente e tratamento não entram na cobertura POR MARCA (módulo próprio).
+    if (!isBrandAnalysable(meta.category)) continue;
     // Lente por encomenda (grade da rede = 0) sai da cobertura de estoque.
     if (isMadeToOrderLens(meta.category, netById.get(id) ?? 0)) continue;
     const brand = brandOf(meta);
@@ -272,8 +283,10 @@ export async function salesAnalysis(
     const metaById = new Map(products.map((p) => [p.id, p]));
     const byBrand = new Map<string, { units: number; revenue: number }>();
     for (const g of grouped) {
-      const brand =
-        brandOf(g.productId === null ? undefined : metaById.get(g.productId));
+      const meta = g.productId === null ? undefined : metaById.get(g.productId);
+      // Lente e tratamento ficam fora da análise de marca (módulo próprio).
+      if (!meta || !isBrandAnalysable(meta.category)) continue;
+      const brand = brandOf(meta);
       const cur = byBrand.get(brand) ?? { units: 0, revenue: 0 };
       cur.units += g._sum.quantity ?? 0;
       cur.revenue += toNumber(g._sum.total) ?? 0;

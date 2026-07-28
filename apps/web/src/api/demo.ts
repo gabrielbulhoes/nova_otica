@@ -12,6 +12,8 @@ import {
   analyzeProduct,
   buildCommercialStrategy,
   buildDecisionCards,
+  extractBrand,
+  isBrandAnalysable,
   matchesProductGroup,
   buildBrandMix,
   buildFairSplit,
@@ -380,14 +382,39 @@ function soldItems() {
   return soldItemsCache;
 }
 
+/**
+ * Marca de exibição, na MESMA ordem do backend (reports.service.brandOf):
+ * grife extraída da descrição → fornecedor → "Sem marca".
+ */
+function brandLabel(p: { description: string; brand: string; category: string }) {
+  return extractBrand(p.description, p.category) ?? (p.brand && p.brand !== '—' ? p.brand : null) ?? 'Sem marca';
+}
+
+/**
+ * Vendas agregadas por MARCA, com o recorte da análise de marca aplicado
+ * (só óculos/armação/relógio — lente e tratamento têm módulo próprio).
+ * Calculado do catálogo, e não dos agregados prontos do dataset, para bater
+ * com o que a API faz — os agregados são por fornecedor e incluem lente.
+ */
+function brandSales() {
+  const acc = new Map<string, { revenue: number; units: number }>();
+  for (const x of soldItems()) {
+    if (!isBrandAnalysable(x.p.category)) continue;
+    const k = brandLabel(x.p);
+    const cur = acc.get(k) ?? { revenue: 0, units: 0 };
+    cur.revenue = round2(cur.revenue + x.revenue);
+    cur.units += x.units;
+    acc.set(k, cur);
+  }
+  return acc;
+}
+
 function abc(days: number, dimension: 'product' | 'brand') {
   let items: AbcItem[];
   if (dimension === 'brand') {
-    const acc = new Map<string, { revenue: number; units: number }>();
+    const acc = real ? brandSales() : new Map<string, { revenue: number; units: number }>();
     if (real) {
-      // O gerador usa '—' para produto sem fornecedor; aqui vira "Sem marca"
-      // (mesmo rótulo da cobertura por marca).
-      for (const b of real.byBrand) acc.set(b.label === '—' ? 'Sem marca' : b.label, { revenue: b.total, units: b.count });
+      // calculado acima por brandSales() — mesmo recorte e mesma marca da API
     } else {
       for (const x of soldItems()) {
         const cur = acc.get(x.p.brand) ?? { revenue: 0, units: 0 };
@@ -419,8 +446,23 @@ const effectiveDays = (days: number) => (real ? 30 : days);
 /** Cobertura geral e por marca (feedback 06). */
 function brandCoverageReport(rawDays: number) {
   const days = effectiveDays(rawDays);
-  const inputs = real?.brandCoverage
-    ? real.brandCoverage.map((b) => ({ key: b.label, label: b.label, stockUnits: b.stockUnits, unitsSold: b.soldUnits }))
+  const inputs = real
+    ? (() => {
+        // Do catálogo, não do agregado pronto: o agregado é por fornecedor e
+        // inclui lente. Aqui vale o recorte da análise de marca, como na API.
+        const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
+        for (const p of products) {
+          if (!isBrandAnalysable(p.category)) continue;
+          const k = brandLabel(p);
+          const cur = acc.get(k) ?? { stockUnits: 0, unitsSold: 0 };
+          for (const st of stores) {
+            cur.stockUnits += stockQty.get(key(st.id, p.id)) ?? 0;
+            cur.unitsSold += soldQty.get(key(st.id, p.id)) ?? 0;
+          }
+          acc.set(k, cur);
+        }
+        return [...acc.entries()].map(([label, v]) => ({ key: label, label, ...v }));
+      })()
     : (() => {
         const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
         for (const p of products) {
@@ -478,9 +520,11 @@ function salesAnalysisReport(rawDays: number, by: string) {
   } else {
     // brand | category
     const acc = new Map<string, { units: number; revenue: number }>();
-    if (real) {
-      const src = by === 'brand' ? real.byBrand : real.byCategory;
-      for (const b of src) acc.set(by === 'brand' && b.label === '—' ? 'Sem marca' : b.label, { units: b.count, revenue: b.total });
+    if (real && by === 'brand') {
+      // Mesmo recorte e mesma marca da API (lente/tratamento ficam fora).
+      for (const [k, v] of brandSales()) acc.set(k, { units: v.units, revenue: v.revenue });
+    } else if (real) {
+      for (const b of real.byCategory) acc.set(b.label, { units: b.count, revenue: b.total });
     } else {
       for (const x of soldItems()) {
         const k = by === 'brand' ? x.p.brand : x.p.category;

@@ -17,6 +17,23 @@ type Tab = 'abc' | 'turnover' | 'coverage' | 'transfers' | 'brandmix';
 
 const classColor: Record<string, string> = { A: 'green', B: 'amber', C: 'gray' };
 
+/**
+ * A análise por marca cobre só produto de moda. Sem dizer isso, o total menor
+ * (nos dados reais, ~43% da receita) parece defeito — e é recorte.
+ */
+function BrandScopeNote() {
+  return (
+    <div
+      className="muted"
+      style={{ flexBasis: '100%', fontSize: 11.5, lineHeight: 1.35, marginTop: 4 }}
+    >
+      ℹ︎ A análise por marca considera <strong>óculos, armações e relógios</strong>. Lentes e
+      tratamentos ficam de fora — são do setor de produção (laboratório) e terão módulo próprio,
+      então o total aqui é menor que o da visão por SKU.
+    </div>
+  );
+}
+
 export function Reports() {
   const { isAdmin } = useAuth();
   const [tab, setTab] = useState<Tab>('abc');
@@ -94,6 +111,7 @@ export function Reports() {
             </button>
           </div>
         )}
+        {((tab === 'abc' && dimension === 'brand') || tab === 'coverage') && <BrandScopeNote />}
         <select value={days} onChange={(e) => setDays(e.target.value)}>
           <option value="7">Últimos 7 dias</option>
           <option value="30">Últimos 30 dias</option>

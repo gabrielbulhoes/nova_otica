@@ -15,6 +15,7 @@ import {
   forecastDemand,
   isMadeToOrderLens,
   matchesProductGroup,
+  isBrandAnalysable,
   carryingCost,
   marginPct,
   expectedMargin,
@@ -389,6 +390,28 @@ describe('matchesProductGroup (recortes de cobertura)', () => {
     for (const cat of ['Estojo', 'Acessório', 'Lente', 'Relógio', null, undefined]) {
       expect(matchesProductGroup(cat, 'todos')).toBe(true);
     }
+  });
+});
+
+describe('isBrandAnalysable (recorte da análise de marca)', () => {
+  it('produto de moda entra na análise de marca', () => {
+    expect(isBrandAnalysable('OCULOS')).toBe(true);
+    expect(isBrandAnalysable('ARMACAO')).toBe(true);
+    expect(isBrandAnalysable('RELOGIO')).toBe(true);
+  });
+
+  it('lente e tratamento NÃO entram — decisão do cliente (módulo próprio)', () => {
+    // Zeiss é fornecedor de lente: não deve aparecer como marca na análise.
+    expect(isBrandAnalysable('LENTES')).toBe(false);
+    expect(isBrandAnalysable('LENTES PRONTAS')).toBe(false);
+    expect(isBrandAnalysable('LENTES DE CONTATO PEDIDO')).toBe(false);
+    expect(isBrandAnalysable('TRATAMENTO')).toBe(false);
+  });
+
+  it('acessório também fica fora', () => {
+    expect(isBrandAnalysable('PORTA OCULOS')).toBe(false);
+    expect(isBrandAnalysable('ACESSORIOS')).toBe(false);
+    expect(isBrandAnalysable(null)).toBe(false);
   });
 });
 
