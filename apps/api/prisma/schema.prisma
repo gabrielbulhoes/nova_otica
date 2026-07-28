@@ -45,6 +45,7 @@ model Store {
 
   @@index([active])
   @@index([excludeFromPlanning])
+  decisions   DecisionRecord[]
 }
 
 enum Role {
@@ -69,6 +70,7 @@ model User {
   store Store? @relation(fields: [storeId], references: [id])
 
   @@index([role])
+  decisions    DecisionRecord[]
 }
 
 /// Vendedor / funcionário (Sellbie: rota `vendedores`, campo `funcionario`).
@@ -149,6 +151,7 @@ model Product {
 
   @@index([category])
   @@index([brand])
+  decisions   DecisionRecord[]
 }
 
 /// Cliente (Sellbie: rota `clientes`, campo `cpfCnpj`).
@@ -575,4 +578,44 @@ model FiscalDocument {
   @@index([orderId])
   @@index([movementId])
   @@index([status])
+}
+
+// ─── Governança da decisão (Onda 1 · trilha TB) ──────────────────────────────
+
+enum DecisionOutcome {
+  APPROVED // gestor aprovou o card — a ação foi (ou será) executada
+  REJECTED // gestor recusou, com justificativa
+}
+
+/// Registro imutável de uma decisão tomada sobre um card do Planejamento.
+/// É a trilha de auditoria: quem decidiu, quando, com que justificativa e
+/// qual era o impacto em R$ no momento da decisão. Nunca se atualiza uma
+/// linha — decidir de novo cria outra, e a mais recente vale.
+model DecisionRecord {
+  id        String          @id @default(cuid())
+  /// ID do card (determinístico: mesmo card gera o mesmo id entre execuções).
+  cardId    String
+  /// Tipo do card no momento da decisão (BUY / REBALANCE / LIQUIDATE…).
+  cardType  String
+  outcome   DecisionOutcome
+  /// Texto livre do gestor. Obrigatório na recusa pela regra de negócio.
+  note      String?
+  /// Impacto financeiro (R$) que o card exibia quando foi decidido — o valor
+  /// muda a cada nova execução do motor, então congelamos o da decisão.
+  impact    Decimal         @db.Decimal(14, 2)
+  /// Quando o card foi gerado — permite medir o tempo até a decisão (SLA).
+  cardSeenAt DateTime?
+  productId String?
+  storeId   String?
+  decidedBy String
+  decidedAt DateTime        @default(now())
+
+  user    User    @relation(fields: [decidedBy], references: [id])
+  product Product? @relation(fields: [productId], references: [id])
+  store   Store?   @relation(fields: [storeId], references: [id])
+
+  @@index([cardId])
+  @@index([decidedAt])
+  @@index([decidedBy])
+  @@index([outcome, decidedAt])
 }

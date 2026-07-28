@@ -7,7 +7,9 @@ export type AppEvent =
   | { type: 'order.changed'; storeId?: string | null; orderId?: string }
   /** Notificação proativa do planejamento: itens no ponto de reposição. */
   | { type: 'planning.urgent'; items: number; suppliers: number; total: number }
-  | { type: 'purchase-order.changed'; recordId?: string };
+  | { type: 'purchase-order.changed'; recordId?: string }
+  /** Decisão registrada sobre um card do Planejamento (aprovar/recusar). */
+  | { type: 'decision.recorded'; recordId?: string };
 
 const CHANNEL = 'app';
 const emitter = new EventEmitter();
