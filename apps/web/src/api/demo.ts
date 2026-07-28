@@ -626,6 +626,12 @@ const demoUsers: Record<string, unknown>[] =
         })),
       ];
 
+// Trilha de decisões da sessão (a demo não tem servidor; some ao recarregar).
+const demoDecisions: {
+  id: string; cardId: string; cardType: string; outcome: string; note: string | null;
+  impact: number; decidedAt: string; decidedByName: string; daysToDecide: number | null;
+}[] = [];
+
 // ─── Roteador ────────────────────────────────────────────────────────────────
 
 export interface DemoRequest {
@@ -916,6 +922,68 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         });
     return buildRebalance(inputs, planDays, cfgForBrand);
   };
+  // ─── Governança da decisão: trilha em memória, na sessão do navegador ─────
+  if (url === '/planning/decisions' && m === 'POST') {
+    const outcome = String(body.outcome ?? '');
+    const note = String(body.note ?? '').trim();
+    // Mesma regra do backend: recusar exige justificativa.
+    if (outcome === 'REJECTED' && !note) {
+      throw Object.assign(new Error('Recusar um card exige justificativa.'), { status: 400 });
+    }
+    const rec = {
+      id: `dec_${demoDecisions.length + 1}`,
+      cardId: String(body.cardId ?? ''),
+      cardType: String(body.cardType ?? ''),
+      outcome,
+      note: note || null,
+      impact: Number(body.impact) || 0,
+      decidedAt: new Date().toISOString(),
+      decidedByName: currentUser.name,
+      daysToDecide: null as number | null,
+    };
+    demoDecisions.unshift(rec);
+    return { id: rec.id };
+  }
+  if (url === '/planning/decisions/history') return demoDecisions.slice(0, 200);
+  if (url === '/planning/decisions/stats') {
+    const days = Math.max(1, Math.trunc(Number(one(params.days))) || 30);
+    const series: { date: string; approved: number; rejected: number }[] = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const day = demoDecisions.filter((r) => r.decidedAt.slice(0, 10) === key);
+      series.push({
+        date: key,
+        approved: day.filter((r) => r.outcome === 'APPROVED').length,
+        rejected: day.filter((r) => r.outcome === 'REJECTED').length,
+      });
+    }
+    const ap = demoDecisions.filter((r) => r.outcome === 'APPROVED');
+    const re = demoDecisions.filter((r) => r.outcome === 'REJECTED');
+    const sum = (xs: typeof demoDecisions) => Math.round(xs.reduce((a, r) => a + r.impact, 0) * 100) / 100;
+    return {
+      slaDays: 30,
+      approved: ap.length,
+      rejected: re.length,
+      approvedImpact: sum(ap),
+      rejectedImpact: sum(re),
+      avgDaysToDecide: null,
+      series,
+      byUser:
+        demoDecisions.length === 0
+          ? []
+          : [
+              {
+                userId: currentUser.id,
+                name: currentUser.name,
+                approved: ap.length,
+                rejected: re.length,
+                impact: sum(demoDecisions),
+              },
+            ],
+    };
+  }
   if (url === '/planning/decisions')
     return buildDecisionCards(
       planningPlans(planDays, one(params.storeId), planGroup),
