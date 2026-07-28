@@ -24,6 +24,13 @@ export interface PlanningConfig {
   fastCoverDays: number;
   /** Cobertura acima da qual o giro é "baixo" (mas ainda com vendas). */
   slowCoverDays: number;
+  /**
+   * Custo anual de carregar estoque, em % do capital parado: custo de capital
+   * + armazenagem + perda/obsolescência. É o que transforma "tem 47 meses de
+   * cobertura" em "isso custa R$ X por mês parado" — a régua que torna as
+   * decisões comparáveis entre si.
+   */
+  carryingCostAnnualPct: number;
 }
 
 export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
@@ -33,7 +40,78 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   overstockDays: 120,
   fastCoverDays: 15,
   slowCoverDays: 90,
+  // 25%/ano é a faixa usual do varejo de moda (capital ~12% + armazenagem
+  // ~5% + obsolescência/perda ~8%). Ajustável por configuração.
+  carryingCostAnnualPct: 25,
 };
+
+// ─── Economia da decisão: carregamento, margem e faixas de preço ─────────────
+
+/**
+ * Quanto custa manter um capital parado por um período.
+ * Ex.: R$ 100.000 parados por 30 dias a 25%/ano = R$ 2.054.
+ */
+export function carryingCost(
+  stockValue: number,
+  days: number,
+  cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
+): number {
+  if (!(stockValue > 0) || !(days > 0)) return 0;
+  const annual = Math.max(0, cfg.carryingCostAnnualPct) / 100;
+  return round2(stockValue * annual * (days / 365));
+}
+
+/** Margem bruta unitária em % do preço (0 quando o preço não é positivo). */
+export function marginPct(unitPrice: number, unitCost: number): number {
+  if (!(unitPrice > 0)) return 0;
+  return round2(((unitPrice - unitCost) / unitPrice) * 100);
+}
+
+/** Margem bruta esperada (R$) de vender uma quantidade. */
+export function expectedMargin(units: number, unitPrice: number, unitCost: number): number {
+  if (!(units > 0)) return 0;
+  return round2(units * (unitPrice - unitCost));
+}
+
+export interface PriceBand {
+  key: 'acessivel' | 'premium_acessivel' | 'premium' | 'luxo';
+  label: string;
+  min: number;
+  max: number;
+  /** Quantos SKUs observados caem nesta faixa. */
+  count: number;
+}
+
+const BAND_META: { key: PriceBand['key']; label: string }[] = [
+  { key: 'acessivel', label: 'Acessível' },
+  { key: 'premium_acessivel', label: 'Premium acessível' },
+  { key: 'premium', label: 'Premium' },
+  { key: 'luxo', label: 'Luxo' },
+];
+
+/**
+ * Faixas de preço OBSERVADAS na rede, por quartil — não são parâmetro
+ * digitado. Devolve o intervalo real de cada quartil, que é o que permite
+ * ler mix ("o estoque está pesado no topo") sem inventar limites.
+ */
+export function buildPriceBands(prices: number[]): PriceBand[] {
+  const sorted = prices.filter((p) => Number.isFinite(p) && p > 0).sort((a, b) => a - b);
+  if (sorted.length === 0) return [];
+  const bands: PriceBand[] = [];
+  for (let i = 0; i < 4; i++) {
+    const start = Math.floor((sorted.length * i) / 4);
+    const end = Math.floor((sorted.length * (i + 1)) / 4);
+    const slice = sorted.slice(start, end);
+    if (slice.length === 0) continue;
+    bands.push({
+      ...BAND_META[i],
+      min: round2(slice[0]),
+      max: round2(slice[slice.length - 1]),
+      count: slice.length,
+    });
+  }
+  return bands;
+}
 
 export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
@@ -311,6 +389,14 @@ export interface ProductPlan {
   friendlyReason: string;
   /** Confiabilidade da decisão (0–100): volume de vendas + histórico + método. */
   confidence: number;
+  /** Quanto custa manter ESTE estoque parado por 30 dias (R$). */
+  carryingCost30d: number;
+  /** Quanto custa manter só o EXCESSO por 30 dias (R$) — o desperdício puro. */
+  excessCarryingCost30d: number;
+  /** Margem bruta unitária em % do preço. */
+  marginPct: number;
+  /** Margem bruta esperada da compra sugerida (R$). */
+  expectedMargin: number;
   /** Unidades a caminho (pedidos enviados e não recebidos). */
   onOrderQty: number;
   /** Prazo de ressuprimento aplicado (do fornecedor/marca ou padrão). */
@@ -460,6 +546,10 @@ export function analyzeProduct(
     reason,
     friendlyReason: friendlyReasonFor(recommendation, { onOrder, coverageDays }),
     confidence: decisionConfidence(input.unitsSold, days, dailyDemand > 0, forecast?.method ?? null),
+    carryingCost30d: carryingCost(stockValue, 30, cfg),
+    excessCarryingCost30d: carryingCost(excessValue, 30, cfg),
+    marginPct: marginPct(input.unitPrice, input.unitCost),
+    expectedMargin: expectedMargin(suggestedQty, input.unitPrice, input.unitCost),
     onOrderQty: onOrder,
     leadTimeDays: cfg.leadTimeDays,
     orderByInDays,
