@@ -10,6 +10,7 @@ import {
   decisionStats,
   recordDecision,
 } from './decisions.service.js';
+import { batchHistory } from './batches.service.js';
 import {
   commercialStrategy,
   decisionBoard,
@@ -260,5 +261,18 @@ planningRouter.get(
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     res.json(await decisionStats(parseDays(req.query.days, 30)));
+  }),
+);
+
+/**
+ * GET /api/planning/batches — linha do tempo das execuções do motor.
+ * O lote nasce do cron das 06h; sync manual gera lote marcado como MANUAL.
+ */
+planningRouter.get(
+  '/batches',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const limit = Number(req.query.limit) || 30;
+    res.json({ rows: await batchHistory(limit) });
   }),
 );

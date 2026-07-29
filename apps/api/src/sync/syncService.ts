@@ -187,6 +187,23 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
     });
   }
 
+  // Lote de geração: o motor acabou de rodar sobre a base nova, então esta é a
+  // execução que o gestor vê às 06h. Registrar aqui é o que dá ao card uma
+  // idade real — e ao SLA de decisão algo em que se apoiar.
+  //
+  // Não roda se a sincronização falhou: um lote calculado sobre base velha
+  // marcaria cards como "novos" por defeito de dados, não por mudança real.
+  if (!hadError) {
+    try {
+      const { recordPlanningBatch } = await import('../modules/planning/planning.service.js');
+      await recordPlanningBatch(trigger);
+    } catch (err) {
+      log.warn('Falha ao registrar o lote de geração pós-sync', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return { ok: !hadError, window: win.window, durationMs, entities };
 }
 

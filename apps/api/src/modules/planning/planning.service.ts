@@ -4,9 +4,11 @@ import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
 import { loadBrandCatalog } from './brandCatalog.js';
-import { currentDecisions } from './decisions.service.js';
+import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
+import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
 import {
   analyzeProduct,
+  annotateCardAges,
   buildCommercialStrategy,
   buildDecisionCards,
   buildFairSplit,
@@ -234,16 +236,48 @@ export async function purchaseOrders(days: number, storeId?: string, group: Prod
  * Compra/liquidação respeitam o recorte de loja; o remanejamento é de rede.
  */
 export async function decisionBoard(days: number, storeId?: string, group: ProductGroup = 'principal') {
+  const generated = await generateCards(days, storeId, group);
+  const ids = generated.cards.map((c) => c.id);
+
+  // O board final sai sem os cards com decisão registrada (senão o gestor
+  // decide o mesmo card toda vez que o motor roda, e a trilha de auditoria não
+  // serve para nada), e com a idade de cada um vinda do lote de geração.
+  const [decided, history, batch] = await Promise.all([
+    currentDecisions(ids),
+    cardHistories(ids),
+    latestBatch(),
+  ]);
+
+  const open = buildDecisionCards(
+    generated.plans,
+    generated.rebalance,
+    new Set(decided.keys()),
+  );
+  return annotateCardAges(open, history, batch, DECISION_SLA_DAYS);
+}
+
+/**
+ * Todos os cards que o motor gera agora, SEM filtrar os já decididos — é o que
+ * o lote de geração registra. O board filtra depois; o lote precisa da foto
+ * completa, senão um card decidido sumiria do histórico de aparições.
+ */
+export async function generateCards(days: number, storeId?: string, group: ProductGroup = 'principal') {
   const [productPlans, reb] = await Promise.all([
     plans(days, storeId, group),
     rebalancePlan(days, group),
   ]);
-  // Primeira passada só para saber QUAIS cards existem — o board final já sai
-  // sem os que têm decisão registrada (senão o gestor decide o mesmo card toda
-  // vez que o motor roda, e a trilha de auditoria não serve para nada).
-  const ids = buildDecisionCards(productPlans, reb.rows).cards.map((c) => c.id);
-  const decided = await currentDecisions(ids);
-  return buildDecisionCards(productPlans, reb.rows, new Set(decided.keys()));
+  const board = buildDecisionCards(productPlans, reb.rows);
+  return { ...board, plans: productPlans, rebalance: reb.rows };
+}
+
+/**
+ * Registra o lote da execução do motor. Chamado ao fim de cada sincronização —
+ * o lote nasce do cron das 06h; sync manual também gera lote, marcado como
+ * MANUAL para não sujar a leitura da série.
+ */
+export async function recordPlanningBatch(trigger: string, days = 90): Promise<void> {
+  const generated = await generateCards(days);
+  await recordGenerationBatch(generated.cards, { trigger, days });
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   abcFromItems,
   analyzeProduct,
   buildCommercialStrategy,
+  annotateCardAges,
   buildDecisionCards,
   extractBrand,
   isBrandAnalysable,
@@ -653,6 +654,45 @@ const demoDecisions: {
   impact: number; decidedAt: string; decidedByName: string; daysToDecide: number | null;
 }[] = [];
 
+// ─── Lote de geração ────────────────────────────────────────────────────────
+//
+// Em produção o lote nasce da sincronização das 6h e a idade de cada card vem
+// do banco. Aqui não há execuções passadas para consultar, então a demo ancora
+// o lote na ÚLTIMA 6h real e deriva a idade de cada card de um hash do próprio
+// id — determinístico, para o mesmo card não mudar de idade a cada recarga.
+
+/** Última 6h — hoje se já passou das 6, senão ontem. */
+function lastSixAm(): Date {
+  const d = new Date();
+  if (d.getHours() < 6) d.setDate(d.getDate() - 1);
+  d.setHours(6, 0, 0, 0);
+  return d;
+}
+
+const demoBatchAt = lastSixAm();
+
+/** Hash estável do id do card → 0..99. */
+function cardSeed(cardId: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < cardId.length; i++) {
+    h ^= cardId.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h) % 100;
+}
+
+/**
+ * Idade simulada: ~12% estreiam no lote de hoje, ~8% arrastam mais de 30 dias
+ * (é justamente o que a tela precisa mostrar), o resto fica entre 1 e 29 dias.
+ */
+function demoCardAge(cardId: string): { firstSeenAt: Date; timesSeen: number } {
+  const s = cardSeed(cardId);
+  const ageDays = s < 12 ? 0 : s >= 92 ? 31 + (s - 92) * 9 : 1 + (s % 29);
+  const d = new Date(demoBatchAt);
+  d.setDate(d.getDate() - ageDays);
+  return { firstSeenAt: d, timesSeen: ageDays === 0 ? 1 : 1 + ageDays };
+}
+
 // ─── Roteador ────────────────────────────────────────────────────────────────
 
 export interface DemoRequest {
@@ -1004,14 +1044,51 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
             ],
     };
   }
-  if (url === '/planning/decisions')
+  if (url === '/planning/decisions') {
     // Mesmo comportamento do backend: card decidido sai do board (e é contado
     // em summary.decididos), senão ele reaparece a cada recarga da página.
-    return buildDecisionCards(
+    const board = buildDecisionCards(
       planningPlans(planDays, one(params.storeId), planGroup),
       rebalanceRows().rows,
       new Set(demoDecisions.map((r) => r.cardId)),
     );
+    const history = new Map(
+      board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),
+    );
+    return annotateCardAges(board, history, {
+      id: 'demo-batch',
+      generatedAt: demoBatchAt.toISOString(),
+      source: 'CRON',
+      cardsTotal: board.cards.length + demoDecisions.length,
+      cardsNew: [...history.values()].filter((h) => h.timesSeen <= 1).length,
+      simulated: true,
+    });
+  }
+  if (url === '/planning/batches') {
+    // Série curta de lotes: um por dia às 6h, como o cron produz.
+    const rows = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(demoBatchAt);
+      d.setDate(d.getDate() - i);
+      const board = i === 0
+        ? buildDecisionCards(planningPlans(planDays, undefined, planGroup), rebalanceRows().rows)
+        : null;
+      const total = board?.cards.length ?? 0;
+      return {
+        id: `demo-batch-${i}`,
+        generatedAt: d.toISOString(),
+        source: 'CRON' as const,
+        trigger: 'schedule',
+        days: planDays,
+        cardsTotal: total,
+        cardsNew: board ? board.cards.filter((c) => cardSeed(c.id) < 12).length : 0,
+        compra: board?.summary.byType.compra ?? 0,
+        remanejamento: board?.summary.byType.remanejamento ?? 0,
+        liquidacao: board?.summary.byType.liquidacao ?? 0,
+        impactTotal: board?.summary.impactTotal ?? 0,
+      };
+    }).filter((r) => r.cardsTotal > 0);
+    return { rows };
+  }
   if (url === '/planning/strategy') {
     const floorUnits = Math.max(0, Math.trunc(Number(one(params.floor))) || 0);
     const windowMonths = Math.trunc(Number(one(params.window))) || 9;

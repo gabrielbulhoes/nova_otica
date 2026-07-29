@@ -4,7 +4,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getDecisionBoard, createMovement, formatBRL ,
   recordDecision,
 } from '../api/client';
-import type { DecisionCard, DecisionType, DecisionPriority } from '../api/client';
+import type {
+  DecisionCard,
+  DecisionType,
+  DecisionPriority,
+  DecisionBoard as DecisionBoardT,
+} from '../api/client';
 import { Loading } from '../components/ui';
 
 const typeMeta: Record<DecisionType, { label: string; cls: string; icon: string; accent: string }> = {
@@ -111,6 +116,14 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span className={`badge ${t.cls}`}>{t.icon} {t.label}</span>
           <span className={`badge ${p.cls}`}>{p.label}</span>
+          {/* Idade do card vem do lote de geração: sem isso, um card que
+              reaparece há dois meses fica igualzinho ao que estreou hoje. */}
+          {c.isNew && <span className="badge green" title="Estreou no lote mais recente">novo</span>}
+          {c.isOverdue && (
+            <span className="badge red" title={`${c.ageDays} dias sem decisão`}>
+              {c.ageDays}d sem decisão
+            </span>
+          )}
           <span className="muted" style={{ marginLeft: 'auto', fontSize: 11.5, fontVariantNumeric: 'tabular-nums' }}>{c.id}</span>
         </div>
 
@@ -233,6 +246,45 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
   );
 }
 
+/**
+ * Lote de geração: responde "quando isso foi calculado?" e "o que apareceu de
+ * novo?" — as duas primeiras perguntas de quem abre a tela de manhã. O motor
+ * recalcula tudo a cada sincronização, então sem esta linha os números da tela
+ * não têm data.
+ */
+function BatchLine({ board }: { board?: DecisionBoardT }) {
+  const b = board?.batch;
+  if (!b) return null;
+  const quando = new Date(b.generatedAt).toLocaleString('pt-BR', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+  const novos = board?.summary.novos ?? 0;
+  const atrasados = board?.summary.atrasados ?? 0;
+  return (
+    <div
+      className="card"
+      style={{ padding: '10px 14px', marginBottom: 14, fontSize: 12.5, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}
+    >
+      <span className="muted">
+        Lote de <strong style={{ color: 'var(--ink)' }}>{quando}</strong>
+        {b.source === 'CRON' ? ' · sincronização das 6h' : ' · sincronização manual'}
+      </span>
+      <span className="muted">{b.cardsTotal} cards gerados</span>
+      {novos > 0 && <span className="badge green">{novos} novo{novos > 1 ? 's' : ''} neste lote</span>}
+      {atrasados > 0 && (
+        <span className="badge red">{atrasados} há mais de 30 dias sem decisão</span>
+      )}
+      {/* Na demo não há execuções passadas: a idade dos cards é derivada, não
+          medida. Melhor dizer do que exibir número derivado como se fosse real. */}
+      {b.simulated && (
+        <span className="muted" style={{ fontSize: 11.5, marginLeft: 'auto' }}>
+          idades dos cards simuladas nesta demonstração
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function Decisions() {
   const [typeF, setTypeF] = useState<TypeFilter>('ALL');
   const [prioF, setPrioF] = useState<PrioFilter>('ALL');
@@ -260,6 +312,7 @@ export function Decisions() {
         <Loading />
       ) : (
         <>
+          <BatchLine board={board.data} />
           <div className="grid grid-4" style={{ marginBottom: 18 }}>
             <Kpi label="Cards em aberto" value={String(s.total)}
                  hint={`${s.byType.compra} comprar · ${s.byType.remanejamento} remanejar · ${s.byType.liquidacao} liquidar${

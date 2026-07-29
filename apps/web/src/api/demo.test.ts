@@ -235,3 +235,34 @@ describe('demo: governança da decisão', () => {
     ).toThrow(/justificativa/i);
   });
 });
+
+describe('demo: lote de geração', () => {
+  it('o board vem com o lote e a idade de cada card', () => {
+    const b = get('/planning/decisions');
+    expect(b.batch).toBeTruthy();
+    expect(b.batch.source).toBe('CRON');
+    // O lote é ancorado na última 6h — nunca no futuro.
+    expect(new Date(b.batch.generatedAt).getTime()).toBeLessThanOrEqual(Date.now());
+    for (const c of b.cards.slice(0, 20)) {
+      expect(typeof c.ageDays).toBe('number');
+      expect(c.ageDays).toBeGreaterThanOrEqual(0);
+      expect(c.isOverdue).toBe(c.ageDays > 30);
+    }
+    expect(b.summary.novos).toBeGreaterThan(0);
+    expect(b.summary.novos + b.summary.atrasados).toBeLessThanOrEqual(b.cards.length);
+  });
+
+  it('a idade de um card é estável entre chamadas (não muda a cada recarga)', () => {
+    const a = get('/planning/decisions').cards[0];
+    const b = get('/planning/decisions').cards.find((c: any) => c.id === a.id);
+    expect(b.firstSeenAt).toBe(a.firstSeenAt);
+  });
+
+  it('/planning/batches devolve a série de lotes, mais recente primeiro', () => {
+    const rows = get('/planning/batches').rows as any[];
+    expect(rows.length).toBeGreaterThan(0);
+    const datas = rows.map((r) => new Date(r.generatedAt).getTime());
+    expect(datas).toEqual([...datas].sort((x, y) => y - x));
+    expect(rows[0].compra + rows[0].remanejamento + rows[0].liquidacao).toBe(rows[0].cardsTotal);
+  });
+});

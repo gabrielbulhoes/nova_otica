@@ -623,3 +623,58 @@ model DecisionRecord {
   @@index([decidedBy])
   @@index([outcome, decidedAt])
 }
+
+// ─── Lote de geração (Onda 1 · trilha TB) ────────────────────────────────────
+
+enum BatchSource {
+  CRON // gerado pela sincronização agendada (06h) — o caso normal
+  MANUAL // sync disparado à mão (botão do painel ou linha de comando)
+}
+
+/// Uma execução do motor de decisão. O motor recalcula tudo a cada
+/// sincronização; sem registrar o lote não há como responder "quando isso foi
+/// calculado?" nem "o que apareceu de novo hoje?" — as duas primeiras
+/// perguntas que o gestor faz ao abrir a tela de manhã.
+model GenerationBatch {
+  id          String      @id @default(cuid())
+  generatedAt DateTime    @default(now())
+  source      BatchSource
+  /// Gatilho do sync que originou o lote ('schedule', 'manual', 'boot').
+  trigger     String
+  /// Janela de dias que o motor usou.
+  days        Int
+  cardsTotal  Int
+  /// Cards que nunca haviam aparecido em lote anterior.
+  cardsNew    Int
+  compra        Int
+  remanejamento Int
+  liquidacao    Int
+  /// Impacto somado (R$) de todos os cards do lote.
+  impactTotal Decimal @db.Decimal(14, 2)
+
+  sightings CardSighting[]
+
+  @@index([generatedAt])
+}
+
+/// Uma linha por CARD distinto, não por aparição: o id do card é
+/// determinístico, então o mesmo card reaparece em todo lote enquanto a
+/// condição persistir. Guardar a PRIMEIRA aparição é o que permite medir a
+/// idade real do card e o SLA de decisão — `DecisionRecord.cardSeenAt` passa a
+/// vir daqui, do servidor, em vez de o cliente informar.
+model CardSighting {
+  cardId      String   @id
+  cardType    String
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  /// Em quantos lotes o card já apareceu — card que reaparece há semanas sem
+  /// decisão é o sintoma que o painel de governança precisa mostrar.
+  timesSeen   Int      @default(1)
+  /// Lote da PRIMEIRA aparição (o "lote de geração" do card).
+  batchId     String
+
+  batch GenerationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([firstSeenAt])
+  @@index([lastSeenAt])
+}

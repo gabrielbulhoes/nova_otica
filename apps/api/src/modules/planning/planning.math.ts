@@ -1414,6 +1414,18 @@ export interface DecisionCard {
   impactLabel: string;
   /** Urgência em dias (ruptura próxima); menor = mais urgente. */
   urgencyDays: number | null;
+  /**
+   * Quando o card apareceu pela PRIMEIRA vez (do lote de geração). Ausente
+   * enquanto o motor nunca rodou pelo cron — o card existe, mas ainda não tem
+   * histórico de aparições.
+   */
+  firstSeenAt?: string;
+  /** Dias desde a primeira aparição. */
+  ageDays?: number;
+  /** Apareceu pela primeira vez no lote mais recente. */
+  isNew?: boolean;
+  /** Reaparece há mais dias do que o SLA sem ninguém decidir. */
+  isOverdue?: boolean;
 }
 
 export interface DecisionSummary {
@@ -1429,11 +1441,74 @@ export interface DecisionSummary {
    * board. Fica explícito no resumo: o que sai da tela é declarado, não some.
    */
   decididos: number;
+  /** Cards que apareceram pela primeira vez no lote mais recente. */
+  novos?: number;
+  /** Cards reaparecendo há mais tempo que o SLA sem decisão. */
+  atrasados?: number;
+}
+
+/** Metadados do lote que gerou os cards ("quando isso foi calculado?"). */
+export interface BatchInfo {
+  id: string;
+  generatedAt: string;
+  source: 'CRON' | 'MANUAL';
+  cardsTotal: number;
+  cardsNew: number;
+  /**
+   * Só a demo marca isto. Lá não há execuções passadas para consultar, então
+   * as idades dos cards são derivadas do id — a tela precisa dizer isso, em
+   * vez de apresentar um número derivado como se fosse medido.
+   */
+  simulated?: boolean;
 }
 
 export interface DecisionBoard {
   summary: DecisionSummary;
   cards: DecisionCard[];
+  /** Lote que gerou estes cards. Ausente enquanto o cron nunca rodou. */
+  batch?: BatchInfo;
+}
+
+/** Uma aparição de card, como o lote de geração registra. */
+export interface CardHistory {
+  cardId: string;
+  firstSeenAt: Date;
+  timesSeen: number;
+}
+
+/**
+ * Carimba nos cards a idade vinda do lote de geração: quando apareceu pela
+ * primeira vez, há quantos dias, se é novo neste lote e se já passou do SLA
+ * sem ninguém decidir.
+ *
+ * Card que reaparece há semanas sem decisão é o sintoma central que o painel
+ * de governança precisa mostrar — sem isso, um card de 60 dias e um de ontem
+ * são visualmente idênticos.
+ */
+export function annotateCardAges(
+  board: DecisionBoard,
+  history: ReadonlyMap<string, CardHistory>,
+  batch: BatchInfo | undefined,
+  slaDays = 30,
+  now = new Date(),
+): DecisionBoard {
+  if (history.size === 0) return { ...board, batch };
+
+  let novos = 0;
+  let atrasados = 0;
+  const cards = board.cards.map((c) => {
+    const h = history.get(c.id);
+    if (!h) return c;
+    const ageDays = Math.max(0, Math.floor((now.getTime() - h.firstSeenAt.getTime()) / 86_400_000));
+    // "Novo" = apareceu só uma vez, ou seja, estreou no lote mais recente.
+    const isNew = h.timesSeen <= 1;
+    const isOverdue = ageDays > slaDays;
+    if (isNew) novos++;
+    if (isOverdue) atrasados++;
+    return { ...c, firstSeenAt: h.firstSeenAt.toISOString(), ageDays, isNew, isOverdue };
+  });
+
+  return { summary: { ...board.summary, novos, atrasados }, cards, batch };
 }
 
 const PRIORITY_RANK: Record<DecisionPriority, number> = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
