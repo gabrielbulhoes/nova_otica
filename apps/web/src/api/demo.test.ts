@@ -27,18 +27,27 @@ describe('demo: /products/categories', () => {
 describe('demo: /stock multi-seleção', () => {
   const stores = (get('/stores').rows as { id: string }[]).map((s) => s.id);
 
+  // `rows` é a PÁGINA (200 itens), não o resultado inteiro: com o catálogo real
+  // a primeira página pode conter uma loja só. O contrato verificável é que
+  // nenhuma linha vem de fora do filtro e que somar lojas aumenta o total.
+  const ids = (r: any) => new Set(r.rows.map((x: any) => x.storeId));
+  const dentroDe = (r: any, permitidas: string[]) =>
+    [...ids(r)].every((s) => permitidas.includes(s as string));
+
   it('uma loja filtra só ela; duas lojas (array = parâmetro repetido) somam as duas', () => {
     const one = get('/stock', { storeId: stores[0] });
-    expect(new Set(one.rows.map((r: any) => r.storeId))).toEqual(new Set([stores[0]]));
+    expect(ids(one)).toEqual(new Set([stores[0]]));
 
     const two = get('/stock', { storeId: [stores[0], stores[1]] });
-    expect(new Set(two.rows.map((r: any) => r.storeId))).toEqual(new Set([stores[0], stores[1]]));
+    expect(dentroDe(two, [stores[0], stores[1]])).toBe(true);
     expect(two.total).toBeGreaterThan(one.total);
   });
 
   it('atalho "a,b" num valor único também funciona', () => {
     const two = get('/stock', { storeId: `${stores[0]},${stores[1]}` });
-    expect(new Set(two.rows.map((r: any) => r.storeId))).toEqual(new Set([stores[0], stores[1]]));
+    const arr = get('/stock', { storeId: [stores[0], stores[1]] });
+    expect(dentroDe(two, [stores[0], stores[1]])).toBe(true);
+    expect(two.total).toBe(arr.total); // as duas formas dão o mesmo recorte
   });
 
   it('multi-categoria (array) combina com multi-loja', () => {
@@ -82,8 +91,11 @@ describe('demo: relatórios da Onda 2', () => {
     expect(brand.dimension).toBe('brand');
     expect(sku.dimension).toBe('product');
     expect(brand.rows.length).toBeLessThan(sku.rows.length);
-    // Receita total é a mesma nas duas dimensões (mesma base de itens).
-    expect(brand.totalRevenue).toBeCloseTo(sku.totalRevenue, 1);
+    // Desde a decisão do Galbe, a visão por MARCA cobre só produto de moda
+    // (óculos/armação/relógio) — lente e tratamento têm módulo próprio. Logo a
+    // receita da visão por marca é um SUBCONJUNTO da receita por SKU.
+    expect(brand.totalRevenue).toBeGreaterThan(0);
+    expect(brand.totalRevenue).toBeLessThanOrEqual(sku.totalRevenue + 0.01);
     // % acumulado fecha em ~100 e as classes seguem a ordem A→B→C.
     const classes = brand.rows.map((r: any) => r.class).join('');
     expect(classes).toMatch(/^A+B*C*$/);
@@ -113,11 +125,20 @@ describe('demo: relatórios da Onda 2', () => {
     }
   });
 
-  it('análise por dimensão bate com o ABC na receita total (mesma base)', () => {
-    const abc = get('/reports/abc');
+  it('análise por marca bate com o ABC por marca (uma regra só de marca)', () => {
+    // As duas telas por marca precisam somar a MESMA receita: se divergirem, o
+    // gestor vê dois números para a mesma pergunta.
+    const abcMarca = get('/reports/abc', { dimension: 'brand' });
     const porMarca = get('/reports/sales-analysis', { by: 'brand' });
     const somaMarcas = porMarca.rows.reduce((a: number, x: any) => a + x.revenue, 0);
-    expect(somaMarcas).toBeCloseTo(abc.totalRevenue, 0);
+    expect(somaMarcas).toBeCloseTo(abcMarca.totalRevenue, 0);
+  });
+
+  it('análise por categoria cobre a base inteira (lente inclusa) — igual ao ABC por SKU', () => {
+    const abc = get('/reports/abc');
+    const porCategoria = get('/reports/sales-analysis', { by: 'category' });
+    const soma = porCategoria.rows.reduce((a: number, x: any) => a + x.revenue, 0);
+    expect(soma).toBeCloseTo(abc.totalRevenue, 0);
   });
 });
 
@@ -177,5 +198,40 @@ describe('demo: Onda 4 (feedback Galbe — lentes fora do remanejamento)', () =>
     for (const row of rows) {
       expect(isLensDesc(row.description), `lente na compra padrão (${row.description})`).toBe(false);
     }
+  });
+});
+
+describe('demo: governança da decisão', () => {
+  const post = (url: string, body: Record<string, unknown>) =>
+    demoHandle({ method: 'POST', url, body }) as Record<string, any>;
+
+  it('card decidido sai do board e entra em summary.decididos', () => {
+    const before = get('/planning/decisions');
+    expect(before.cards.length).toBeGreaterThan(0);
+    const card = before.cards[0];
+
+    post('/planning/decisions', {
+      cardId: card.id,
+      cardType: card.type,
+      outcome: 'APPROVED',
+      impact: card.impact,
+    });
+
+    const after = get('/planning/decisions');
+    expect(after.cards.some((c: any) => c.id === card.id)).toBe(false);
+    expect(after.summary.total).toBe(before.summary.total - 1);
+    expect(after.summary.decididos).toBeGreaterThanOrEqual(1);
+  });
+
+  it('recusar sem justificativa é rejeitado (mesma regra da API)', () => {
+    const card = get('/planning/decisions').cards[0];
+    expect(() =>
+      post('/planning/decisions', {
+        cardId: card.id,
+        cardType: card.type,
+        outcome: 'REJECTED',
+        impact: card.impact,
+      }),
+    ).toThrow(/justificativa/i);
   });
 });

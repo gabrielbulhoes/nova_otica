@@ -45,6 +45,23 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   carryingCostAnnualPct: 25,
 };
 
+/**
+ * A análise de MARCA vale só para produto de moda (óculos, armação, relógio).
+ *
+ * Decisão do cliente (Galbe, 28/07): lente e tratamento não entram na análise
+ * de marca — "Zeiss é fornecedor de lente, portanto não deve entrar nas
+ * análises nesse momento". Elas terão módulo próprio, o do setor de produção
+ * (o laboratório da rede).
+ *
+ * Consequência assumida: as visões por marca cobrem uma base MENOR que as
+ * visões por SKU/loja/vendedor (nos dados reais, ~43% da receita). Isso é
+ * recorte declarado, não perda silenciosa — os serviços devolvem o total
+ * excluído para a tela poder dizer o que ficou de fora.
+ */
+export function isBrandAnalysable(category: string | null | undefined): boolean {
+  return matchesProductGroup(category, 'principal');
+}
+
 // ─── Economia da decisão: carregamento, margem e faixas de preço ─────────────
 
 /**
@@ -182,6 +199,13 @@ const COLOR_WORDS = new Set([
   'roxo', 'laranja', 'amarelo', 'bege', 'caramelo', 'gold', 'black', 'silver', 'blue',
 ]);
 
+/**
+ * Conectores que aparecem DENTRO do nome da grife ("Dolce e Gabbana",
+ * "Dolce & Gabbana"). Sem trat\u00e1-los, a marca era cortada em "DOLCE E" e a
+ * mesma grife virava duas linhas no relat\u00f3rio, ao lado de "DOLCE GABBANA".
+ */
+const CONNECTOR_WORDS = new Set(['e', '&']);
+
 const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
@@ -211,6 +235,8 @@ export function extractBrand(
       if (started) break;
       continue;
     }
+    // Conector não conta como palavra da marca: "Dolce e Gabbana" → 2 tokens.
+    if (CONNECTOR_WORDS.has(n)) continue;
     if (COLOR_WORDS.has(n)) break; // cor encerra a marca
     if (/\d/.test(n)) {
       // código de modelo (RB1234, 0RX...) encerra — a menos que ainda não
@@ -1398,6 +1424,11 @@ export interface DecisionSummary {
   impactTotal: number;
   /** Cards críticos (ruptura em ~7 dias ou menos). */
   criticos: number;
+  /**
+   * Cards que o motor gerou mas já têm decisão registrada e por isso saíram do
+   * board. Fica explícito no resumo: o que sai da tela é declarado, não some.
+   */
+  decididos: number;
 }
 
 export interface DecisionBoard {
@@ -1445,7 +1476,19 @@ function capitalPriority(value: number): DecisionPriority {
  * liquidação) e das sugestões de remanejamento. Ordena por prioridade e, dentro
  * dela, pelo maior impacto.
  */
-export function buildDecisionCards(plans: ProductPlan[], rebalance: RebalanceSuggestion[]): DecisionBoard {
+/**
+ * Monta o board de decisão.
+ *
+ * `decidedIds` são os cards que JÁ têm decisão registrada: o motor recalcula
+ * tudo a cada execução e regeraria o mesmo card amanhã, fazendo o gestor
+ * decidir duas vezes a mesma coisa. Eles saem da lista e entram no contador
+ * `summary.decididos` — o board mostra o que falta decidir, não o que já foi.
+ */
+export function buildDecisionCards(
+  plans: ProductPlan[],
+  rebalance: RebalanceSuggestion[],
+  decidedIds?: ReadonlySet<string>,
+): DecisionBoard {
   const cards: DecisionCard[] = [];
 
   for (const p of plans) {
@@ -1507,29 +1550,33 @@ export function buildDecisionCards(plans: ProductPlan[], rebalance: RebalanceSug
     });
   }
 
-  cards.sort((a, b) => {
+  const generated = cards.length;
+  const open = decidedIds && decidedIds.size > 0 ? cards.filter((c) => !decidedIds.has(c.id)) : cards;
+
+  open.sort((a, b) => {
     const pr = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
     if (pr !== 0) return pr;
     return b.impact - a.impact;
   });
 
   const summary: DecisionSummary = {
-    total: cards.length,
+    total: open.length,
     byType: {
-      compra: cards.filter((c) => c.type === 'COMPRA').length,
-      remanejamento: cards.filter((c) => c.type === 'REMANEJAMENTO').length,
-      liquidacao: cards.filter((c) => c.type === 'LIQUIDACAO').length,
+      compra: open.filter((c) => c.type === 'COMPRA').length,
+      remanejamento: open.filter((c) => c.type === 'REMANEJAMENTO').length,
+      liquidacao: open.filter((c) => c.type === 'LIQUIDACAO').length,
     },
     byPriority: {
-      alta: cards.filter((c) => c.priority === 'ALTA').length,
-      media: cards.filter((c) => c.priority === 'MEDIA').length,
-      baixa: cards.filter((c) => c.priority === 'BAIXA').length,
+      alta: open.filter((c) => c.priority === 'ALTA').length,
+      media: open.filter((c) => c.priority === 'MEDIA').length,
+      baixa: open.filter((c) => c.priority === 'BAIXA').length,
     },
-    impactTotal: round2(cards.reduce((a, c) => a + c.impact, 0)),
-    criticos: cards.filter((c) => c.urgencyDays !== null && c.urgencyDays <= 7).length,
+    impactTotal: round2(open.reduce((a, c) => a + c.impact, 0)),
+    criticos: open.filter((c) => c.urgencyDays !== null && c.urgencyDays <= 7).length,
+    decididos: generated - open.length,
   };
 
-  return { summary, cards };
+  return { summary, cards: open };
 }
 
 // ─── Motor de estratégia comercial (piso · risco · janela) ───────────────────

@@ -15,6 +15,7 @@ import {
   forecastDemand,
   isMadeToOrderLens,
   matchesProductGroup,
+  isBrandAnalysable,
   carryingCost,
   marginPct,
   expectedMargin,
@@ -392,6 +393,28 @@ describe('matchesProductGroup (recortes de cobertura)', () => {
   });
 });
 
+describe('isBrandAnalysable (recorte da análise de marca)', () => {
+  it('produto de moda entra na análise de marca', () => {
+    expect(isBrandAnalysable('OCULOS')).toBe(true);
+    expect(isBrandAnalysable('ARMACAO')).toBe(true);
+    expect(isBrandAnalysable('RELOGIO')).toBe(true);
+  });
+
+  it('lente e tratamento NÃO entram — decisão do cliente (módulo próprio)', () => {
+    // Zeiss é fornecedor de lente: não deve aparecer como marca na análise.
+    expect(isBrandAnalysable('LENTES')).toBe(false);
+    expect(isBrandAnalysable('LENTES PRONTAS')).toBe(false);
+    expect(isBrandAnalysable('LENTES DE CONTATO PEDIDO')).toBe(false);
+    expect(isBrandAnalysable('TRATAMENTO')).toBe(false);
+  });
+
+  it('acessório também fica fora', () => {
+    expect(isBrandAnalysable('PORTA OCULOS')).toBe(false);
+    expect(isBrandAnalysable('ACESSORIOS')).toBe(false);
+    expect(isBrandAnalysable(null)).toBe(false);
+  });
+});
+
 describe('economia da decisão (custo de carregar, margem e faixas)', () => {
   it('custo de carregamento: R$ 100k parados por 30 dias a 25%/ano', () => {
     expect(carryingCost(100_000, 30)).toBeCloseTo(2054.79, 1);
@@ -477,6 +500,13 @@ describe('extractBrand (marca a partir da descrição)', () => {
   it('para no código de modelo e na cor', () => {
     expect(extractBrand('Lente Hoya 1.67')).toBe('Hoya');
     expect(extractBrand('Armação Atitude Dourado AT2020')).toBe('Atitude');
+  });
+
+  it('conector não quebra a grife: "Dolce e Gabbana" é uma marca só', () => {
+    // No dataset real a mesma grife aparecia como "DOLCE E" e "DOLCE GABBANA".
+    expect(extractBrand('OCULOS DOLCE E GABBANA DG4448')).toBe('DOLCE GABBANA');
+    expect(extractBrand('OCULOS DOLCE GABBANA DG4448')).toBe('DOLCE GABBANA');
+    expect(extractBrand('Armação Dolce & Gabbana Preto')).toBe('Dolce Gabbana');
   });
 
   it('retorna null quando não há marca discernível', () => {
@@ -648,6 +678,33 @@ describe('buildDecisionCards (portal de decisões — cards)', () => {
     expect(compra.impactLabel).toMatch(/pedido/i);
     expect(liquid.impact).toBeGreaterThan(0);
     expect(liquid.impactLabel).toMatch(/liberar/i);
+  });
+
+  it('card já decidido sai do board e é contado em summary.decididos', () => {
+    const before = buildDecisionCards([buy, liq], reb.rows);
+    const decidedId = before.cards[0].id;
+    const after = buildDecisionCards([buy, liq], reb.rows, new Set([decidedId]));
+
+    expect(after.cards.some((c) => c.id === decidedId)).toBe(false);
+    expect(after.cards.length).toBe(before.cards.length - 1);
+    expect(after.summary.total).toBe(before.summary.total - 1);
+    expect(after.summary.decididos).toBe(1);
+    // Resumo é do que está EM ABERTO: o impacto do card decidido some do total.
+    const decidedImpact = before.cards[0].impact;
+    expect(after.summary.impactTotal).toBeCloseTo(before.summary.impactTotal - decidedImpact, 2);
+  });
+
+  it('sem decisões registradas, o board é o mesmo de antes (decididos = 0)', () => {
+    const a = buildDecisionCards([buy, liq], reb.rows);
+    const b = buildDecisionCards([buy, liq], reb.rows, new Set());
+    expect(b.cards.map((c) => c.id)).toEqual(a.cards.map((c) => c.id));
+    expect(b.summary.decididos).toBe(0);
+  });
+
+  it('ids são estáveis entre execuções — a decisão de ontem casa com o card de hoje', () => {
+    const a = buildDecisionCards([buy, liq], reb.rows);
+    const b = buildDecisionCards([buy, liq], reb.rows);
+    expect(b.cards.map((c) => c.id)).toEqual(a.cards.map((c) => c.id));
   });
 });
 

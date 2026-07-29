@@ -4,6 +4,7 @@ import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
 import { loadBrandCatalog } from './brandCatalog.js';
+import { currentDecisions } from './decisions.service.js';
 import {
   analyzeProduct,
   buildCommercialStrategy,
@@ -237,7 +238,12 @@ export async function decisionBoard(days: number, storeId?: string, group: Produ
     plans(days, storeId, group),
     rebalancePlan(days, group),
   ]);
-  return buildDecisionCards(productPlans, reb.rows);
+  // Primeira passada só para saber QUAIS cards existem — o board final já sai
+  // sem os que têm decisão registrada (senão o gestor decide o mesmo card toda
+  // vez que o motor roda, e a trilha de auditoria não serve para nada).
+  const ids = buildDecisionCards(productPlans, reb.rows).cards.map((c) => c.id);
+  const decided = await currentDecisions(ids);
+  return buildDecisionCards(productPlans, reb.rows, new Set(decided.keys()));
 }
 
 /**
