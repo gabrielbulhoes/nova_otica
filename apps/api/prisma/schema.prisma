@@ -71,6 +71,10 @@ model User {
 
   @@index([role])
   decisions    DecisionRecord[]
+  /// Tipos de card que este usuário pode decidir (COMPRA, REMANEJAMENTO,
+  /// LIQUIDACAO). Vazio = todos — é o comportamento anterior, então nenhum
+  /// usuário existente perde acesso na migração.
+  allowedCardTypes String[] @default([])
 }
 
 /// Vendedor / funcionário (Sellbie: rota `vendedores`, campo `funcionario`).

@@ -1109,7 +1109,37 @@ th.num {
   }
 }
 @media print {
-  .demo-seal {
-    display: none;
+  /* Impressão / "salvar como PDF": sai tudo que é navegação e controle;
+     fica só o conteúdo, em preto no branco. */
+  .demo-seal,
+  .sidebar,
+  .dock,
+  .topbar,
+  .no-print,
+  .segmented,
+  button {
+    display: none !important;
+  }
+  .shell,
+  .content {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+  }
+  .card {
+    break-inside: avoid;
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .table {
+    font-size: 10pt;
+  }
+  thead {
+    display: table-header-group; /* repete o cabeçalho a cada página */
   }
 }

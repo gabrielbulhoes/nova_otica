@@ -30,6 +30,7 @@ const links: LinkDef[] = [
   { to: '/admin/alertas', label: 'Alertas' },
   { to: '/admin/relatorios', label: 'Relatórios' },
   { to: '/admin/decisoes', label: 'Decisões (cards)' },
+  { to: '/admin/historico', label: 'Histórico Geral' },
   { to: '/admin/estrategia', label: 'Estratégia comercial' },
   { to: '/admin/planejamento', label: 'Planejamento & Compras' },
   { to: '/admin/vendas', label: 'Vendas' },

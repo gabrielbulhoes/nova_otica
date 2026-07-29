@@ -235,7 +235,7 @@ planningRouter.post(
       res.status(201).json(rec);
     } catch (e) {
       if (e instanceof DecisionValidationError) {
-        res.status(400).json({ error: e.message });
+        res.status(e.status).json({ error: e.message });
         return;
       }
       throw e;
