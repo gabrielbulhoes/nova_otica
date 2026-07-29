@@ -8,11 +8,29 @@ export const storesRouter = Router();
 storesRouter.get(
   '/',
   asyncHandler(async (_req, res) => {
-    const stores = await prisma.store.findMany({
-      orderBy: { name: 'asc' },
-      include: { _count: { select: { stockItems: true, sales: true } } },
+    // "SKUs em estoque" tem que ser SKU COM SALDO. `_count.stockItems` conta
+    // toda linha de estoque, inclusive as zeradas — na rede real isso faz
+    // filiais muito diferentes parecerem iguais, porque quase todo SKU tem
+    // linha em quase toda loja (feedback do Galbe: "tá uniforme").
+    const [stores, comSaldo] = await Promise.all([
+      prisma.store.findMany({
+        orderBy: { name: 'asc' },
+        include: { _count: { select: { stockItems: true, sales: true } } },
+      }),
+      prisma.stockItem.groupBy({
+        by: ['storeId'],
+        where: { quantity: { gt: 0 } },
+        _count: { productId: true },
+      }),
+    ]);
+    const skusComSaldo = new Map(comSaldo.map((r) => [r.storeId, r._count.productId]));
+    res.json({
+      total: stores.length,
+      rows: stores.map((s) => ({
+        ...s,
+        _count: { ...s._count, stockItems: skusComSaldo.get(s.id) ?? 0 },
+      })),
     });
-    res.json({ total: stores.length, rows: stores });
   }),
 );
 

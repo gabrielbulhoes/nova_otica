@@ -53,7 +53,14 @@ interface RealDataset {
   productSales: { externalId: string; units: number; revenue: number }[];
   weekdayStore: { storeExt: string; weekday: number; total: number }[];
   /** Cobertura por loja (rede inteira) — ausente em datasets antigos. */
-  storeStats?: { externalId: string; stockUnits: number; soldUnits: number; soldRevenue?: number }[];
+  storeStats?: {
+    externalId: string;
+    stockUnits: number;
+    /** SKUs distintos com saldo, da rede inteira. Ausente em datasets antigos. */
+    skuCount?: number;
+    soldUnits: number;
+    soldRevenue?: number;
+  }[];
   /** Top vendedores por receita (equipe própria; site protegido por senha). */
   bySeller?: { label: string; units: number; revenue: number; sales: number }[];
   /** Cobertura por marca (rede inteira; grade sem fornecedor = "Sem marca"). */
@@ -829,8 +836,36 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     };
   }
 
-  if (url === '/stores')
-    return { total: stores.length, rows: stores.map((s) => ({ ...s, _count: { stockItems: products.length, sales: int(15, 30) } })) };
+  if (url === '/stores') {
+    // ANTES: stockItems = products.length (o catálogo inteiro, igual para toda
+    // loja) e sales = int(15,30), um número INVENTADO. O Galbe viu: "estoque
+    // por SKU e loja tá uniforme". Agora os dois vêm do dataset.
+    //
+    // `skuCount` é da rede inteira; datasets antigos não o trazem, e aí
+    // contamos os SKUs com saldo dentro da AMOSTRA do catálogo — número menor
+    // que o real, por isso a tela avisa que é amostra.
+    const amostrado = !real?.storeStats?.some((st) => typeof st.skuCount === 'number');
+    const skusDaAmostra = (storeId: string) =>
+      products.reduce((a, p) => a + ((stockQty.get(key(storeId, p.id)) ?? 0) > 0 ? 1 : 0), 0);
+
+    return {
+      total: stores.length,
+      sampled: real ? amostrado : false,
+      catalogSampled: real?.totals?.catalogSampled,
+      productCountNetwork: real?.totals?.productCountNetwork,
+      rows: stores.map((s) => {
+        const st = real?.storeStats?.find((x) => x.externalId === s.externalId);
+        const vendas = real?.salesByStore?.find((x) => x.externalId === s.externalId)?.count;
+        return {
+          ...s,
+          _count: {
+            stockItems: st?.skuCount ?? skusDaAmostra(s.id),
+            sales: vendas ?? 0,
+          },
+        };
+      }),
+    };
+  }
 
   if (url === '/sales') {
     const rows = Array.from({ length: 20 }, (_, i) => {

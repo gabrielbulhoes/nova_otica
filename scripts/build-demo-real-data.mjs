@@ -76,8 +76,15 @@ const totalUnitsNetwork = [...stockByProduct.values()].reduce(
 // Unidades em estoque por loja — rede INTEIRA (antes do corte do catálogo),
 // para a cobertura por loja não subcontar.
 const stockUnitsByStore = new Map(); // lojaExt -> unidades
+// SKUs DISTINTOS com saldo por loja — também da rede inteira. Sem este número
+// a tela de Lojas contava o catálogo amostrado e mostrava o mesmo valor para
+// todas as filiais (feedback do Galbe: "estoque por SKU e loja tá uniforme").
+const skuCountByStore = new Map(); // lojaExt -> SKUs distintos com saldo > 0
 for (const per of stockByProduct.values())
-  for (const [st, qty] of per) stockUnitsByStore.set(st, (stockUnitsByStore.get(st) ?? 0) + qty);
+  for (const [st, qty] of per) {
+    stockUnitsByStore.set(st, (stockUnitsByStore.get(st) ?? 0) + qty);
+    if (qty > 0) skuCountByStore.set(st, (skuCountByStore.get(st) ?? 0) + 1);
+  }
 
 // ─── Vendas (30 dias) — agregados, nada identificável ────────────────────────
 const vendaLoja = new Map(); // "loja-venda" -> lojaExt
@@ -335,6 +342,8 @@ const out = {
   storeStats: stores.map((s) => ({
     externalId: s.externalId,
     stockUnits: stockUnitsByStore.get(s.externalId) ?? 0,
+    /** SKUs distintos com saldo — da rede inteira, não do catálogo amostrado. */
+    skuCount: skuCountByStore.get(s.externalId) ?? 0,
     soldUnits: soldUnitsByStore.get(s.externalId) ?? 0,
     soldRevenue: soldRevenueByStore.get(s.externalId) ?? 0,
   })),

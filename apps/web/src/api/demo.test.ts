@@ -305,3 +305,42 @@ describe('demo: recorte de produto (feedback Galbe — "ainda continua puxando l
     for (const r of pr) expect(isLens(r.category), `produto ${r.category}`).toBe(false);
   });
 });
+
+describe('demo: /stores (feedback Galbe — "estoque por SKU e loja tá uniforme")', () => {
+  const rows = () => get('/stores').rows as { id: string; _count: { stockItems: number; sales: number } }[];
+
+  it('SKUs em estoque NÃO é o mesmo número em toda loja', () => {
+    const counts = rows().map((s) => s._count.stockItems);
+    expect(counts.length).toBeGreaterThan(1);
+    // O defeito era contar o catálogo inteiro (igual para todas as filiais).
+    expect(new Set(counts).size).toBeGreaterThan(1);
+  });
+
+  it('SKUs em estoque nunca passa do tamanho do catálogo', () => {
+    const catalogo = (get('/products', { group: 'todos' }) as any).total;
+    for (const s of rows()) {
+      expect(s._count.stockItems).toBeLessThanOrEqual(catalogo);
+      expect(s._count.stockItems).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('a contagem é coerente com o estoque daquela loja', () => {
+    // `rows` de /stock é a PÁGINA (200); o número comparável é o `total`, que
+    // o handler conta antes de paginar.
+    for (const s of rows().slice(0, 5)) {
+      const comSaldoDisponivel = get('/stock', {
+        storeId: s.id, group: 'todos', onlyAvailable: 'true',
+      }).total;
+      // "SKUs em estoque" conta saldo na loja; disponível já desconta reserva,
+      // então é sempre um subconjunto.
+      expect(s._count.stockItems).toBeGreaterThanOrEqual(comSaldoDisponivel);
+    }
+  });
+
+  it('Vendas não é número inventado — vem do dataset', () => {
+    // Antes: int(15, 30) a cada render. Agora tem que ser estável.
+    const a = rows().map((s) => s._count.sales);
+    const b = rows().map((s) => s._count.sales);
+    expect(a).toEqual(b);
+  });
+});

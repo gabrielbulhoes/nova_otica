@@ -263,7 +263,17 @@ export const getStoreCoverage = (params?: Record<string, string | undefined>) =>
 export const getStock = (params: Record<string, string | string[] | boolean | undefined>) =>
   api.get<Paged<StockRow>>('/stock', { params }).then((r) => r.data);
 
-export const getStores = () => api.get<Paged<Store>>('/stores').then((r) => r.data);
+/**
+ * Lista de lojas. Na demo estática o catálogo vem amostrado, e a resposta
+ * marca isso para a tela poder avisar em vez de exibir um número menor sem
+ * explicação.
+ */
+export interface StoresResponse extends Paged<Store> {
+  sampled?: boolean;
+  catalogSampled?: number;
+  productCountNetwork?: number;
+}
+export const getStores = () => api.get<StoresResponse>('/stores').then((r) => r.data);
 export const getProducts = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Product>>('/products', { params }).then((r) => r.data);
 export const getCategories = () => api.get<string[]>('/products/categories').then((r) => r.data);
