@@ -541,6 +541,8 @@ export interface DecisionBoard {
     byPriority: { alta: number; media: number; baixa: number };
     impactTotal: number;
     criticos: number;
+    /** Cards que o motor gerou mas já têm decisão registrada (saíram do board). */
+    decididos: number;
   };
   cards: DecisionCard[];
 }

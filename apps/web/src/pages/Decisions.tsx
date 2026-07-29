@@ -262,7 +262,9 @@ export function Decisions() {
         <>
           <div className="grid grid-4" style={{ marginBottom: 18 }}>
             <Kpi label="Cards em aberto" value={String(s.total)}
-                 hint={`${s.byType.compra} comprar · ${s.byType.remanejamento} remanejar · ${s.byType.liquidacao} liquidar`} />
+                 hint={`${s.byType.compra} comprar · ${s.byType.remanejamento} remanejar · ${s.byType.liquidacao} liquidar${
+                   s.decididos > 0 ? ` · ${s.decididos} já decidido${s.decididos > 1 ? 's' : ''}` : ''
+                 }`} />
             <Kpi label="Impacto sob decisão" value={formatBRL(s.impactTotal)} tone="var(--accent)"
                  hint="capital a comprar + a liberar" />
             <Kpi label="Alta prioridade" value={String(s.byPriority.alta)} tone="var(--red)"

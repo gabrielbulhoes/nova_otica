@@ -425,37 +425,54 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
  * bandeiras a partir do nome). LEFT JOIN: produto sem marca vira "Sem marca".
  */
 export async function brandMix(days: number) {
+  // Agrupa pelos campos do produto (não só p.brand) para aplicar em JS a MESMA
+  // regra de marca das outras visões: grife extraída da descrição, com o
+  // recorte que deixa lente e tratamento de fora.
+  type MixRow = {
+    storeId: string | null;
+    description: string | null;
+    brand: string | null;
+    category: string | null;
+    units: bigint;
+  };
   const [stockRows, soldRows, stores] = await Promise.all([
-    prisma.$queryRaw<{ storeId: string; brand: string | null; units: bigint }[]>(Prisma.sql`
-      SELECT st."storeId" AS "storeId", p.brand AS brand, COALESCE(SUM(st.quantity), 0)::bigint AS units
+    prisma.$queryRaw<MixRow[]>(Prisma.sql`
+      SELECT st."storeId" AS "storeId", p.description AS description, p.brand AS brand,
+             p.category AS category, COALESCE(SUM(st.quantity), 0)::bigint AS units
       FROM "StockItem" st
       JOIN "Store" lo ON lo.id = st."storeId" AND lo."excludeFromPlanning" = false
       LEFT JOIN "Product" p ON p.id = st."productId"
-      GROUP BY st."storeId", p.brand
+      GROUP BY st."storeId", p.description, p.brand, p.category
     `),
-    prisma.$queryRaw<{ storeId: string | null; brand: string | null; units: bigint }[]>(Prisma.sql`
-      SELECT s."storeId" AS "storeId", p.brand AS brand, COALESCE(SUM(si.quantity), 0)::bigint AS units
+    prisma.$queryRaw<MixRow[]>(Prisma.sql`
+      SELECT s."storeId" AS "storeId", p.description AS description, p.brand AS brand,
+             p.category AS category, COALESCE(SUM(si.quantity), 0)::bigint AS units
       FROM "SaleItem" si
       JOIN "Sale" s ON s.id = si."saleId"
       JOIN "Store" lo ON lo.id = s."storeId" AND lo."excludeFromPlanning" = false
       LEFT JOIN "Product" p ON p.id = si."productId"
       WHERE s."saleDate" >= ${periodStart(days)}
-      GROUP BY s."storeId", p.brand
+      GROUP BY s."storeId", p.description, p.brand, p.category
     `),
     prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
   ]);
   const nameById = new Map(stores.map((s) => [s.id, s.name]));
 
   const acc = new Map<string, BrandBannerInput>();
-  const bump = (storeId: string | null, brand: string | null, field: 'stockUnits' | 'unitsSold', units: number) => {
-    const storeName = storeId ? nameById.get(storeId) ?? 'Sem loja' : 'Sem loja';
-    const key = `${storeName}|${brand ?? ''}`;
-    const cur = acc.get(key) ?? { storeName, brand: brand ?? '', stockUnits: 0, unitsSold: 0 };
-    cur[field] += units;
+  const bump = (r: MixRow, field: 'stockUnits' | 'unitsSold') => {
+    // Mesmo recorte das outras visões por marca: lente e tratamento ficam
+    // fora (módulo do laboratório). Sem isso, o Galbe veria ZEISS aqui
+    // depois de não vê-la na aba ao lado.
+    if (!isBrandAnalysable(r.category)) return;
+    const storeName = r.storeId ? nameById.get(r.storeId) ?? 'Sem loja' : 'Sem loja';
+    const brand = brandOf(r);
+    const key = `${storeName}|${brand}`;
+    const cur = acc.get(key) ?? { storeName, brand, stockUnits: 0, unitsSold: 0 };
+    cur[field] += Number(r.units);
     acc.set(key, cur);
   };
-  for (const r of stockRows) bump(r.storeId, r.brand, 'stockUnits', Number(r.units));
-  for (const r of soldRows) bump(r.storeId, r.brand, 'unitsSold', Number(r.units));
+  for (const r of stockRows) bump(r, 'stockUnits');
+  for (const r of soldRows) bump(r, 'unitsSold');
 
   return { days, ...buildBrandMix([...acc.values()]) };
 }

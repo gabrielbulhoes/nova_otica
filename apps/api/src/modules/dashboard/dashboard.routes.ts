@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, parseDays, toNumber } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
 import { computeStoreCoverage } from '../planning/planning.math.js';
+import { PLANNED_STORE_WHERE } from '../stores/store.scope.js';
 
 export const dashboardRouter = Router();
 
@@ -83,8 +84,11 @@ dashboardRouter.get(
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
 
     const [stores, stockGrouped, soldRows] = await Promise.all([
+      // Só ponto de venda tem cobertura a acompanhar: centro de distribuição,
+      // assistência e estoque de compras não vendem, então apareceriam sempre
+      // como "excesso infinito" no topo do painel.
       prisma.store.findMany({
-        where: storeId ? { id: storeId } : {},
+        where: storeId ? { id: storeId, ...PLANNED_STORE_WHERE } : PLANNED_STORE_WHERE,
         select: { id: true, name: true },
       }),
       prisma.stockItem.groupBy({

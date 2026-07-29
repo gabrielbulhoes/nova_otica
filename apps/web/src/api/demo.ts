@@ -412,17 +412,9 @@ function brandSales() {
 function abc(days: number, dimension: 'product' | 'brand') {
   let items: AbcItem[];
   if (dimension === 'brand') {
-    const acc = real ? brandSales() : new Map<string, { revenue: number; units: number }>();
-    if (real) {
-      // calculado acima por brandSales() — mesmo recorte e mesma marca da API
-    } else {
-      for (const x of soldItems()) {
-        const cur = acc.get(x.p.brand) ?? { revenue: 0, units: 0 };
-        cur.revenue = round2(cur.revenue + x.revenue);
-        cur.units += x.units;
-        acc.set(x.p.brand, cur);
-      }
-    }
+    // Mesmo cálculo nos dois sabores da demo (fictício e real) e igual ao da
+    // API: marca extraída da descrição e recorte de produto de moda.
+    const acc = brandSales();
     items = [...acc.entries()].map(([label, v]) => ({
       key: label, label: label || 'Sem marca', brand: null, category: null, ...v,
     }));
@@ -446,35 +438,21 @@ const effectiveDays = (days: number) => (real ? 30 : days);
 /** Cobertura geral e por marca (feedback 06). */
 function brandCoverageReport(rawDays: number) {
   const days = effectiveDays(rawDays);
-  const inputs = real
-    ? (() => {
-        // Do catálogo, não do agregado pronto: o agregado é por fornecedor e
-        // inclui lente. Aqui vale o recorte da análise de marca, como na API.
-        const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
-        for (const p of products) {
-          if (!isBrandAnalysable(p.category)) continue;
-          const k = brandLabel(p);
-          const cur = acc.get(k) ?? { stockUnits: 0, unitsSold: 0 };
-          for (const st of stores) {
-            cur.stockUnits += stockQty.get(key(st.id, p.id)) ?? 0;
-            cur.unitsSold += soldQty.get(key(st.id, p.id)) ?? 0;
-          }
-          acc.set(k, cur);
-        }
-        return [...acc.entries()].map(([label, v]) => ({ key: label, label, ...v }));
-      })()
-    : (() => {
-        const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
-        for (const p of products) {
-          const cur = acc.get(p.brand) ?? { stockUnits: 0, unitsSold: 0 };
-          for (const s of stores) {
-            cur.stockUnits += stockQty.get(key(s.id, p.id)) ?? 0;
-            cur.unitsSold += soldQty.get(key(s.id, p.id)) ?? 0;
-          }
-          acc.set(p.brand, cur);
-        }
-        return [...acc.entries()].map(([label, v]) => ({ key: label, label: label || 'Sem marca', ...v }));
-      })();
+  // Do catálogo, não do agregado pronto do dataset: o agregado é por
+  // FORNECEDOR e inclui lente. Aqui vale o recorte da análise de marca — o
+  // mesmo da API e o mesmo nos dois sabores da demo.
+  const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
+  for (const p of products) {
+    if (!isBrandAnalysable(p.category)) continue;
+    const k = brandLabel(p);
+    const cur = acc.get(k) ?? { stockUnits: 0, unitsSold: 0 };
+    for (const st of stores) {
+      cur.stockUnits += stockQty.get(key(st.id, p.id)) ?? 0;
+      cur.unitsSold += soldQty.get(key(st.id, p.id)) ?? 0;
+    }
+    acc.set(k, cur);
+  }
+  const inputs = [...acc.entries()].map(([label, v]) => ({ key: label, label, ...v }));
   const rows = computeCoverage(inputs, days);
   const [total] = computeCoverage(
     [{
@@ -520,18 +498,17 @@ function salesAnalysisReport(rawDays: number, by: string) {
   } else {
     // brand | category
     const acc = new Map<string, { units: number; revenue: number }>();
-    if (real && by === 'brand') {
+    if (by === 'brand') {
       // Mesmo recorte e mesma marca da API (lente/tratamento ficam fora).
       for (const [k, v] of brandSales()) acc.set(k, { units: v.units, revenue: v.revenue });
     } else if (real) {
       for (const b of real.byCategory) acc.set(b.label, { units: b.count, revenue: b.total });
     } else {
       for (const x of soldItems()) {
-        const k = by === 'brand' ? x.p.brand : x.p.category;
-        const cur = acc.get(k) ?? { units: 0, revenue: 0 };
+        const cur = acc.get(x.p.category) ?? { units: 0, revenue: 0 };
         cur.units += x.units;
         cur.revenue = round2(cur.revenue + x.revenue);
-        acc.set(k, cur);
+        acc.set(x.p.category, cur);
       }
     }
     rows = [...acc.entries()].map(([label, v]) => ({ key: label, label: label || '—', ...v }));
@@ -755,14 +732,13 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     // Com dados reais, usa os totais POR LOJA da rede inteira (storeStats);
     // sem eles (dataset antigo ou fictício), soma o catálogo local.
     const inputs: StoreCoverageInput[] = real?.storeStats
-      ? real.storeStats.map((st) => {
+      ? real.storeStats.flatMap((st) => {
+          // `stores` já exclui centro de distribuição, assistência e estoque de
+          // compras. Sem este filtro elas voltavam pelo agregado, sem nome
+          // ("Loja 12") e sempre no topo como excesso — não são ponto de venda.
           const s = stores.find((x) => x.externalId === st.externalId);
-          return {
-            storeId: s?.id ?? `st_${st.externalId}`,
-            storeName: s?.name ?? `Loja ${st.externalId}`,
-            stockUnits: st.stockUnits,
-            unitsSold: st.soldUnits,
-          };
+          if (!s) return [];
+          return [{ storeId: s.id, storeName: s.name, stockUnits: st.stockUnits, unitsSold: st.soldUnits }];
         })
       : stores.map((s) => ({
           storeId: s.id,
@@ -1029,9 +1005,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     };
   }
   if (url === '/planning/decisions')
+    // Mesmo comportamento do backend: card decidido sai do board (e é contado
+    // em summary.decididos), senão ele reaparece a cada recarga da página.
     return buildDecisionCards(
       planningPlans(planDays, one(params.storeId), planGroup),
       rebalanceRows().rows,
+      new Set(demoDecisions.map((r) => r.cardId)),
     );
   if (url === '/planning/strategy') {
     const floorUnits = Math.max(0, Math.trunc(Number(one(params.floor))) || 0);
@@ -1075,22 +1054,26 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
 
   // Mix de marcas por bandeira (feedback 04 fase 2)
   if (url === '/reports/brand-mix') {
-    const storeNameByExt = new Map(stores.map((s) => [s.externalId, s.name]));
-    const inputs: BrandBannerInput[] = real?.storeBrand
-      ? real.storeBrand.map((r) => ({
-          storeName: storeNameByExt.get(r.storeExt) ?? `Loja ${r.storeExt}`,
-          brand: r.label,
-          stockUnits: r.stockUnits,
-          unitsSold: r.soldUnits,
-        }))
-      : stores.flatMap((s) =>
-          products.map((prod) => ({
-            storeName: s.name,
-            brand: prod.brand,
-            stockUnits: stockQty.get(key(s.id, prod.id)) ?? 0,
-            unitsSold: soldQty.get(key(s.id, prod.id)) ?? 0,
-          })),
-        );
+    // Mesmo recorte das outras visões por marca: lente e tratamento ficam de
+    // fora (módulo do laboratório). Do catálogo, e não do agregado pronto — o
+    // agregado é por fornecedor e inclui lente, então o Galbe veria ZEISS aqui
+    // depois de não vê-la na aba ao lado.
+    const acc = new Map<string, BrandBannerInput>();
+    for (const p of products) {
+      if (!isBrandAnalysable(p.category)) continue;
+      const brand = brandLabel(p);
+      for (const s of stores) {
+        const stockUnits = stockQty.get(key(s.id, p.id)) ?? 0;
+        const unitsSold = soldQty.get(key(s.id, p.id)) ?? 0;
+        if (stockUnits === 0 && unitsSold === 0) continue;
+        const k = `${s.name}|${brand}`;
+        const cur = acc.get(k) ?? { storeName: s.name, brand, stockUnits: 0, unitsSold: 0 };
+        cur.stockUnits += stockUnits;
+        cur.unitsSold += unitsSold;
+        acc.set(k, cur);
+      }
+    }
+    const inputs: BrandBannerInput[] = [...acc.values()];
     return { days: effectiveDays(days), ...buildBrandMix(inputs) };
   }
 
