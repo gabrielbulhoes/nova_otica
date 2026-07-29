@@ -134,6 +134,40 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
           </div>
         </div>
 
+        {/* Feedback 05: "liquidar como? remanejar para onde?" — o card passa
+            a responder as duas, com o porquê do número. */}
+        {c.type === 'LIQUIDACAO' && (c.discountPct ?? 0) > 0 && (
+          <div
+            style={{
+              background: 'var(--surface-2, rgba(0,0,0,.03))',
+              border: '1px solid var(--line)',
+              borderRadius: 8,
+              padding: '8px 10px',
+              fontSize: 12.5,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: 15 }}>−{c.discountPct}%</strong>
+              <span className="muted">desconto sugerido</span>
+              {c.discountMaxPct != null && (
+                <span className="muted">· teto {c.discountMaxPct}% (zera a margem)</span>
+              )}
+            </div>
+            {c.outletStoreName && (
+              <div style={{ marginTop: 3 }}>
+                <span className="muted">Melhor destino: </span>
+                <strong>{c.outletStoreName}</strong>
+                <span className="muted">
+                  {c.outletBasis === 'marca' ? ' — é onde a marca mais sai' : ' — é onde a peça mais sai'}
+                </span>
+              </div>
+            )}
+            {c.discountReason && (
+              <div className="muted" style={{ marginTop: 3, fontSize: 11.5 }}>{c.discountReason}</div>
+            )}
+          </div>
+        )}
+
         <div style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="muted">Alvo:</span>
           <strong>{c.target}</strong>

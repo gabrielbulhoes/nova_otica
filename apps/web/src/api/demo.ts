@@ -1135,10 +1135,47 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/planning/decisions') {
     // Mesmo comportamento do backend: card decidido sai do board (e é contado
     // em summary.decididos), senão ele reaparece a cada recarga da página.
+    // Posições por loja de cada produto: alimentam o destino de escoamento dos
+    // cards de liquidação ("remanejar para onde?" — feedback 05).
+    const posicoes = new Map<
+      string,
+      { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+    >();
+    for (const prod of products) {
+      const lista = stores
+        .map((st) => ({
+          storeId: st.id,
+          storeName: st.name,
+          unitsSold: soldQty.get(key(st.id, prod.id)) ?? 0,
+          currentStock: stockQty.get(key(st.id, prod.id)) ?? 0,
+        }))
+        .filter((x) => x.unitsSold > 0 || x.currentStock > 0);
+      if (lista.length > 0) posicoes.set(prod.id, lista);
+    }
+    // Reserva por MARCA: a maioria dos cards de liquidação é estoque morto,
+    // sem venda própria em loja nenhuma. A rede não sabe onde ESTA peça sai,
+    // mas sabe onde a marca sai.
+    const porMarca = new Map<
+      string,
+      { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+    >();
+    for (const prod of products) {
+      if (!prod.brand) continue;
+      const lista = porMarca.get(prod.brand) ?? stores.map((st) => ({
+        storeId: st.id, storeName: st.name, unitsSold: 0, currentStock: 0,
+      }));
+      lista.forEach((x, i) => {
+        x.unitsSold += soldQty.get(key(stores[i].id, prod.id)) ?? 0;
+        x.currentStock += stockQty.get(key(stores[i].id, prod.id)) ?? 0;
+      });
+      porMarca.set(prod.brand, lista);
+    }
     const board = buildDecisionCards(
       planningPlans(planDays, one(params.storeId), planGroup),
       rebalanceRows().rows,
       new Set(demoDecisions.map((r) => r.cardId)),
+      posicoes,
+      porMarca,
     );
     const history = new Map(
       board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),

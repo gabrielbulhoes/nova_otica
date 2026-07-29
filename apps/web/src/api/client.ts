@@ -547,6 +547,14 @@ export interface DecisionCard {
   ageDays?: number;
   isNew?: boolean;
   isOverdue?: boolean;
+  /** Liquidação: desconto sugerido, teto e o porquê. */
+  discountPct?: number;
+  discountMaxPct?: number;
+  discountReason?: string;
+  /** Liquidação: loja com maior chance de escoar. */
+  outletStoreId?: string;
+  outletStoreName?: string;
+  outletBasis?: 'sku' | 'marca';
 }
 
 /** Lote de geração: a execução do motor que produziu estes cards. */

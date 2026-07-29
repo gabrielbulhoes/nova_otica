@@ -252,6 +252,8 @@ export async function decisionBoard(days: number, storeId?: string, group: Produ
     generated.plans,
     generated.rebalance,
     new Set(decided.keys()),
+    generated.positions,
+    generated.brandPositions,
   );
   return annotateCardAges(open, history, batch, DECISION_SLA_DAYS);
 }
@@ -266,8 +268,54 @@ export async function generateCards(days: number, storeId?: string, group: Produ
     plans(days, storeId, group),
     rebalancePlan(days, group),
   ]);
-  const board = buildDecisionCards(productPlans, reb.rows);
-  return { ...board, plans: productPlans, rebalance: reb.rows };
+  // Posições por loja: alimentam o destino de escoamento dos cards de
+  // liquidação ("remanejar para onde?"). Vêm do mesmo plano de remanejamento,
+  // então não custam consulta nova.
+  const posicoes = new Map<
+    string,
+    { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+  >();
+  for (const r of reb.inputs ?? []) {
+    const lista = posicoes.get(r.productId) ?? [];
+    lista.push({
+      storeId: r.storeId,
+      storeName: r.storeName,
+      unitsSold: r.unitsSold,
+      currentStock: r.currentStock,
+    });
+    posicoes.set(r.productId, lista);
+  }
+  // Reserva por marca: a maioria dos cards de liquidação é estoque morto, sem
+  // venda própria em loja nenhuma.
+  const porMarca = new Map<
+    string,
+    { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+  >();
+  for (const r of reb.inputs ?? []) {
+    if (!r.brand) continue;
+    const lista = porMarca.get(r.brand) ?? [];
+    const atual = lista.find((x) => x.storeId === r.storeId);
+    if (atual) {
+      atual.unitsSold += r.unitsSold;
+      atual.currentStock += r.currentStock;
+    } else {
+      lista.push({
+        storeId: r.storeId,
+        storeName: r.storeName,
+        unitsSold: r.unitsSold,
+        currentStock: r.currentStock,
+      });
+    }
+    porMarca.set(r.brand, lista);
+  }
+  const board = buildDecisionCards(productPlans, reb.rows, undefined, posicoes, porMarca);
+  return {
+    ...board,
+    plans: productPlans,
+    rebalance: reb.rows,
+    positions: posicoes,
+    brandPositions: porMarca,
+  };
 }
 
 /**
@@ -397,7 +445,9 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     };
   }
 
-  return plan;
+  // `inputs` sai junto: são as posições por loja de cada produto, que o board
+  // usa para escolher o destino de escoamento sem uma consulta nova.
+  return { ...plan, inputs };
 }
 
 /** Fornecedores (marcas) com seus prazos: cadastrados ou padrão da rede. */

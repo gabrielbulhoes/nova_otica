@@ -12,6 +12,9 @@ import {
 } from '../api/client';
 import { PageHeader, Loading, StatusBadge, movementTypeLabel } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { useScope } from '../lib/scope';
+import { getRebalancePlan } from '../api/client';
+import type { RebalanceSuggestion } from '../api/client';
 
 const TYPES = [
   { value: 'TRANSFER', label: 'Transferência entre lojas' },
@@ -19,6 +22,123 @@ const TYPES = [
   { value: 'RETURN', label: 'Devolução / entrada' },
   { value: 'ADJUSTMENT', label: 'Ajuste manual' },
 ];
+
+/**
+ * Transferências SUGERIDAS pelo motor, no topo da própria tela de
+ * transferências.
+ *
+ * Feedback 04 do Galbe: "o quadro de transferências deveria estar bem mais
+ * sugestivo após as análises, consta apenas com uma transferência sugerida".
+ * A conta estava certa — ele abriu o REGISTRO de movimentações, que só tinha a
+ * linha que ele mesmo criou. As sugestões existiam, em outras duas telas. O
+ * defeito é de arquitetura de informação: a tela não entrega o que o nome
+ * promete. Agora entrega, e criar a movimentação é um clique.
+ */
+function SugestoesDeTransferencia({ onCriada }: { onCriada: () => void }) {
+  const { scope } = useScope();
+  const [criadas, setCriadas] = useState<Set<string>>(new Set());
+  const [erro, setErro] = useState<string | null>(null);
+
+  const plano = useQuery({
+    queryKey: ['planning-rebalance', '90', scope],
+    queryFn: () => getRebalancePlan({ days: '90', group: scope }),
+    staleTime: 5 * 60_000,
+  });
+
+  const criar = useMutation({
+    mutationFn: (r: RebalanceSuggestion) =>
+      createMovement({
+        type: 'TRANSFER',
+        productId: r.productId,
+        fromStoreId: r.fromStoreId,
+        toStoreId: r.toStoreId,
+        quantity: r.quantity,
+        reason: r.friendlyReason ?? r.reason,
+      }),
+    onError: (e: unknown) => setErro(e instanceof Error ? e.message : 'Falha ao criar a movimentação.'),
+    onSuccess: (_d, r) => {
+      setErro(null);
+      setCriadas((s) => new Set(s).add(chave(r)));
+      onCriada();
+    },
+  });
+
+  const chave = (r: RebalanceSuggestion) => `${r.productId}:${r.fromStoreId}:${r.toStoreId}`;
+  const rows = plano.data?.rows ?? [];
+
+  if (plano.isLoading) return <Loading />;
+
+  return (
+    <div className="card" style={{ padding: 0, marginBottom: 18 }}>
+      <div style={{ padding: '14px 16px 10px' }}>
+        <div className="section-title" style={{ marginBottom: 2 }}>
+          Transferências sugeridas pelo motor
+        </div>
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          {rows.length > 0
+            ? `${rows.length} ${rows.length > 1 ? 'sugestões' : 'sugestão'} — de onde está parado para onde vende, somando ${
+                plano.data?.summary?.units ?? 0
+              } unidades.`
+            : 'Nenhuma sugestão no recorte atual. Troque o recorte no topo ou confira o Planejamento.'}
+        </div>
+        {erro && (
+          <div className="muted" style={{ fontSize: 12, color: 'var(--red)', marginTop: 6 }}>{erro}</div>
+        )}
+      </div>
+
+      {rows.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>Produto</th>
+              <th>Rota</th>
+              <th className="num">Qtd.</th>
+              <th>Por quê</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 30).map((r) => {
+              const k = chave(r);
+              const feita = criadas.has(k);
+              return (
+                <tr key={k}>
+                  <td>
+                    <div>{r.description}</div>
+                    {r.brand && <div className="muted" style={{ fontSize: 11.5 }}>{r.brand}</div>}
+                  </td>
+                  <td style={{ fontSize: 12.5 }}>
+                    {r.fromStoreName} <span className="muted">→</span> <strong>{r.toStoreName}</strong>
+                  </td>
+                  <td className="num">{r.quantity}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{r.friendlyReason ?? r.reason}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    {feita ? (
+                      <span className="badge green">solicitada</span>
+                    ) : (
+                      <button
+                        className="btn sm"
+                        disabled={criar.isPending}
+                        onClick={() => criar.mutate(r)}
+                      >
+                        Criar movimentação
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {rows.length > 30 && (
+        <div className="muted" style={{ padding: '10px 16px', fontSize: 12 }}>
+          Mostrando as 30 de maior impacto, de {rows.length}. O conjunto completo está em Decisões.
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Movements() {
   const qc = useQueryClient();
@@ -56,6 +176,8 @@ export function Movements() {
           + Nova movimentação
         </button>
       </div>
+
+      <SugestoesDeTransferencia onCriada={invalidate} />
 
       <div className="toolbar">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>

@@ -84,6 +84,65 @@ export function marginPct(unitPrice: number, unitCost: number): number {
   return round2(((unitPrice - unitCost) / unitPrice) * 100);
 }
 
+/**
+ * Desconto sugerido para liquidar, e o teto que ainda faz sentido.
+ *
+ * Feedback 05 do Galbe: "sugere liquidar — mas liquidar como? (desconto
+ * sugerido)". Sem um número, o card empurra a decisão de volta para quem já
+ * não sabia decidir.
+ *
+ * A conta compara duas alternativas reais:
+ * - VENDER AGORA com desconto d: entra `preço × (1 − d)` hoje;
+ * - SEGURAR: o item continua parado consumindo custo de carregamento, e o
+ *   dinheiro que ele imobiliza não volta.
+ *
+ * O TETO é o desconto que zera a margem — abaixo do custo a rede perde
+ * dinheiro em cima da própria liquidação, e isso nunca é sugestão automática.
+ * O SUGERIDO é a parcela do teto proporcional a quão parado o item está,
+ * medida pelo custo de carregar até o horizonte: item que ficaria dois anos
+ * encalhado justifica desconto perto do teto; item de giro lento mas real
+ * justifica pouco.
+ *
+ * `coverageDays` nulo = sem giro nenhum (estoque morto): vai direto ao teto.
+ */
+export function suggestedDiscount(
+  unitPrice: number,
+  unitCost: number,
+  coverageDays: number | null,
+  cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
+): { suggestedPct: number; maxPct: number; rationale: string } {
+  const margem = marginPct(unitPrice, unitCost);
+  // Teto: o desconto que consome a margem inteira. Sem preço ou sem margem,
+  // não há desconto a sugerir — o caso é de devolução ou bonificação.
+  const maxPct = Math.max(0, Math.floor(margem));
+  if (maxPct <= 0) {
+    return {
+      suggestedPct: 0,
+      maxPct: 0,
+      rationale: 'Sem margem para desconto — avalie devolução ao fornecedor ou bonificação.',
+    };
+  }
+
+  // Horizonte de encalhe: quanto tempo o item ainda ficaria parado. Limitado a
+  // 2 anos porque além disso a conta perde sentido prático.
+  const horizonteDias = coverageDays == null ? 730 : Math.min(coverageDays, 730);
+  // Quanto custa carregar UMA unidade por esse horizonte, em % do preço.
+  const custoCarregarPct =
+    unitPrice > 0 ? (carryingCost(unitCost, horizonteDias, cfg) / unitPrice) * 100 : 0;
+
+  // O desconto justificado é o menor entre o custo de carregar e o teto: não
+  // faz sentido dar mais desconto do que se economiza deixando de carregar.
+  const suggestedPct = Math.max(5, Math.min(maxPct, Math.round(custoCarregarPct)));
+
+  const meses = Math.round(horizonteDias / 30);
+  const rationale =
+    coverageDays == null
+      ? `Sem giro: carregar por 24 meses custa ${Math.round(custoCarregarPct)}% do preço.`
+      : `No ritmo atual sairia em ~${meses} ${meses === 1 ? 'mês' : 'meses'}; carregar até lá custa ${Math.round(custoCarregarPct)}% do preço.`;
+
+  return { suggestedPct, maxPct, rationale };
+}
+
 /** Margem bruta esperada (R$) de vender uma quantidade. */
 export function expectedMargin(units: number, unitPrice: number, unitCost: number): number {
   if (!(units > 0)) return 0;
@@ -419,6 +478,8 @@ export interface ProductPlan {
   carryingCost30d: number;
   /** Quanto custa manter só o EXCESSO por 30 dias (R$) — o desperdício puro. */
   excessCarryingCost30d: number;
+  /** Preço de venda unitário — base do desconto sugerido na liquidação. */
+  unitPrice: number;
   /** Margem bruta unitária em % do preço. */
   marginPct: number;
   /** Margem bruta esperada da compra sugerida (R$). */
@@ -574,6 +635,7 @@ export function analyzeProduct(
     confidence: decisionConfidence(input.unitsSold, days, dailyDemand > 0, forecast?.method ?? null),
     carryingCost30d: carryingCost(stockValue, 30, cfg),
     excessCarryingCost30d: carryingCost(excessValue, 30, cfg),
+    unitPrice: input.unitPrice,
     marginPct: marginPct(input.unitPrice, input.unitCost),
     expectedMargin: expectedMargin(suggestedQty, input.unitPrice, input.unitCost),
     onOrderQty: onOrder,
@@ -1426,6 +1488,15 @@ export interface DecisionCard {
   isNew?: boolean;
   /** Reaparece há mais dias do que o SLA sem ninguém decidir. */
   isOverdue?: boolean;
+  /** Liquidação: desconto sugerido e teto (feedback 05 — "liquidar como?"). */
+  discountPct?: number;
+  discountMaxPct?: number;
+  discountReason?: string;
+  /** Liquidação: loja com maior chance de escoar ("remanejar para onde?"). */
+  outletStoreId?: string;
+  outletStoreName?: string;
+  /** Se o destino veio do giro da própria peça ou do giro da marca. */
+  outletBasis?: 'sku' | 'marca';
 }
 
 export interface DecisionSummary {
@@ -1559,10 +1630,58 @@ function capitalPriority(value: number): DecisionPriority {
  * decidir duas vezes a mesma coisa. Eles saem da lista e entram no contador
  * `summary.decididos` — o board mostra o que falta decidir, não o que já foi.
  */
+/**
+ * Loja com maior chance de escoar um produto parado.
+ *
+ * Feedback 05 do Galbe: "remanejar para onde (qual loja teria maior chance de
+ * escoamento?)". O card de liquidação dizia o que fazer e não onde.
+ *
+ * Critério, nesta ordem: quem MAIS VENDEU a peça no período; empatado, quem
+ * tem MENOS estoque dela (menos risco de repetir o encalhe). Loja sem nenhuma
+ * venda não é destino — mandar para lá só muda o endereço do problema.
+ */
+export interface OutletPosition {
+  storeId: string;
+  storeName: string;
+  unitsSold: number;
+  currentStock: number;
+}
+
+export function bestOutletStore(
+  positions: OutletPosition[],
+  exceptStoreId?: string,
+  /**
+   * Posições por MARCA, usadas quando a peça não vendeu em lugar nenhum.
+   * É o caso mais comum entre os cards de liquidação — estoque morto — e sem
+   * este recurso a pergunta "para onde?" fica sem resposta justamente nos
+   * cards em que ela é feita. Um óculos MIU MIU que nunca saiu não tem
+   * histórico próprio, mas a rede sabe onde MIU MIU sai.
+   */
+  brandPositions?: OutletPosition[],
+): { storeId: string; storeName: string; unitsSold: number; basis: 'sku' | 'marca' } | null {
+  const escolher = (lista: OutletPosition[]) =>
+    lista
+      .filter((p) => p.storeId !== exceptStoreId && p.unitsSold > 0)
+      .sort((a, b) => b.unitsSold - a.unitsSold || a.currentStock - b.currentStock)[0];
+
+  const porSku = escolher(positions);
+  if (porSku) {
+    return { storeId: porSku.storeId, storeName: porSku.storeName, unitsSold: porSku.unitsSold, basis: 'sku' };
+  }
+  const porMarca = brandPositions ? escolher(brandPositions) : undefined;
+  return porMarca
+    ? { storeId: porMarca.storeId, storeName: porMarca.storeName, unitsSold: porMarca.unitsSold, basis: 'marca' }
+    : null;
+}
+
 export function buildDecisionCards(
   plans: ProductPlan[],
   rebalance: RebalanceSuggestion[],
   decidedIds?: ReadonlySet<string>,
+  /** Posições por loja de cada produto, para escolher o destino de escoamento. */
+  positionsByProduct?: ReadonlyMap<string, OutletPosition[]>,
+  /** Posições por MARCA — reserva para peça sem venda própria. */
+  positionsByBrand?: ReadonlyMap<string, OutletPosition[]>,
 ): DecisionBoard {
   const cards: DecisionCard[] = [];
 
@@ -1585,10 +1704,30 @@ export function buildDecisionCards(
         urgencyDays: p.stockoutInDays,
       });
     } else if (p.recommendation === 'LIQUIDATE') {
+      // "Liquidar" sozinho devolve a decisão para quem não sabia decidir: o
+      // card passa a dizer com quanto de desconto e para qual loja mandar.
+      const desc = suggestedDiscount(p.unitPrice, p.unitCost, p.coverageDays);
+      const outlet = positionsByProduct
+        ? bestOutletStore(
+            positionsByProduct.get(p.productId) ?? [],
+            undefined,
+            p.brand ? positionsByBrand?.get(p.brand) : undefined,
+          )
+        : null;
       cards.push({
         id: cardId('LIQUIDACAO', p.productId),
         type: 'LIQUIDACAO',
         title: 'Reduzir excesso e liberar capital',
+        discountPct: desc.suggestedPct,
+        discountMaxPct: desc.maxPct,
+        discountReason: desc.rationale,
+        ...(outlet
+          ? {
+              outletStoreId: outlet.storeId,
+              outletStoreName: outlet.storeName,
+              outletBasis: outlet.basis,
+            }
+          : {}),
         priority: capitalPriority(p.stockValue),
         productId: p.productId,
         description: p.description,

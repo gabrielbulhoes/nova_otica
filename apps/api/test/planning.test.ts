@@ -8,6 +8,8 @@ import {
   supplierFor,
   storeCarriesBrand,
   annotateCardAges,
+  suggestedDiscount,
+  bestOutletStore,
   buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
@@ -842,5 +844,94 @@ describe('catálogo de marcas (fornecedor + mix por loja)', () => {
     const resolve = (p: typeof p1) => supplierFor(extractBrand(p.description), catalog);
     const po = buildPurchaseOrders([p1, p2], 90, resolve);
     expect(po.orders.map((o) => o.supplier).sort()).toEqual(['Kering', 'Marcolin']);
+  });
+});
+
+describe('suggestedDiscount (feedback 05 — "liquidar como?")', () => {
+  it('nunca sugere desconto abaixo do custo: o teto é a margem', () => {
+    // Preço 200, custo 100 → margem 50%. O teto não pode passar disso.
+    const r = suggestedDiscount(200, 100, null);
+    expect(r.maxPct).toBe(50);
+    expect(r.suggestedPct).toBeLessThanOrEqual(r.maxPct);
+  });
+
+  it('sem margem, não sugere desconto — sugere outro caminho', () => {
+    const r = suggestedDiscount(100, 100, null);
+    expect(r.maxPct).toBe(0);
+    expect(r.suggestedPct).toBe(0);
+    expect(r.rationale).toMatch(/devolução|bonificação/i);
+  });
+
+  it('quanto mais tempo encalhado, maior o desconto justificado', () => {
+    const rapido = suggestedDiscount(200, 100, 60);
+    const lento = suggestedDiscount(200, 100, 600);
+    expect(lento.suggestedPct).toBeGreaterThan(rapido.suggestedPct);
+  });
+
+  it('estoque morto (sem giro) vai ao horizonte máximo', () => {
+    const morto = suggestedDiscount(200, 100, null);
+    const lento = suggestedDiscount(200, 100, 400);
+    expect(morto.suggestedPct).toBeGreaterThanOrEqual(lento.suggestedPct);
+    expect(morto.rationale).toMatch(/sem giro/i);
+  });
+
+  it('a explicação sempre acompanha o número', () => {
+    expect(suggestedDiscount(200, 100, 90).rationale.length).toBeGreaterThan(10);
+  });
+});
+
+describe('bestOutletStore (feedback 05 — "remanejar para onde?")', () => {
+  const pos = [
+    { storeId: 'a', storeName: 'A', unitsSold: 0, currentStock: 20 },
+    { storeId: 'b', storeName: 'B', unitsSold: 5, currentStock: 3 },
+    { storeId: 'c', storeName: 'C', unitsSold: 5, currentStock: 10 },
+    { storeId: 'd', storeName: 'D', unitsSold: 9, currentStock: 1 },
+  ];
+
+  it('escolhe quem mais vende a peça', () => {
+    expect(bestOutletStore(pos)?.storeId).toBe('d');
+  });
+
+  it('empate no giro decide pelo menor estoque — menos risco de reencalhe', () => {
+    const semD = pos.filter((p) => p.storeId !== 'd');
+    expect(bestOutletStore(semD)?.storeId).toBe('b');
+  });
+
+  it('loja sem venda nenhuma nunca é destino', () => {
+    const soParadas = [pos[0]];
+    expect(bestOutletStore(soParadas)).toBeNull();
+  });
+
+  it('não sugere devolver para a própria origem', () => {
+    expect(bestOutletStore(pos, 'd')?.storeId).toBe('b');
+  });
+});
+
+describe('bestOutletStore — reserva por marca (peça sem venda própria)', () => {
+  const semGiro = [
+    { storeId: 'a', storeName: 'A', unitsSold: 0, currentStock: 5 },
+    { storeId: 'b', storeName: 'B', unitsSold: 0, currentStock: 2 },
+  ];
+  const marca = [
+    { storeId: 'a', storeName: 'A', unitsSold: 3, currentStock: 40 },
+    { storeId: 'b', storeName: 'B', unitsSold: 11, currentStock: 30 },
+  ];
+
+  it('sem venda da peça, decide pelo giro da MARCA e declara a base', () => {
+    const r = bestOutletStore(semGiro, undefined, marca);
+    expect(r?.storeId).toBe('b');
+    expect(r?.basis).toBe('marca');
+  });
+
+  it('venda da própria peça tem precedência sobre a marca', () => {
+    const comGiro = [{ storeId: 'a', storeName: 'A', unitsSold: 1, currentStock: 5 }];
+    const r = bestOutletStore(comGiro, undefined, marca);
+    expect(r?.storeId).toBe('a');
+    expect(r?.basis).toBe('sku');
+  });
+
+  it('sem giro nem na peça nem na marca, não inventa destino', () => {
+    const marcaMorta = marca.map((m) => ({ ...m, unitsSold: 0 }));
+    expect(bestOutletStore(semGiro, undefined, marcaMorta)).toBeNull();
   });
 });
