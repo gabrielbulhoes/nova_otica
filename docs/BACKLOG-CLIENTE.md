@@ -103,6 +103,7 @@ Login da demo: Galbe / Gabriel / Victor.
 
 | Assunto | Pergunta | Quem decide |
 |---|---|---|
+| Curva ABC por SKU | O recorte de produto vale hoje nas telas de **operação** (Estoque, Produtos, Alertas). Em **Relatórios**, a visão por marca já exclui lente e a visão por SKU ainda cobre tudo. Uma curva ABC sem lente é outro relatório — 57,1% da receita a menos. Aplicar o recorte lá também? | Galbe |
 | Módulo de laboratório | Lente e tratamento saíram da análise de marca e terão módulo próprio. Qual o escopo mínimo dele? | Galbe |
 | SKUs a R$ 0,01 | Há SKUs com preço simbólico que distorcem as faixas de preço. Corrigir no ERP ou tratar como exceção no nosso lado? | Galbe |
 | Razão social como rótulo | Fornecedores aparecem com razão social longa nos gráficos. Manter, ou cadastrar nome curto? | Galbe |
@@ -115,3 +116,4 @@ Login da demo: Galbe / Gabriel / Victor.
 |---|---|---|
 | ZEISS na análise de marca | Fora. Lente e tratamento são do laboratório e terão módulo próprio | 28/07 · Galbe |
 | Origem do lote de geração | Nasce do **cron das 6h**. Sync manual também gera lote, marcado como MANUAL | 29/07 · Gabriel |
+| Lente nas telas de operação | Sai por padrão de Estoque, Produtos e Alertas, com seletor no topo do console para trazer de volta. **Não foi apagada**: é estoque real (o print mostrava 56 un. de um antirreflexo) e o módulo do laboratório vai precisar dela | 29/07 · Galbe |

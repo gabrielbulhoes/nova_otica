@@ -266,3 +266,42 @@ describe('demo: lote de geração', () => {
     expect(rows[0].compra + rows[0].remanejamento + rows[0].liquidacao).toBe(rows[0].cardsTotal);
   });
 });
+
+describe('demo: recorte de produto (feedback Galbe — "ainda continua puxando lentes")', () => {
+  const isLens = (c: string) => /lente|tratamento/i.test(c ?? '');
+
+  it('/stock com group=principal não traz lente nem tratamento', () => {
+    const rows = get('/stock', { group: 'principal' }).rows as { category: string }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(isLens(r.category), `veio ${r.category}`).toBe(false);
+  });
+
+  it('o recorte não apaga nada: group=todos volta a trazer mais linhas', () => {
+    const principal = get('/stock', { group: 'principal' }).total;
+    const todos = get('/stock', { group: 'todos' }).total;
+    expect(todos).toBeGreaterThan(principal);
+  });
+
+  it('group=lentes mostra SÓ lente e tratamento (prévia do laboratório)', () => {
+    const rows = get('/stock', { group: 'lentes' }).rows as { category: string }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(isLens(r.category), `veio ${r.category}`).toBe(true);
+  });
+
+  it('filtrar por categoria NÃO fura o recorte', () => {
+    // Escolher uma categoria de lente dentro do recorte principal não pode
+    // trazer lente de volta pela porta dos fundos.
+    const cats = get('/products/categories') as string[];
+    const lensCat = cats.find((c) => isLens(c));
+    if (!lensCat) return; // dataset sem lente: nada a provar
+    const rows = get('/stock', { group: 'principal', category: lensCat }).rows as unknown[];
+    expect(rows.length).toBe(0);
+  });
+
+  it('alertas e produtos respeitam o mesmo recorte', () => {
+    const al = get('/alerts', { group: 'principal' }).rows as { category: string }[];
+    for (const r of al) expect(isLens(r.category), `alerta de ${r.category}`).toBe(false);
+    const pr = get('/products', { group: 'principal' }).rows as { category: string }[];
+    for (const r of pr) expect(isLens(r.category), `produto ${r.category}`).toBe(false);
+  });
+});

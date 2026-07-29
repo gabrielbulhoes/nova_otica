@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound } from '../../http/helpers.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { stockAlerts } from './alerts.service.js';
+import { parseGroup } from '../products/product.scope.js';
 
 export const alertsRouter = Router();
 
@@ -12,7 +13,7 @@ alertsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await stockAlerts(storeId));
+    res.json(await stockAlerts(storeId, parseGroup(req.query.group)));
   }),
 );
 

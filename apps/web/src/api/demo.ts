@@ -273,14 +273,24 @@ function asSet(v?: string | string[]) {
   return items.length > 0 ? new Set(items) : null;
 }
 
+/** Recorte pedido pela tela; 'todos' é o padrão (compatível com a API). */
+function productGroup(v: string | string[] | undefined): ProductGroup {
+  const g = one(v);
+  return g === 'principal' || g === 'lentes' ? g : 'todos';
+}
+
 function stockRows(params: Record<string, string | string[] | undefined>) {
   const storeSel = asSet(params.storeId);
   const catSel = asSet(params.category);
+  // Mesmo recorte da API: lente e tratamento saem por padrão das telas de
+  // operação (feedback do Galbe: "ainda continua puxando lentes").
+  const group = productGroup(params.group);
   const rows: Record<string, unknown>[] = [];
   for (const st of stores) {
     if (storeSel && !storeSel.has(st.id)) continue;
     for (const p of products) {
       if (params.productId && params.productId !== p.id) continue;
+      if (!matchesProductGroup(p.category, group)) continue;
       if (catSel && !catSel.has(p.category)) continue;
       const search = one(params.search);
       if (search) {
@@ -303,8 +313,8 @@ function stockRows(params: Record<string, string | string[] | undefined>) {
   return rows;
 }
 
-function alerts() {
-  const rows = stockRows({}).filter((x) => {
+function alerts(group: ProductGroup = 'todos') {
+  const rows = stockRows({ group }).filter((x) => {
     // Com o dataset real (catálogo amostrado), só alerta posições que EXISTEM
     // na loja: linha de estoque presente ou venda no período. Sem isso, cada
     // produto ausente numa filial viraria "ruptura" fantasma.
@@ -801,7 +811,8 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/products/categories')
     return [...new Set(products.map((x) => x.category))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   if (url === '/products') {
-    let rows = products;
+    const g = productGroup(params.group);
+    let rows = products.filter((x) => matchesProductGroup(x.category, g));
     const cat = one(params.category);
     if (cat) rows = rows.filter((x) => x.category === cat);
     const q0 = one(params.search);
@@ -1187,7 +1198,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   }
 
   // Alertas
-  if (url === '/alerts') return alerts();
+  if (url === '/alerts') return alerts(productGroup(params.group));
   if (url === '/alerts/min-stock' && m === 'PUT') {
     const prod = prodById(body.productId as string);
     if (!prod) return { __status: 404, error: 'Produto não encontrado' };

@@ -4,12 +4,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAlerts, getRebalancePlan, setMinStock, type StockAlert } from '../api/client';
 import { PageHeader, Loading, StatCard } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { useScope } from '../lib/scope';
 
 export function Alerts() {
   const { isAdmin } = useAuth();
+  const { scope } = useScope();
   const [level, setLevel] = useState('');
 
-  const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
+  const alerts = useQuery({ queryKey: ['alerts', scope], queryFn: () => getAlerts({ group: scope }) });
   const rows = (alerts.data?.rows ?? []).filter((r) => !level || r.level === level);
 
   // Alerta de transferência (feedback 07): antes de comprar, remanejar o que a

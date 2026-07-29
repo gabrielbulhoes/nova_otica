@@ -2,16 +2,18 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getProducts, getCategories, formatBRL } from '../api/client';
 import { PageHeader, Loading } from '../components/ui';
+import { useScope } from '../lib/scope';
 
 export function Products() {
+  const { scope } = useScope();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
 
   const categories = useQuery({ queryKey: ['categories'], queryFn: getCategories });
   const products = useQuery({
-    queryKey: ['products', search, category],
+    queryKey: ['products', search, category, scope],
     queryFn: () =>
-      getProducts({ search: search || undefined, category: category || undefined, limit: 200 }),
+      getProducts({ search: search || undefined, category: category || undefined, group: scope, limit: 200 }),
   });
 
   return (

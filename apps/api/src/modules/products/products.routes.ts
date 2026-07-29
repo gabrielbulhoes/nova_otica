@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
 import { scopedStoreWhere } from '../auth/auth.middleware.js';
+import { parseGroup, productWhereForGroup, scopeCategories } from './product.scope.js';
 
 export const productsRouter = Router();
 
@@ -15,7 +16,13 @@ productsRouter.get(
     const category = req.query.category as string | undefined;
 
     const where: Prisma.ProductWhereInput = {};
-    if (category) where.category = category;
+    // Recorte do console: lente e tratamento saem por padrão, mas voltam num
+    // clique — o catálogo não perde nada, só sai da frente.
+    const scoped = scopeCategories(
+      await productWhereForGroup(parseGroup(req.query.group)),
+      category ? [category] : undefined,
+    );
+    if (scoped?.category) where.category = scoped.category;
     if (search) {
       where.OR = [
         { description: { contains: search, mode: 'insensitive' } },

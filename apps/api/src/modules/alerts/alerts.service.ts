@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { isMadeToOrderLens } from '../planning/planning.math.js';
 import { plannedStoreIds, salePlannedWhere, stockPlannedWhere } from '../stores/store.scope.js';
 import { listStock } from '../stock/stock.service.js';
+import type { ProductGroup } from '../planning/planning.math.js';
 
 export type AlertLevel = 'OUT' | 'LOW';
 
@@ -34,7 +35,7 @@ export function resolveThreshold(
  * Gera alertas de ruptura (OUT, saldo <= 0) e estoque baixo (LOW, saldo <=
  * mínimo). O mínimo é o da loja, senão o do produto, senão o padrão da rede.
  */
-export async function stockAlerts(storeId?: string): Promise<{
+export async function stockAlerts(storeId?: string, group: ProductGroup = 'todos'): Promise<{
   total: number;
   out: number;
   low: number;
@@ -43,7 +44,7 @@ export async function stockAlerts(storeId?: string): Promise<{
   // GMAIS e outros CDs ficam fora da ruptura: sem loja específica, o escopo é
   // só as lojas planejáveis.
   const storeIds = storeId ? [storeId] : await plannedStoreIds();
-  const { rows } = await listStock({ storeIds, limit: 100_000, skip: 0 });
+  const { rows } = await listStock({ storeIds, group, limit: 100_000, skip: 0 });
   const def = env.DEFAULT_MIN_STOCK;
 
   // Lentes por encomenda não entram na ruptura: são feitas sob demanda, então

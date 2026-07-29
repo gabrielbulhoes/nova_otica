@@ -3,8 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { getStock, getStores, getCategories, formatBRL } from '../api/client';
 import { PageHeader, Loading } from '../components/ui';
 import { MultiSelect } from '../components/MultiSelect';
+import { useScope } from '../lib/scope';
 
 export function Stock() {
+  const { scope } = useScope();
   const [search, setSearch] = useState('');
   const [storeIds, setStoreIds] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
@@ -13,13 +15,14 @@ export function Stock() {
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
   const categoryList = useQuery({ queryKey: ['categories'], queryFn: getCategories });
   const stock = useQuery({
-    queryKey: ['stock', search, storeIds, categories, onlyAvailable],
+    queryKey: ['stock', search, storeIds, categories, onlyAvailable, scope],
     queryFn: () =>
       getStock({
         search: search || undefined,
         // Arrays → parâmetro repetido: valores seguem literais (vírgula ok).
         storeId: storeIds.length > 0 ? storeIds : undefined,
         category: categories.length > 0 ? categories : undefined,
+        group: scope,
         onlyAvailable: onlyAvailable || undefined,
         limit: '200',
       }),
