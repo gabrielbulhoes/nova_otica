@@ -1,6 +1,7 @@
 import { Prisma, type DecisionOutcome } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { toNumber } from '../../http/helpers.js';
+import { firstSeenAt } from './batches.service.js';
 
 /**
  * Governança da decisão (Onda 1 · trilha TB).
@@ -62,6 +63,12 @@ export async function recordDecision(input: RecordDecisionInput, userId: string)
   if (!input.cardId.trim()) throw new DecisionValidationError('cardId é obrigatório.');
   await assertCanDecide(userId, input.cardType);
 
+  // A idade do card vem do lote de geração (servidor), não do cliente: é a
+  // base do SLA, e quem decide não deveria poder informar — nem errar — desde
+  // quando o próprio card está esperando. O valor do cliente fica como
+  // reserva, enquanto o cron nunca rodou e não há lote registrado.
+  const seenAt = (await firstSeenAt(input.cardId.trim())) ?? input.cardSeenAt;
+
   return prisma.decisionRecord.create({
     data: {
       cardId: input.cardId.trim(),
@@ -69,7 +76,7 @@ export async function recordDecision(input: RecordDecisionInput, userId: string)
       outcome: input.outcome,
       note,
       impact: new Prisma.Decimal(Number.isFinite(input.impact) ? input.impact : 0),
-      cardSeenAt: input.cardSeenAt,
+      cardSeenAt: seenAt,
       productId: input.productId,
       storeId: input.storeId,
       decidedBy: userId,

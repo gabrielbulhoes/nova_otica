@@ -532,6 +532,22 @@ export interface DecisionCard {
   impact: number;
   impactLabel: string;
   urgencyDays: number | null;
+  /** Primeira aparição do card, vinda do lote de geração. */
+  firstSeenAt?: string;
+  ageDays?: number;
+  isNew?: boolean;
+  isOverdue?: boolean;
+}
+
+/** Lote de geração: a execução do motor que produziu estes cards. */
+export interface BatchInfo {
+  id: string;
+  generatedAt: string;
+  source: 'CRON' | 'MANUAL';
+  cardsTotal: number;
+  cardsNew: number;
+  /** Só a demo marca: as idades dos cards ali são derivadas, não medidas. */
+  simulated?: boolean;
 }
 
 export interface DecisionBoard {
@@ -543,9 +559,24 @@ export interface DecisionBoard {
     criticos: number;
     /** Cards que o motor gerou mas já têm decisão registrada (saíram do board). */
     decididos: number;
+    novos?: number;
+    atrasados?: number;
   };
   cards: DecisionCard[];
+  batch?: BatchInfo;
 }
+
+export interface BatchRow extends BatchInfo {
+  trigger: string;
+  days: number;
+  compra: number;
+  remanejamento: number;
+  liquidacao: number;
+  impactTotal: number;
+}
+
+export const fetchBatches = (limit = 30) =>
+  api.get<{ rows: BatchRow[] }>('/planning/batches', { params: { limit } }).then((r) => r.data);
 
 // ─── Governança da decisão (Onda 1 · TB) ─────────────────────────────────────
 

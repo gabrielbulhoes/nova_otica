@@ -7,6 +7,7 @@ import {
   buildCommercialStrategy,
   supplierFor,
   storeCarriesBrand,
+  annotateCardAges,
   buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
@@ -705,6 +706,56 @@ describe('buildDecisionCards (portal de decisões — cards)', () => {
     const a = buildDecisionCards([buy, liq], reb.rows);
     const b = buildDecisionCards([buy, liq], reb.rows);
     expect(b.cards.map((c) => c.id)).toEqual(a.cards.map((c) => c.id));
+  });
+});
+
+describe('annotateCardAges (idade do card vinda do lote de geração)', () => {
+  const agora = new Date('2026-07-29T09:00:00Z');
+  const diasAtras = (n: number) => new Date(agora.getTime() - n * 86_400_000);
+  const board = {
+    summary: {
+      total: 3, byType: { compra: 3, remanejamento: 0, liquidacao: 0 },
+      byPriority: { alta: 3, media: 0, baixa: 0 }, impactTotal: 0, criticos: 0, decididos: 0,
+    },
+    cards: [
+      { id: '#AAA.11' }, { id: '#BBB.22' }, { id: '#CCC.33' },
+    ] as unknown as import('../src/modules/planning/planning.math.js').DecisionCard[],
+  };
+  const batch = {
+    id: 'b1', generatedAt: agora.toISOString(), source: 'CRON' as const, cardsTotal: 3, cardsNew: 1,
+  };
+  const history = new Map([
+    ['#AAA.11', { cardId: '#AAA.11', firstSeenAt: agora, timesSeen: 1 }],       // novo
+    ['#BBB.22', { cardId: '#BBB.22', firstSeenAt: diasAtras(10), timesSeen: 11 }], // em dia
+    ['#CCC.33', { cardId: '#CCC.33', firstSeenAt: diasAtras(45), timesSeen: 46 }], // atrasado
+  ]);
+
+  it('marca novo, atrasado e calcula a idade em dias', () => {
+    const r = annotateCardAges(board, history, batch, 30, agora);
+    const [a, b, c] = r.cards;
+    expect(a.isNew).toBe(true);
+    expect(a.ageDays).toBe(0);
+    expect(b.isNew).toBe(false);
+    expect(b.ageDays).toBe(10);
+    expect(b.isOverdue).toBe(false);
+    expect(c.isOverdue).toBe(true);
+    expect(c.ageDays).toBe(45);
+    expect(r.summary.novos).toBe(1);
+    expect(r.summary.atrasados).toBe(1);
+    expect(r.batch?.id).toBe('b1');
+  });
+
+  it('sem histórico (cron nunca rodou) devolve o board intacto, só com o lote', () => {
+    const r = annotateCardAges(board, new Map(), undefined, 30, agora);
+    expect(r.cards).toEqual(board.cards);
+    expect(r.summary.novos).toBeUndefined();
+    expect(r.batch).toBeUndefined();
+  });
+
+  it('a idade não reinicia quando o card reaparece — firstSeenAt é o que vale', () => {
+    // Mesmo card, dois lotes depois: timesSeen sobe, firstSeenAt não se move.
+    const depois = annotateCardAges(board, history, batch, 30, new Date(agora.getTime() + 2 * 86_400_000));
+    expect(depois.cards[1].ageDays).toBe(12);
   });
 });
 
