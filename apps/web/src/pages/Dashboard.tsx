@@ -11,11 +11,16 @@ import {
 } from '../api/client';
 import { StatCard, PageHeader, Loading, CoverageBadge, fmtMonths } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { useScope } from '../lib/scope';
 
 export function Dashboard() {
   const { isAdmin } = useAuth();
+  const { scope } = useScope();
   const summary = useQuery({ queryKey: ['summary'], queryFn: getSummary });
-  const coverage = useQuery({ queryKey: ['coverage'], queryFn: () => getStoreCoverage() });
+  const coverage = useQuery({
+    queryKey: ['coverage', scope],
+    queryFn: () => getStoreCoverage({ group: scope }),
+  });
   // Mesma queryKey do Planejamento (days=90): compartilha cache e invalidação
   // SSE; staleTime maior porque o plano completo é caro no backend.
   const rebalance = useQuery({
@@ -25,7 +30,7 @@ export function Dashboard() {
     staleTime: 5 * 60_000,
   });
   const sync = useQuery({ queryKey: ['sync-status'], queryFn: getSyncStatus, enabled: isAdmin });
-  const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
+  const alerts = useQuery({ queryKey: ['alerts', scope], queryFn: () => getAlerts({ group: scope }) });
   const orders = useQuery({ queryKey: ['planning-orders', '90', ''], queryFn: () => getPurchaseOrders({ days: '90' }) });
 
   // Cobertura da rede = todo o estoque ÷ toda a venda mensal (média ponderada).

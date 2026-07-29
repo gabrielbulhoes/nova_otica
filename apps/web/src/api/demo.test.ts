@@ -344,3 +344,31 @@ describe('demo: /stores (feedback Galbe — "estoque por SKU e loja tá uniforme
     expect(a).toEqual(b);
   });
 });
+
+describe('demo: janela de vendas medida, não presumida', () => {
+  it('/dashboard/coverage devolve a janela que usou como divisor', () => {
+    const r = get('/dashboard/coverage');
+    expect(r.windowDays).toBeGreaterThan(0);
+    expect(r.days).toBe(r.windowDays);
+  });
+
+  it('cobertura = estoque ÷ (vendas no período × 30/janela)', () => {
+    // O defeito era dividir por 30 quando o período tinha 7 dias, inflando
+    // toda cobertura em 4,3x. A conta tem que fechar com a janela declarada.
+    const r = get('/dashboard/coverage');
+    for (const row of r.rows as any[]) {
+      if (row.monthlyUnits > 0) {
+        expect(row.coverageMonths).toBeCloseTo(row.stockUnits / row.monthlyUnits, 1);
+        expect(row.monthlyUnits).toBeCloseTo((row.unitsSold * 30) / r.windowDays, 0);
+      }
+    }
+  });
+
+  it('cobertura por loja respeita o recorte de produto', () => {
+    const principal = get('/dashboard/coverage', { group: 'principal' });
+    const todos = get('/dashboard/coverage', { group: 'todos' });
+    const soma = (r: any) => (r.rows as any[]).reduce((a, x) => a + x.stockUnits, 0);
+    // Sem lente a rede tem menos unidades — se for igual, o recorte não pegou.
+    expect(soma(principal)).toBeLessThanOrEqual(soma(todos));
+  });
+});

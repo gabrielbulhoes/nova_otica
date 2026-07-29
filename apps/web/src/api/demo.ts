@@ -447,11 +447,29 @@ function abc(days: number, dimension: 'product' | 'brand') {
 }
 
 /**
- * A fotografia real só tem 30 dias de vendas: qualquer período pedido acima
- * disso usaria os mesmos números como se fossem do período maior e INFLARIA
- * a cobertura (30/days). Em modo real, a janela efetiva é sempre 30.
+ * Janela real de vendas do dataset, MEDIDA na série diária.
+ *
+ * Não confie no rótulo: o arquivo atual se descreve como "30 dias de vendas"
+ * e carrega 7 (07/07 a 13/07) — as fixtures saíram com a janela padrão da
+ * sonda. Dividir 7 dias de venda por 30 faz toda demanda diária sair 4,3x
+ * menor, o que inflou a cobertura para 60–150 meses e fez produto saudável
+ * ser classificado como parado. Medir em vez de acreditar custa três linhas.
  */
-const effectiveDays = (days: number) => (real ? 30 : days);
+function medirJanela(): number {
+  const dias = real?.dailySales?.map((d) => d.date).filter(Boolean).sort() ?? [];
+  if (dias.length === 0) return 30;
+  const ini = Date.parse(dias[0]);
+  const fim = Date.parse(dias[dias.length - 1]);
+  if (!Number.isFinite(ini) || !Number.isFinite(fim)) return 30;
+  return Math.max(1, Math.round((fim - ini) / 86_400_000) + 1);
+}
+const realWindowDays = real ? medirJanela() : 0;
+
+/**
+ * A fotografia real cobre `realWindowDays`: pedir um período maior usaria os
+ * mesmos números como se fossem do período maior e inflaria a cobertura.
+ */
+const effectiveDays = (days: number) => (real ? realWindowDays : days);
 
 /** Cobertura geral e por marca (feedback 06). */
 function brandCoverageReport(rawDays: number) {
@@ -788,22 +806,46 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/dashboard/coverage') {
     // Com dados reais, usa os totais POR LOJA da rede inteira (storeStats);
     // sem eles (dataset antigo ou fictício), soma o catálogo local.
-    const inputs: StoreCoverageInput[] = real?.storeStats
-      ? real.storeStats.flatMap((st) => {
-          // `stores` já exclui centro de distribuição, assistência e estoque de
-          // compras. Sem este filtro elas voltavam pelo agregado, sem nome
-          // ("Loja 12") e sempre no topo como excesso — não são ponto de venda.
-          const s = stores.find((x) => x.externalId === st.externalId);
-          if (!s) return [];
-          return [{ storeId: s.id, storeName: s.name, stockUnits: st.stockUnits, unitsSold: st.soldUnits }];
-        })
-      : stores.map((s) => ({
-          storeId: s.id,
-          storeName: s.name,
-          stockUnits: products.reduce((a, prod) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
-          unitsSold: products.reduce((a, prod) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
-        }));
-    return { days, rows: computeStoreCoverage(inputs, days) };
+    const grupo = productGroup(params.group);
+    // `storeCategory` traz estoque e venda por loja E por categoria, da rede
+    // inteira — é o que permite aplicar o recorte sem subcontar pela amostra
+    // do catálogo. `storeStats` é o total COM lente, e usá-lo aqui era metade
+    // da cobertura defasada que o Galbe apontou: lente é estoque em volume e
+    // venda sob encomenda, então empurra a cobertura para anos.
+    const porCategoria = real?.storeCategory;
+    const inputs: StoreCoverageInput[] =
+      porCategoria && porCategoria.length > 0
+        ? (() => {
+            const acc = new Map<string, StoreCoverageInput>();
+            for (const r of porCategoria) {
+              if (!matchesProductGroup(r.label, grupo)) continue;
+              // `stores` já exclui CD, assistência e estoque de compras — sem
+              // isto elas voltavam pelo agregado, sem nome e sempre no topo.
+              const s = stores.find((x) => x.externalId === r.storeExt);
+              if (!s) continue;
+              const cur = acc.get(s.id) ?? { storeId: s.id, storeName: s.name, stockUnits: 0, unitsSold: 0 };
+              cur.stockUnits += r.stockUnits;
+              cur.unitsSold += r.soldUnits;
+              acc.set(s.id, cur);
+            }
+            return [...acc.values()];
+          })()
+        : real?.storeStats
+          ? real.storeStats.flatMap((st) => {
+              const s = stores.find((x) => x.externalId === st.externalId);
+              if (!s) return [];
+              return [{ storeId: s.id, storeName: s.name, stockUnits: st.stockUnits, unitsSold: st.soldUnits }];
+            })
+          : stores.map((s) => ({
+              storeId: s.id,
+              storeName: s.name,
+              stockUnits: products.reduce((a, prod) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
+              unitsSold: products.reduce((a, prod) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
+            }));
+    // A janela é a MEDIDA no dataset, não a pedida: dividir 7 dias de venda
+    // por 30 é exatamente o que inflava a cobertura para 60–150 meses.
+    const dias = effectiveDays(days);
+    return { days: dias, windowDays: dias, rows: computeStoreCoverage(inputs, dias) };
   }
 
   // Sync

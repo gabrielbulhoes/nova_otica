@@ -74,3 +74,10 @@ export function scopeCategories(
   if (!picked?.length) return { category: { in: allowed } };
   return { category: { in: picked.filter((c) => allowed.includes(c)) } };
 }
+
+/** Categorias do grupo, ou `null` em 'todos' (sem restrição). */
+export async function categoriesInGroup(group: ProductGroup): Promise<string[] | null> {
+  const where = await productWhereForGroup(group);
+  const list = (where?.category as { in?: string[] } | undefined)?.in;
+  return list && list.length > 0 ? list : null;
+}
