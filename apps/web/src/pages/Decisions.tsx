@@ -184,7 +184,10 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
               <strong style={{ fontSize: 15 }}>−{c.discountPct}%</strong>
               <span className="muted">desconto sugerido</span>
               {c.discountMaxPct != null && (
-                <span className="muted">· teto {c.discountMaxPct}% (zera a margem)</span>
+                <span className="muted">
+                  · teto {c.discountMaxPct}%{' '}
+                  {c.discountParams?.ceilingEstimated ? '(margem estimada)' : '(zera a margem)'}
+                </span>
               )}
             </div>
             {c.outletStoreName && (
@@ -230,14 +233,13 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
               <div
                 className="muted"
                 style={{ marginTop: 4, fontSize: 10.5, fontFamily: 'ui-monospace, monospace' }}
-                title="Parâmetros usados no cálculo do desconto"
+                title="Parâmetros da regra da rede, usados para chegar neste número"
               >
-                margem {c.discountParams.marginPct}% · custo de carregar{' '}
-                {c.discountParams.carryingAnnualPct}%/ano · horizonte{' '}
-                {c.discountParams.horizonDays}d ({c.discountParams.horizonSource})
-                {c.discountParams.brandUnitsSold != null
-                  ? ` · marca ${c.discountParams.brandUnitsSold} un.`
-                  : ''}
+                margem {c.discountParams.marginPct}%
+                {c.discountParams.ceilingEstimated ? ' (estimada — falta o valor de compra)' : ''} ·{' '}
+                {c.discountParams.steps} degrau{c.discountParams.steps === 1 ? '' : 's'} de{' '}
+                {c.discountParams.stepPct} p.p.
+                {c.discountParams.stuckDays != null ? ` · ${c.discountParams.stuckDays}d parada` : ''}
               </div>
             )}
           </div>

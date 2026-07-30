@@ -76,6 +76,12 @@ export async function abcCurve(
   // O mesmo recorte vale para as DUAS dimensões: era esse o pedido — o filtro
   // não pode sumir quando se troca SKU por marca.
   const scoped = await productScopeWhere(group, categories);
+  // Receita do período SEM recorte, para a tela reconciliar o total.
+  const periodo = await prisma.saleItem.aggregate({
+    where: { sale: saleFilter },
+    _sum: { total: true },
+  });
+  const periodRevenue = round2(toNumber(periodo._sum.total) ?? 0);
 
   if (dimension === 'brand') {
     // Marca REAL do produto, extraída da descrição (o campo p.brand carrega o
@@ -107,18 +113,21 @@ export async function abcCurve(
       cur.units += g._sum.quantity ?? 0;
       byBrand.set(brand, cur);
     }
-    return abcFromItems(
-      [...byBrand.entries()].map(([brand, v]) => ({
-        key: brand,
-        label: brand,
-        brand: null,
-        category: null,
-        revenue: v.revenue,
-        units: v.units,
-      })),
-      days,
-      dimension,
-    );
+    return {
+      ...abcFromItems(
+        [...byBrand.entries()].map(([brand, v]) => ({
+          key: brand,
+          label: brand,
+          brand: null,
+          category: null,
+          revenue: v.revenue,
+          units: v.units,
+        })),
+        days,
+        dimension,
+      ),
+      periodRevenue,
+    };
   }
 
   const grouped = await prisma.saleItem.groupBy({
@@ -132,7 +141,8 @@ export async function abcCurve(
   });
   const byId = new Map(products.map((p) => [p.id, p]));
 
-  return abcFromItems(
+  return {
+    ...abcFromItems(
     // Fora do recorte, fora do relatório (e fora do total).
     grouped.filter((g) => byId.has(g.productId as string)).map((g) => {
       const p = byId.get(g.productId as string);
@@ -145,9 +155,11 @@ export async function abcCurve(
         units: g._sum.quantity ?? 0,
       };
     }),
-    days,
-    dimension,
-  );
+      days,
+      dimension,
+    ),
+    periodRevenue,
+  };
 }
 
 // ─── Cobertura de estoque geral e por marca (feedback 06) ────────────────────

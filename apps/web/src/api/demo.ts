@@ -109,6 +109,8 @@ interface Store { id: string; externalId: string; name: string; city: string; st
 interface Product {
   id: string; externalId: string; sku: string; description: string; brand: string;
   category: string; price: number; color: string; size: string; minStock: number;
+  /** Valor de compra do ERP; null quando o catálogo não trouxe. */
+  cost?: number | null;
 }
 
 const STORE_NAMES: [string, string, string][] = [
@@ -151,6 +153,7 @@ const products: Product[] = real
       brand: p.brand || '—',
       category: p.category || 'OUTROS',
       price: p.price,
+      cost: p.cost,
       color: '',
       size: '',
       minStock: 3,
@@ -480,8 +483,15 @@ function abc(
       revenue: x.revenue, units: x.units,
     }));
   }
+  // Receita do período sem recorte: é o denominador que faltava na tela.
+  // Da rede quando o dataset traz o agregado; da amostra quando não traz.
+  const periodRevenue = storeId
+    ? round2(soldItemsScoped(storeId).reduce((a, x) => a + x.revenue, 0))
+    : real
+      ? round2(real.totals.revenue30d)
+      : round2(soldItems().reduce((a, x) => a + x.revenue, 0));
   // A classificação (ponto médio, resumo por classe) é a MESMA do backend.
-  return abcFromItems(items, days, dimension);
+  return { ...abcFromItems(items, days, dimension), periodRevenue };
 }
 
 /**
@@ -510,6 +520,31 @@ const realWindowDays = real ? medirJanela() : 0;
 const effectiveDays = (days: number) => (real ? realWindowDays : days);
 
 /** Cobertura geral e por marca (feedback 06). */
+/**
+ * Estoque e venda da REDE no recorte, da MESMA fonte que a cobertura por loja
+ * do dashboard (`storeCategory`). Existe porque as duas telas mostravam
+ * coberturas diferentes: o dashboard lê a rede, e a tabela por marca só
+ * consegue ler a amostra de catálogo da demonstração — 2.144 un. contra
+ * 40.563. Galbe viu 1,5 mês aqui e ~26 meses lá. Agora a linha GERAL sai da
+ * mesma fonte, e as linhas por marca declaram que são a amostra.
+ */
+function redeNoRecorte(group: ProductGroup, category?: string | string[], storeId?: string) {
+  const porCategoria = real?.storeCategory;
+  if (!porCategoria || porCategoria.length === 0) return null;
+  const sel = asSet(category);
+  let stockUnits = 0;
+  let unitsSold = 0;
+  for (const r of porCategoria) {
+    if (!matchesProductGroup(r.label, group)) continue;
+    if (sel && !sel.has(r.label)) continue;
+    const s = stores.find((x) => x.externalId === r.storeExt);
+    if (!s || (storeId && s.id !== storeId)) continue;
+    stockUnits += r.stockUnits;
+    unitsSold += r.soldUnits;
+  }
+  return { stockUnits, unitsSold };
+}
+
 function brandCoverageReport(rawDays: number, group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
   const days = effectiveDays(rawDays);
   const dentro = noRecorte(group, category);
@@ -530,16 +565,25 @@ function brandCoverageReport(rawDays: number, group: ProductGroup = 'todos', cat
   }
   const inputs = [...acc.entries()].map(([label, v]) => ({ key: label, label, ...v }));
   const rows = computeCoverage(inputs, days);
+  const naAmostra = {
+    stockUnits: rows.reduce((a, r) => a + r.stockUnits, 0),
+    unitsSold: rows.reduce((a, r) => a + r.unitsSold, 0),
+  };
+  // A linha GERAL vem da REDE, para bater com a cobertura do dashboard.
+  const rede = redeNoRecorte(group, category, storeId);
   const [total] = computeCoverage(
-    [{
-      key: '__total__',
-      label: 'GERAL',
-      stockUnits: rows.reduce((a, r) => a + r.stockUnits, 0),
-      unitsSold: rows.reduce((a, r) => a + r.unitsSold, 0),
-    }],
+    [{ key: '__total__', label: 'GERAL', ...(rede ?? naAmostra) }],
     days,
   );
-  return { days, total, rows };
+  return {
+    days,
+    total,
+    rows,
+    // Quando as linhas cobrem menos que o total, a tela precisa dizer.
+    ...(rede && rede.stockUnits > naAmostra.stockUnits
+      ? { sampled: { stockUnits: naAmostra.stockUnits, networkStockUnits: rede.stockUnits } }
+      : {}),
+  };
 }
 
 /** Vendas por dimensão em unidades E receita (feedback 10). */
@@ -1081,8 +1125,11 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           category: prod.category,
           unitsSold: scope.reduce((a, s) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
           currentStock: scope.reduce((a, s) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
-          unitCost: round2(prod.price * 0.55),
+          // Mesmo critério da API: custo do ERP quando existe, estimado quando
+          // falta — e o card diz qual dos dois é, porque o teto depende disso.
+          unitCost: prod.cost ?? round2(prod.price * 0.55),
           unitPrice: prod.price,
+          costEstimated: prod.cost == null,
           onOrderQty: onOrderQty(prod.id),
           demandHistory: demoDemandHistory(prod, scope, period),
         },

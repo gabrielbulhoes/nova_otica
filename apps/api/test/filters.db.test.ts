@@ -71,6 +71,21 @@ d('filtro por loja e por tipo de produto (integração com Postgres)', () => {
     expect(Math.abs(marcaTipo.totalRevenue - skuTipo.totalRevenue)).toBeLessThan(1);
   });
 
+  it('curva ABC devolve a receita do período SEM recorte, para a tela reconciliar', async () => {
+    // "Os números da curva ABC estão muito baixos" — estavam certos, e o que
+    // faltava era o denominador ao lado.
+    const recorte = await abcCurve(JANELA, undefined, 'product', 'principal');
+    expect(recorte.periodRevenue).toBeGreaterThan(0);
+    expect(recorte.periodRevenue!).toBeGreaterThanOrEqual(recorte.totalRevenue);
+
+    const tudo = await abcCurve(JANELA, undefined, 'product', 'todos');
+    // Sem recorte, o total do relatório encosta na receita do período.
+    expect(Math.abs(tudo.periodRevenue! - tudo.totalRevenue)).toBeLessThan(tudo.periodRevenue! * 0.05);
+    // E o mesmo denominador vale para a dimensão de marca.
+    const marca = await abcCurve(JANELA, undefined, 'brand', 'principal');
+    expect(marca.periodRevenue).toBeCloseTo(recorte.periodRevenue!, 2);
+  });
+
   it('giro: fora do recorte, fora do relatório', async () => {
     const r = await inventoryTurnover(JANELA, undefined, 'principal', [tipo]);
     expect(r.rows.length).toBeGreaterThan(0);

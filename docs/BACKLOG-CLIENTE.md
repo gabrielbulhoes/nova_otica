@@ -4,7 +4,7 @@ Itens que **não são código**: dependem de dado, acesso ou decisão do lado do
 cliente. Cada um trava alguma coisa do nosso lado, então o custo de ficar
 parado está declarado aqui em vez de virar surpresa na próxima reunião.
 
-Atualizado em 30/07/2026.
+Atualizado em 30/07/2026 (segunda leva do dia).
 
 ---
 
@@ -99,35 +99,44 @@ Login da demo: Galbe / Gabriel / Victor.
 
 ---
 
-## 6. Dois dados que limitam o desconto sugerido de liquidação
+## 6. A regra de desconto agora é da rede — e o que ainda falta para ela andar
 
 | | |
 |---|---|
-| **Responsável** | Galbe / Gabriel (junto ao ERP) |
+| **Responsável** | Galbe (regra) · Gabriel/Sellbie (os dois dados) |
 | **Trava** | A variação do desconto sugerido nos cards de liquidação |
-| **Situação** | Pendente |
+| **Situação** | Regra implementada; dois dados pendentes |
 
-O feedback 05 do Galbe estava certo: o desconto saía quase constante. A
-**fórmula** foi corrigida (horizonte por cobertura → tempo parado → padrão,
-com fator de marca, e todos os parâmetros na tela). O que ainda achata o
-resultado são **dois dados que faltam**, não a conta:
+Galbe mandou o parâmetro em 30/07 e ele **substituiu** a nossa conta de custo
+de carregamento:
 
-**a) Custo de compra real.** Só **23,1%** dos produtos da amostra têm
-`valor_compra` preenchido. Nos outros 77% o custo é estimado em 55% do preço,
-o que fixa a margem em 45% — e o **teto** do desconto sai 45% em quase todo
-card. Com o custo real vindo do CDS, o teto passa a ser o de cada peça.
+> *"Nossa regra atual pra promocionar são as peças fora de coleção do
+> fornecedor. E o desconto aumenta 10% a cada 90 dias. Os descontos iniciam com
+> 20% ou 30%, depende do preço cheio. Se for abaixo de 1.000 eu coloco 20%,
+> acima de 1.000 eu inicio com 30%."*
 
-**b) Data de entrada do item em estoque.** Hoje o "tempo parado" é medido
-desde a **primeira aparição do card** no lote de geração — e o histórico de
-lotes começou este mês. Com 7 a 26 dias de "parado", a conta de custo de
-carregar dá ~1% do preço e **60 dos 65 cards caem no piso de 5%**. O sinal de
-tempo que a fórmula precisa é a data em que a peça entrou na loja. Se o CDS
-expõe esse campo (`estoquegrade` ou equivalente), a variação aparece
-imediatamente; se não expõe, ele se constrói sozinho com alguns meses de
-histórico de sync nosso.
+É o que está na tela hoje: base 20% ou 30% pela faixa de preço, +10 pontos
+percentuais a cada 90 dias parada, limitado pelo desconto que zera a margem.
 
-Nada disso é bloqueio para usar a tela: o desconto sugerido, o teto, o destino
-e a rota de transferência já estão lá, com os parâmetros à vista.
+Faltam **três coisas** para a regra funcionar inteira:
+
+**a) A marcação de "fora de coleção".** A regra dele vale para peça fora de
+coleção do fornecedor, e esse dado não existe no que consumimos do ERP. O
+gatilho hoje é o nosso card de LIQUIDAÇÃO (estoque sem giro), e a tela declara
+isso. Se o CDS tiver o campo — ou se vier nos catálogos dos fornecedores —, o
+gatilho passa a ser o certo.
+
+**b) Data de entrada da peça em estoque.** É o que move a peça de degrau. Hoje
+o "tempo parada" é medido desde a primeira aparição do card, e esse histórico
+começou este mês: com 7 a 26 dias, todos os cards ficam no degrau inicial (20%
+ou 30%). Com a data real do ERP, os degraus de 90, 180 e 270 dias aparecem no
+mesmo dia.
+
+**c) Custo de compra real.** Só **23%** dos produtos têm `valor_compra`. Nos
+outros, o custo é estimado em 55% do preço, a margem sai 45% e é ela que vira o
+TETO. Isso já **corta** a regra: uma peça acima de R$ 1.000 parada há 180 dias
+pediria 50%, e o teto estimado a limita em 45%. A tela avisa quando o teto veio
+de custo estimado — mas o número certo depende do ERP.
 
 ---
 
@@ -177,3 +186,5 @@ documentada e rastreável.
 | Origem do lote de geração | Nasce do **cron das 6h**. Sync manual também gera lote, marcado como MANUAL | 29/07 · Gabriel |
 | Lente nas telas de operação | Sai por padrão de Estoque, Produtos e Alertas, com seletor no topo do console para trazer de volta. **Não foi apagada**: é estoque real (o print mostrava 56 un. de um antirreflexo) e o módulo do laboratório vai precisar dela | 29/07 · Galbe |
 | Categorias vazias no filtro | Removidas. O filtro de tipo de produto só oferece **ARMACAO, OCULOS e RELOGIO** dentro do recorte principal — clicar em "Lentes" e ver 0 produtos era o defeito | 30/07 · Galbe |
+| Régua do desconto de liquidação | É a **da rede**: 20% abaixo de R$ 1.000, 30% de R$ 1.000 para cima, +10 p.p. a cada 90 dias parada, com teto na margem. Substituiu a nossa conta de custo de carregamento | 30/07 · Galbe |
+| Curva ABC "muito baixa" | Não estava baixa: o recorte de óculos, armação e relógio é **43%** da receita da rede (R$ 470.150 de R$ 1.095.377). Faltava o denominador na tela, que agora aparece ao lado do total | 30/07 · Gabriel |

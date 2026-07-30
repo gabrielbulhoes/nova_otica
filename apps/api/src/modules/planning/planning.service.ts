@@ -111,7 +111,10 @@ export async function planningInputs(
   const scoped = products.filter((p) => matchesProductGroup(p.category, group));
   return scoped.map((p) => {
     const price = toNumber(p.price) ?? 0;
-    const cost = toNumber(p.cost) ?? round2(price * 0.55);
+    // O valor de compra vem do ERP em parte do catálogo. Onde falta, estimamos
+    // — e marcamos, porque é ele que define o TETO do desconto de liquidação.
+    const custoReal = toNumber(p.cost);
+    const cost = custoReal ?? round2(price * 0.55);
     const unitsSold = soldBy.get(p.id) ?? 0;
     const recentUnits = Math.min(recentBy.get(p.id) ?? 0, unitsSold);
     const demandHistory: DemandHistory = {
@@ -131,6 +134,7 @@ export async function planningInputs(
       currentStock: stockBy.get(p.id) ?? 0,
       unitCost: cost,
       unitPrice: price,
+      costEstimated: custoReal == null,
       onOrderQty: onOrderBy.get(p.id) ?? 0,
       demandHistory,
     };

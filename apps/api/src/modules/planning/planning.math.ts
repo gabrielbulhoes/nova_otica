@@ -85,41 +85,41 @@ export function marginPct(unitPrice: number, unitCost: number): number {
 }
 
 /**
- * Desconto sugerido para liquidar, e o teto que ainda faz sentido.
+ * Desconto sugerido para liquidar — a REGRA DA REDE, dita pelo cliente.
  *
- * Feedback 05 do Galbe: "sugere liquidar — mas liquidar como? (desconto
- * sugerido)". Sem um número, o card empurra a decisão de volta para quem já
- * não sabia decidir.
+ * Galbe, 30/07: "Esse desconto eu vou sugerir um parâmetro, se não vai ficar
+ * meio que na doida e não é legal." E mandou o parâmetro:
  *
- * A conta compara duas alternativas reais:
- * - VENDER AGORA com desconto d: entra `preço × (1 − d)` hoje;
- * - SEGURAR: o item continua parado consumindo custo de carregamento, e o
- *   dinheiro que ele imobiliza não volta.
+ *   • promoção vale para peça FORA DE COLEÇÃO do fornecedor;
+ *   • começa em 20% quando o preço cheio é abaixo de R$ 1.000;
+ *   • começa em 30% quando o preço cheio é R$ 1.000 ou mais;
+ *   • sobe 10 pontos percentuais a cada 90 dias.
  *
- * O TETO é o desconto que zera a margem — abaixo do custo a rede perde
- * dinheiro em cima da própria liquidação, e isso nunca é sugestão automática.
- * O SUGERIDO é a parcela do teto proporcional a quão parado o item está,
- * medida pelo custo de carregar até o horizonte: item que ficaria dois anos
- * encalhado justifica desconto perto do teto; item de giro lento mas real
- * justifica pouco.
+ * A versão anterior calculava o desconto pelo custo de carregar o estoque. A
+ * conta era defensável e a régua era nossa — esta é da rede, que liquida óculos
+ * há mais tempo do que nós. Onde as duas discordam, a da rede vence.
  *
- * `coverageDays` nulo = sem giro nenhum (estoque morto): vai direto ao teto.
+ * Duas coisas que a regra não diz e a tela precisa dizer:
+ *  1. "Fora de coleção" é um dado do fornecedor que ainda não temos. O gatilho
+ *     aqui é o card de LIQUIDAÇÃO (estoque sem giro) — está declarado na tela.
+ *  2. O TETO continua sendo o desconto que zera a margem: nenhuma sugestão
+ *     automática manda vender abaixo do custo. Quando o custo de compra não
+ *     veio do ERP (77% do catálogo hoje), o teto é estimado e a tela avisa.
  */
 export interface DiscountInput {
   unitPrice: number;
   unitCost: number;
-  /** Cobertura em dias; null = sem giro nenhum (estoque morto). */
+  /** Cobertura em dias; null = sem giro nenhum. Mantido para compatibilidade. */
   coverageDays: number | null;
   /**
-   * Dias desde que a peça foi sinalizada como parada — vem do lote de geração
-   * (primeira aparição do card). É o único sinal de TEMPO que temos: a data de
-   * entrada da peça em estoque não vem do ERP na grade que consumimos.
+   * Dias parada. Hoje vem do lote de geração (primeira aparição do card) — a
+   * data de entrada da peça em estoque não vem na grade do ERP que
+   * consumimos. É o que move a peça de degrau na regra dos 90 dias.
    */
   stuckDays?: number | null;
-  /**
-   * Giro da MARCA na rede, em unidades no período. Marca que vende bem escoa
-   * com menos desconto; marca parada precisa de mais.
-   */
+  /** true quando o custo é estimado (o ERP não trouxe o valor de compra). */
+  costEstimated?: boolean;
+  /** Giro da MARCA na rede, em unidades no período — informativo na tela. */
   brandUnitsSold?: number;
 }
 
@@ -129,40 +129,38 @@ export interface DiscountAdvice {
   rationale: string;
   /** Os parâmetros usados, para a tela poder mostrar de onde saiu o número. */
   params: {
+    /** Degrau inicial da regra: 20% ou 30%. */
+    basePct: number;
+    /** Faixa de preço que definiu o degrau inicial. */
+    priceBand: 'abaixo de R$ 1.000' | 'R$ 1.000 ou mais';
+    /** Quanto sobe por degrau (p.p.) e de quantos em quantos dias. */
+    stepPct: number;
+    stepDays: number;
+    /** Quantos degraus já subiu pelo tempo parado. */
+    steps: number;
+    stuckDays: number | null;
+    /** Margem bruta (%) — é ela que define o teto. */
     marginPct: number;
-    carryingAnnualPct: number;
-    horizonDays: number;
-    horizonSource: 'cobertura' | 'tempo parado' | 'padrão';
+    /** true quando o teto saiu de um custo estimado, não do valor de compra. */
+    ceilingEstimated: boolean;
     brandUnitsSold: number | null;
   };
 }
 
-/**
- * Desconto sugerido para liquidar, e o teto que ainda faz sentido.
- *
- * O TETO é o desconto que zera a margem: abaixo do custo a rede perde dinheiro
- * na própria liquidação, e isso nunca é sugestão automática.
- *
- * O SUGERIDO é quanto se economiza deixando de CARREGAR a peça até o fim do
- * horizonte de encalhe. Não faz sentido dar mais desconto do que se economiza.
- *
- * De onde vem o horizonte, em ordem de qualidade do sinal:
- *  1. cobertura, quando a peça tem algum giro (o melhor sinal);
- *  2. tempo parado — dias desde que o card apareceu —, projetado para frente:
- *     peça sinalizada há 90 dias tende a levar outros 90 para sair;
- *  3. padrão de 12 meses, quando não há nem giro nem histórico.
- *
- * Correção do feedback 05 (Galbe, 30/07): "os descontos estão padrão e bem
- * próximos, o que sugere que não está sendo aplicada nenhuma lógica por tempo
- * de estoque". Estava certo — a versão anterior usava 730 dias fixos para todo
- * estoque morto, então o número dependia só da razão custo/preço e saía 28%
- * para quase tudo. Agora o horizonte varia por peça, e a marca ajusta.
- */
+/** Degrau inicial da regra da rede, pela faixa de preço cheio. */
+export const DISCOUNT_RULE = {
+  priceBreak: 1000,
+  baseBelow: 20,
+  baseFrom: 30,
+  stepPct: 10,
+  stepDays: 90,
+} as const;
+
 export function suggestedDiscount(
   unitPriceOrInput: number | DiscountInput,
   unitCost?: number,
   coverageDays?: number | null,
-  cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
+  _cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
 ): DiscountAdvice {
   const input: DiscountInput =
     typeof unitPriceOrInput === 'number'
@@ -171,81 +169,55 @@ export function suggestedDiscount(
 
   const margem = marginPct(input.unitPrice, input.unitCost);
   const maxPct = Math.max(0, Math.floor(margem));
-  const carryingAnnualPct = Math.max(0, cfg.carryingCostAnnualPct);
+  const ceilingEstimated = input.costEstimated === true;
+  const acimaDaQuebra = input.unitPrice >= DISCOUNT_RULE.priceBreak;
+  const basePct = acimaDaQuebra ? DISCOUNT_RULE.baseFrom : DISCOUNT_RULE.baseBelow;
+  const priceBand: DiscountAdvice['params']['priceBand'] = acimaDaQuebra
+    ? 'R$ 1.000 ou mais'
+    : 'abaixo de R$ 1.000';
+  const parada = input.stuckDays != null && input.stuckDays > 0 ? input.stuckDays : null;
+  const steps = parada ? Math.floor(parada / DISCOUNT_RULE.stepDays) : 0;
+
+  const params: DiscountAdvice['params'] = {
+    basePct,
+    priceBand,
+    stepPct: DISCOUNT_RULE.stepPct,
+    stepDays: DISCOUNT_RULE.stepDays,
+    steps,
+    stuckDays: parada,
+    marginPct: margem,
+    ceilingEstimated,
+    brandUnitsSold: input.brandUnitsSold ?? null,
+  };
 
   if (maxPct <= 0) {
     return {
       suggestedPct: 0,
       maxPct: 0,
       rationale: 'Sem margem para desconto — avalie devolução ao fornecedor ou bonificação.',
-      params: {
-        marginPct: margem,
-        carryingAnnualPct,
-        horizonDays: 0,
-        horizonSource: 'padrão',
-        brandUnitsSold: input.brandUnitsSold ?? null,
-      },
+      params,
     };
   }
 
-  // ── Horizonte: quanto tempo a peça ainda ficaria parada ────────────────────
-  let horizonDays: number;
-  let horizonSource: DiscountAdvice['params']['horizonSource'];
-  if (input.coverageDays != null && input.coverageDays > 0) {
-    horizonDays = input.coverageDays;
-    horizonSource = 'cobertura';
-  } else if (input.stuckDays != null && input.stuckDays > 0) {
-    // Projeta para frente o tempo já parado: quem não saiu em 90 dias tende a
-    // levar outros 90. Mínimo de 30 para não sugerir desconto simbólico.
-    horizonDays = Math.max(30, input.stuckDays);
-    horizonSource = 'tempo parado';
-  } else {
-    horizonDays = 365;
-    horizonSource = 'padrão';
-  }
-  horizonDays = Math.min(horizonDays, 730);
+  const pelaRegra = basePct + DISCOUNT_RULE.stepPct * steps;
+  const suggestedPct = Math.min(pelaRegra, maxPct);
+  const limitadoPeloTeto = pelaRegra > maxPct;
 
-  // Custo de carregar UMA unidade por esse horizonte, em % do preço.
-  const custoCarregarPct =
-    input.unitPrice > 0 ? (carryingCost(input.unitCost, horizonDays, cfg) / input.unitPrice) * 100 : 0;
-
-  // Ajuste pela marca: quem vende bem escoa com menos desconto. O fator vai de
-  // 0,7 (marca forte na rede) a 1,3 (marca sem giro), e o teto sempre manda.
-  const giroMarca = input.brandUnitsSold ?? null;
-  const fator =
-    giroMarca == null ? 1 : giroMarca >= 50 ? 0.7 : giroMarca >= 15 ? 0.85 : giroMarca >= 5 ? 1 : 1.3;
-
-  const suggestedPct = Math.max(5, Math.min(maxPct, Math.round(custoCarregarPct * fator)));
-
-  const meses = Math.max(1, Math.round(horizonDays / 30));
-  const comoMediu =
-    horizonSource === 'cobertura'
-      ? `No ritmo atual sairia em ~${meses} ${meses === 1 ? 'mês' : 'meses'}`
-      : horizonSource === 'tempo parado'
-        ? `Parado há ${input.stuckDays} dias; projetando o mesmo à frente (~${meses} ${meses === 1 ? 'mês' : 'meses'})`
-        : 'Sem giro e sem histórico de quanto tempo está parado; horizonte padrão de 12 meses';
-  const comoMarca =
-    giroMarca == null
-      ? ''
-      : fator < 1
-        ? ` A marca vendeu ${giroMarca} un. no período, então escoa com menos desconto.`
-        : fator > 1
-          ? ` A marca vendeu só ${giroMarca} un. no período, então precisa de mais.`
-          : '';
-
-  // Quando a conta dá menos que o piso, dizer isso: o número na tela (5%) não
-  // pode contradizer a explicação ("custa 1% do preço") sem uma palavra.
-  const bruto = Math.round(custoCarregarPct * fator);
-  const noPiso = bruto < 5 && suggestedPct === 5;
-  const comoPiso = noPiso
-    ? ' Abaixo disso o desconto não move o cliente, então 5% é o mínimo sugerido.'
+  const degrau =
+    steps > 0
+      ? ` Parada há ${parada} dias: ${steps} ${steps === 1 ? 'degrau' : 'degraus'} de ${DISCOUNT_RULE.stepPct} p.p. (${DISCOUNT_RULE.stepDays} dias cada), então ${basePct}% + ${DISCOUNT_RULE.stepPct * steps} = ${pelaRegra}%.`
+      : parada
+        ? ` Parada há ${parada} dias — ainda no degrau inicial; sobe ${DISCOUNT_RULE.stepPct} p.p. aos ${DISCOUNT_RULE.stepDays} dias.`
+        : ' Sem histórico de quanto tempo está parada: fica no degrau inicial.';
+  const teto = limitadoPeloTeto
+    ? ` A regra pedia ${pelaRegra}%, mas ${maxPct}% já zera a margem${ceilingEstimated ? ' (margem estimada — falta o valor de compra no ERP)' : ''}.`
     : '';
 
   return {
     suggestedPct,
     maxPct,
-    rationale: `${comoMediu} — carregar até lá custa ${Math.round(custoCarregarPct)}% do preço.${comoMarca}${comoPiso}`,
-    params: { marginPct: margem, carryingAnnualPct, horizonDays, horizonSource, brandUnitsSold: giroMarca },
+    rationale: `Regra da rede: preço cheio ${priceBand}, começa em ${basePct}%.${degrau}${teto}`,
+    params,
   };
 }
 
@@ -543,6 +515,8 @@ export interface ProductMetricsInput {
   unitCost: number;
   /** Preço de venda unitário (R$). */
   unitPrice: number;
+  /** true quando o custo é ESTIMADO — o ERP não trouxe o valor de compra. */
+  costEstimated?: boolean;
   /** Unidades já pedidas ao fornecedor e ainda não recebidas (a caminho). */
   onOrderQty?: number;
   /** Histórico para previsão; ausente = média simples (unitsSold/days). */
@@ -562,6 +536,8 @@ export interface ProductPlan {
   reorderPoint: number;
   targetStock: number;
   unitCost: number;
+  /** true quando o custo é estimado (falta o valor de compra no ERP). */
+  costEstimated?: boolean;
   /** Capital imobilizado neste item (estoque atual × custo). */
   stockValue: number;
   /** Capital imobilizado acima do alvo de cobertura (excesso/ocioso). */
@@ -742,6 +718,7 @@ export function analyzeProduct(
     carryingCost30d: carryingCost(stockValue, 30, cfg),
     excessCarryingCost30d: carryingCost(excessValue, 30, cfg),
     unitPrice: input.unitPrice,
+    costEstimated: input.costEstimated === true,
     marginPct: marginPct(input.unitPrice, input.unitCost),
     expectedMargin: expectedMargin(suggestedQty, input.unitPrice, input.unitCost),
     onOrderQty: onOrder,
@@ -1513,6 +1490,15 @@ export interface AbcResult {
   days: number;
   dimension: AbcDimension;
   totalRevenue: number;
+  /**
+   * Receita do MESMO período e da mesma loja, sem o recorte de produto.
+   *
+   * Galbe, 30/07: "os números da curva ABC estão muito baixos". Estavam certos
+   * — o recorte de óculos, armação e relógio é 43% da receita da rede, e a tela
+   * não dizia isso em lugar nenhum. Com este número ao lado, "baixo" vira
+   * "recortado", que é diferente.
+   */
+  periodRevenue?: number;
   summary: Record<'A' | 'B' | 'C', { items: number; revenue: number }>;
   rows: AbcRow[];
 }
@@ -1903,6 +1889,7 @@ export function buildDecisionCards(
         unitCost: p.unitCost,
         coverageDays: p.coverageDays,
         stuckDays: stuckDaysByProduct?.get(p.productId) ?? null,
+        costEstimated: p.costEstimated,
         brandUnitsSold: giroMarca,
       });
       const outlet = positionsByProduct
@@ -1938,7 +1925,9 @@ export function buildDecisionCards(
         productId: p.productId,
         description: p.description,
         brand: p.brand,
-        target: p.brand ?? 'Excesso na rede',
+        // O alvo é a MARCA de análise: `p.brand` é o fornecedor e sai "—" na
+        // maior parte do catálogo, o que virava "Alvo: —" na tela.
+        target: marca ?? 'Excesso na rede',
         quantity: p.currentStock,
         reason: p.friendlyReason,
         confidence: p.confidence,

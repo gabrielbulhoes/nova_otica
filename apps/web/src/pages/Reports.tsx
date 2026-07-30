@@ -269,6 +269,16 @@ export function Reports() {
 
       {((tab === 'abc' && dimension === 'brand') || tab === 'coverage') && <BrandScopeNote scope={scope} />}
 
+      {/* Por SKU o recorte também vale, e o total menor tem que ter explicação
+          na tela — não no suporte. */}
+      {tab === 'abc' && dimension === 'product' && scope !== 'todos' && abc.data?.periodRevenue != null && (
+        <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.35, marginBottom: 12 }}>
+          ℹ︎ O total abaixo é do recorte <strong>{scope === 'lentes' ? 'Lentes' : 'óculos, armações e relógios'}</strong>
+          {tipo ? <> · <strong>{tipo}</strong></> : null}. A receita da rede no mesmo período foi{' '}
+          {formatBRL(abc.data.periodRevenue)} — a diferença é lente, tratamento e demais categorias.
+        </div>
+      )}
+
       {tab === 'abc' ? (
         abc.isLoading ? (
           <Loading />
@@ -285,10 +295,19 @@ export function Reports() {
                 </div>
               ))}
               <div className="card stat">
-                <div className="label">Receita total</div>
+                <div className="label">Receita no recorte</div>
                 <div className="value" style={{ fontSize: 20 }}>
                   {formatBRL(abc.data.totalRevenue)}
                 </div>
+                {/* "Os números da curva ABC estão muito baixos" — estavam
+                    certos: é o recorte. Sem o denominador ao lado, "recortado"
+                    parecia "errado". */}
+                {abc.data.periodRevenue != null && abc.data.periodRevenue > 0 && (
+                  <div className="hint">
+                    {((abc.data.totalRevenue / abc.data.periodRevenue) * 100).toFixed(0)}% dos{' '}
+                    {formatBRL(abc.data.periodRevenue)} vendidos no período
+                  </div>
+                )}
               </div>
             </div>
 
@@ -390,6 +409,7 @@ export function Reports() {
                 <div className="hint">
                   {coverage.data.total.stockUnits.toLocaleString('pt-BR')} un. ÷{' '}
                   {coverage.data.total.monthlyUnits.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un./mês
+                  {' · '}mesma base do Dashboard
                 </div>
               </div>
               <div className="card stat">
@@ -403,6 +423,19 @@ export function Reports() {
                 <div className="hint">Com estoque e nenhuma venda no período</div>
               </div>
             </div>
+            {/* "Essa cobertura de estoque não bate com a cobertura média do
+                dashboard inicial da home" — batia, não: a linha GERAL lia a
+                amostra do catálogo e o dashboard lia a rede. Agora as duas leem
+                a rede, e onde a tabela por marca ainda é amostra, ela diz. */}
+            {coverage.data.sampled && (
+              <div className="banner warn" style={{ marginTop: 16, marginBottom: 0, fontSize: 12.5, lineHeight: 1.4 }}>
+                ⚠︎ A <strong>cobertura geral</strong> acima é da rede inteira (
+                {coverage.data.sampled.networkStockUnits.toLocaleString('pt-BR')} un.), a mesma base do
+                Dashboard. As linhas por marca abaixo saem da amostra de catálogo desta demonstração
+                estática ({coverage.data.sampled.stockUnits.toLocaleString('pt-BR')} un.), então elas
+                não somam o total. No sistema em produção as duas leem a mesma base.
+              </div>
+            )}
             <div className="card" style={{ marginTop: 16, padding: 0 }}>
               <table>
                 <thead>
@@ -441,11 +474,54 @@ export function Reports() {
           <Loading />
         ) : brandMix.data ? (
           <>
-            <p className="muted" style={{ marginTop: 0 }}>
-              Unidades vendidas / em estoque de cada marca por bandeira. O selo{' '}
-              <span className="badge amber">remanejar</span> marca bandeiras com estoque da marca{' '}
-              <strong>parado</strong> (sem venda no período) enquanto ela vende em outra bandeira.
-            </p>
+            {/* "Esse relatório não tá claro o que diz." Estava mesmo: a
+                célula "51 / 457" não dizia o que era cada número, e o título
+                não dizia que pergunta o relatório responde. */}
+            <div className="card" style={{ marginBottom: 12 }}>
+              <div className="section-title" style={{ marginBottom: 4 }}>
+                Onde cada marca VENDE e onde ela está PARADA
+              </div>
+              <p className="muted" style={{ margin: 0, fontSize: 12.5, lineHeight: 1.45 }}>
+                Serve para uma decisão só: <strong>tirar estoque da bandeira onde a marca não sai e
+                mandar para a bandeira onde ela sai</strong>. Cada célula tem dois números —{' '}
+                <strong style={{ color: 'var(--text)' }}>vendidas</strong> no período e{' '}
+                <span className="muted">em estoque</span> hoje. Estoque alto com venda zero numa
+                bandeira, enquanto a marca vende em outra, ganha o selo{' '}
+                <span className="badge amber">remanejar</span>.
+              </p>
+              {(() => {
+                const sinalizadas = brandMix.data!.rows.filter((r) => r.moveFrom.length > 0);
+                if (sinalizadas.length === 0) return null;
+                // Quando quase todo o remanejo aponta para a MESMA bandeira, o
+                // achado do relatório é essa bandeira — e não 39 selos iguais
+                // espalhados pela tabela.
+                const porBandeira = new Map<string, number>();
+                for (const r of sinalizadas)
+                  for (const b of r.moveFrom) porBandeira.set(b, (porBandeira.get(b) ?? 0) + 1);
+                const [dominante, quantas] = [...porBandeira.entries()].sort((a, b) => b[1] - a[1])[0];
+                const concentrada = quantas / sinalizadas.length >= 0.6;
+                const unidades = sinalizadas.reduce(
+                  (a, r) => a + (r.moveFrom.includes(dominante) ? r.byBanner[dominante]?.stockUnits ?? 0 : 0),
+                  0,
+                );
+                return (
+                  <p style={{ margin: '8px 0 0', fontSize: 12.5 }}>
+                    <strong>{sinalizadas.length}</strong>{' '}
+                    {sinalizadas.length > 1 ? 'marcas têm' : 'marca tem'} estoque parado em alguma
+                    bandeira enquanto {sinalizadas.length > 1 ? 'vendem' : 'vende'} em outra.
+                    {concentrada && (
+                      <>
+                        {' '}
+                        <strong>{quantas} delas apontam para a mesma bandeira: {dominante}</strong>, que
+                        segura {unidades.toLocaleString('pt-BR')} unidades dessas marcas sem nenhuma
+                        venda no período. É o maior bloco de capital parado do relatório — vale
+                        confirmar com uma janela maior de vendas antes de mover.
+                      </>
+                    )}
+                  </p>
+                );
+              })()}
+            </div>
             <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
               <table>
                 <thead>
@@ -453,10 +529,18 @@ export function Reports() {
                     <th>Marca</th>
                     {brandMix.data.banners.map((b) => (
                       <th key={b} className="num">
-                        {b}
+                        <div>{b}</div>
+                        <div className="muted" style={{ fontWeight: 400, fontSize: 10, textTransform: 'none' }}>
+                          vendidas · estoque
+                        </div>
                       </th>
                     ))}
-                    <th className="num">Total</th>
+                    <th className="num">
+                      <div>Total</div>
+                      <div className="muted" style={{ fontWeight: 400, fontSize: 10, textTransform: 'none' }}>
+                        vendidas · estoque
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -476,8 +560,16 @@ export function Reports() {
                         return (
                           <td key={b} className="num">
                             {cell ? (
-                              <span className={flagged ? 'badge amber' : undefined} title={flagged ? 'Estoque parado: remanejar' : undefined}>
-                                {cell.unitsSold} / {cell.stockUnits.toLocaleString('pt-BR')}
+                              <span
+                                className={flagged ? 'badge amber' : undefined}
+                                title={
+                                  flagged
+                                    ? `${cell.unitsSold} vendidas e ${cell.stockUnits} em estoque: parada aqui, mas a marca vende em outra bandeira`
+                                    : `${cell.unitsSold} vendidas · ${cell.stockUnits} em estoque`
+                                }
+                              >
+                                <strong>{cell.unitsSold}</strong>
+                                <span className="muted"> · {cell.stockUnits.toLocaleString('pt-BR')}</span>
                               </span>
                             ) : (
                               <span className="muted">—</span>
@@ -486,7 +578,8 @@ export function Reports() {
                         );
                       })}
                       <td className="num">
-                        <strong>{r.total.unitsSold}</strong> / {r.total.stockUnits.toLocaleString('pt-BR')}
+                        <strong>{r.total.unitsSold}</strong>
+                        <span className="muted"> · {r.total.stockUnits.toLocaleString('pt-BR')}</span>
                       </td>
                     </tr>
                   ))}
@@ -501,7 +594,7 @@ export function Reports() {
               </table>
             </div>
             <p className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>
-              Célula = un. vendidas / un. em estoque. Mostrando as 40 primeiras marcas (candidatas a remanejo primeiro); o CSV leva tudo.
+              Mostrando as 40 primeiras marcas, candidatas a remanejo primeiro; o CSV leva todas.
             </p>
           </>
         ) : null

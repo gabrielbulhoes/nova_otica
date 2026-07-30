@@ -101,11 +101,16 @@ describe('demo: relatórios da Onda 2', () => {
     expect(classes).toMatch(/^A+B*C*$/);
   });
 
-  it('/reports/coverage traz linha GERAL coerente com as marcas', () => {
+  it('/reports/coverage traz linha GERAL da REDE, e as marcas nunca a ultrapassam', () => {
     const r = get('/reports/coverage');
     const somaEstoque = r.rows.reduce((a: number, x: any) => a + x.stockUnits, 0);
-    expect(r.total.stockUnits).toBe(somaEstoque);
     expect(r.total.label).toBe('GERAL');
+    // O GERAL vem da rede (mesma base do dashboard) e as linhas por marca vêm
+    // do catálogo carregado: iguais quando não há amostragem, menores quando há
+    // — e nesse caso a resposta declara em `sampled`.
+    expect(somaEstoque).toBeLessThanOrEqual(r.total.stockUnits);
+    if (r.sampled) expect(r.sampled.stockUnits).toBe(somaEstoque);
+    else expect(r.total.stockUnits).toBe(somaEstoque);
     for (const row of r.rows) expect(['CRITICAL', 'HEALTHY', 'HIGH', 'EXCESS']).toContain(row.level);
   });
 
@@ -437,5 +442,49 @@ describe('demo: card de liquidação virando transferência (feedbacks 3.0, item
     }
     // A entrega do item 05 é a ação: pelo menos um card precisa ter rota completa.
     expect(liq.some((c) => c.outletFromStoreId && c.outletQuantity > 0)).toBe(true);
+  });
+});
+
+
+describe('demo: os números batem entre as telas (feedbacks 30/07)', () => {
+  it('curva ABC devolve o denominador do período — "muito baixos" era o recorte', () => {
+    const r = get('/reports/abc', { dimension: 'product', group: 'principal' });
+    expect(r.periodRevenue).toBeGreaterThan(0);
+    expect(r.periodRevenue).toBeGreaterThanOrEqual(r.totalRevenue);
+    // O recorte de óculos/armação/relógio é uma FATIA da receita, não o todo.
+    expect(r.totalRevenue).toBeLessThan(r.periodRevenue);
+  });
+
+  it('a cobertura geral do relatório usa a MESMA base da cobertura do dashboard', () => {
+    // Era o furo do feedback 02: o relatório lia a amostra do catálogo e o
+    // dashboard lia a rede, então um dizia 1,5 mês e o outro ~26 meses.
+    const rel = get('/reports/coverage', { group: 'principal' });
+    const dash = get('/dashboard/coverage', { group: 'principal' });
+    const estoqueDash = (dash.rows as any[]).reduce((a, x) => a + x.stockUnits, 0);
+    expect(rel.total.stockUnits).toBe(estoqueDash);
+    const vendidasDash = (dash.rows as any[]).reduce((a, x) => a + x.unitsSold, 0);
+    expect(rel.total.unitsSold).toBe(vendidasDash);
+  });
+
+  it('quando as linhas por marca são amostra, a resposta declara isso', () => {
+    const rel = get('/reports/coverage', { group: 'principal' });
+    if (rel.sampled) {
+      expect(rel.sampled.stockUnits).toBeLessThan(rel.sampled.networkStockUnits);
+      expect(rel.total.stockUnits).toBe(rel.sampled.networkStockUnits);
+    }
+  });
+
+  it('o desconto do card segue a regra da rede: 20%/30% pelo preço cheio', () => {
+    const board = get('/planning/decisions', { days: '90', group: 'principal' });
+    const liq = (board.cards as any[]).filter((c) => c.type === 'LIQUIDACAO' && c.discountPct > 0);
+    expect(liq.length).toBeGreaterThan(0);
+    for (const c of liq) {
+      const p = c.discountParams;
+      expect(p.stepPct).toBe(10);
+      expect(p.stepDays).toBe(90);
+      expect([20, 30]).toContain(p.basePct);
+      // O sugerido é a regra, limitada pelo teto que zera a margem.
+      expect(c.discountPct).toBe(Math.min(p.basePct + 10 * p.steps, c.discountMaxPct));
+    }
   });
 });

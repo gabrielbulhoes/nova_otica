@@ -849,12 +849,52 @@ describe('catálogo de marcas (fornecedor + mix por loja)', () => {
   });
 });
 
-describe('suggestedDiscount (feedback 05 — "liquidar como?")', () => {
-  it('nunca sugere desconto abaixo do custo: o teto é a margem', () => {
-    // Preço 200, custo 100 → margem 50%. O teto não pode passar disso.
-    const r = suggestedDiscount(200, 100, null);
-    expect(r.maxPct).toBe(50);
-    expect(r.suggestedPct).toBeLessThanOrEqual(r.maxPct);
+describe('suggestedDiscount — a REGRA DA REDE (parâmetro do Galbe, 30/07)', () => {
+  // "Nossa regra atual pra promocionar são as peças fora de coleção do
+  //  fornecedor. E o desconto aumenta 10% a cada 90 dias. Os descontos iniciam
+  //  com 20% ou 30%, depende do preço cheio. Se for abaixo de 1.000 eu coloco
+  //  20%, acima de 1.000 eu inicio com 30%."
+
+  it('preço cheio abaixo de R$ 1.000 começa em 20%', () => {
+    const r = suggestedDiscount({ unitPrice: 900, unitCost: 200, coverageDays: null });
+    expect(r.suggestedPct).toBe(20);
+    expect(r.params.basePct).toBe(20);
+    expect(r.params.priceBand).toBe('abaixo de R$ 1.000');
+  });
+
+  it('preço cheio de R$ 1.000 ou mais começa em 30% — a quebra é inclusiva', () => {
+    expect(suggestedDiscount({ unitPrice: 1000, unitCost: 200, coverageDays: null }).suggestedPct).toBe(30);
+    expect(suggestedDiscount({ unitPrice: 2500, unitCost: 500, coverageDays: null }).params.basePct).toBe(30);
+  });
+
+  it('sobe 10 p.p. a cada 90 dias parada, em degraus', () => {
+    const base = { unitPrice: 900, unitCost: 100, coverageDays: null };
+    expect(suggestedDiscount({ ...base, stuckDays: 89 }).suggestedPct).toBe(20);
+    expect(suggestedDiscount({ ...base, stuckDays: 90 }).suggestedPct).toBe(30);
+    expect(suggestedDiscount({ ...base, stuckDays: 200 }).suggestedPct).toBe(40);
+    expect(suggestedDiscount({ ...base, stuckDays: 270 }).suggestedPct).toBe(50);
+  });
+
+  it('o degrau é contado e devolvido, para a tela mostrar a régua', () => {
+    const r = suggestedDiscount({ unitPrice: 1500, unitCost: 300, coverageDays: null, stuckDays: 200 });
+    expect(r.params).toMatchObject({ basePct: 30, stepPct: 10, stepDays: 90, steps: 2, stuckDays: 200 });
+    expect(r.suggestedPct).toBe(50); // 30 + 2 × 10
+  });
+
+  it('o teto continua sendo a margem: a regra nunca manda vender abaixo do custo', () => {
+    // Margem de 25%: a regra pediria 30%, mas 25% já zera.
+    const r = suggestedDiscount({ unitPrice: 1000, unitCost: 750, coverageDays: null });
+    expect(r.maxPct).toBe(25);
+    expect(r.suggestedPct).toBe(25);
+    expect(r.rationale).toMatch(/zera a margem/i);
+  });
+
+  it('quando o teto vem de custo ESTIMADO, a explicação avisa', () => {
+    const r = suggestedDiscount({
+      unitPrice: 1000, unitCost: 750, coverageDays: null, costEstimated: true,
+    });
+    expect(r.params.ceilingEstimated).toBe(true);
+    expect(r.rationale).toMatch(/estimada/i);
   });
 
   it('sem margem, não sugere desconto — sugere outro caminho', () => {
@@ -864,65 +904,24 @@ describe('suggestedDiscount (feedback 05 — "liquidar como?")', () => {
     expect(r.rationale).toMatch(/devolução|bonificação/i);
   });
 
-  it('quanto mais tempo encalhado, maior o desconto justificado', () => {
-    const rapido = suggestedDiscount(200, 100, 60);
-    const lento = suggestedDiscount(200, 100, 600);
-    expect(lento.suggestedPct).toBeGreaterThan(rapido.suggestedPct);
+  it('sem histórico de tempo parada, fica no degrau inicial e diz isso', () => {
+    const r = suggestedDiscount({ unitPrice: 500, unitCost: 100, coverageDays: null });
+    expect(r.params.steps).toBe(0);
+    expect(r.params.stuckDays).toBeNull();
+    expect(r.rationale).toMatch(/degrau inicial/i);
   });
 
-  it('sem giro, o TEMPO PARADO passa a diferenciar — não sai constante', () => {
-    // Era o defeito que o Galbe apontou: 730 dias fixos para todo estoque
-    // morto faziam o número depender só da razão custo/preço, e saía 28% em
-    // quase tudo. Agora peça parada há mais tempo pede mais desconto.
-    const novo = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 30 });
-    const velho = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 400 });
-    expect(velho.suggestedPct).toBeGreaterThan(novo.suggestedPct);
-    expect(velho.params.horizonSource).toBe('tempo parado');
+  it('a explicação sempre nomeia a régua e acompanha o número', () => {
+    const r = suggestedDiscount({ unitPrice: 1200, unitCost: 400, coverageDays: null, stuckDays: 95 });
+    expect(r.rationale).toMatch(/regra da rede/i);
+    expect(r.rationale).toContain('30%');
+    expect(r.rationale).toContain('95 dias');
   });
 
-  it('marca que vende bem escoa com menos desconto', () => {
-    const base = { unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 400 };
-    const forte = suggestedDiscount({ ...base, brandUnitsSold: 200 });
-    const parada = suggestedDiscount({ ...base, brandUnitsSold: 1 });
-    expect(forte.suggestedPct).toBeLessThan(parada.suggestedPct);
-  });
-
-  it('devolve os parâmetros usados, para a tela poder explicar o número', () => {
-    const r = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 90 });
-    expect(r.params.marginPct).toBe(50);
-    expect(r.params.horizonDays).toBe(90);
-    expect(r.params.horizonSource).toBe('tempo parado');
-  });
-
-  it('quando a conta fica abaixo do piso, a explicação diz isso', () => {
-    // Sem esse aviso a tela mostrava 5% e o texto dizia "custa 1% do preço".
-    const r = suggestedDiscount({ unitPrice: 1000, unitCost: 100, coverageDays: 5 });
-    expect(r.suggestedPct).toBe(5);
-    expect(r.rationale).toMatch(/mínimo sugerido/i);
-  });
-
-  it('estoque morto sem sinal de tempo cai no horizonte padrão, e o tempo parado é que escala', () => {
-    // Sem cobertura e sem tempo parado não há informação de tempo nenhuma:
-    // o horizonte é o padrão de 1 ano, não o teto.
-    const morto = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null });
-    expect(morto.params.horizonSource).toBe('padrão');
-    expect(morto.params.horizonDays).toBe(365);
-    expect(morto.rationale).toMatch(/sem giro/i);
-
-    // O que escala o desconto é o tempo parado — foi disso que o Galbe reclamou
-    // ("não tá sendo aplicada nenhuma lógica por tempo de estoque").
-    const parado = suggestedDiscount({
-      unitPrice: 200,
-      unitCost: 100,
-      coverageDays: null,
-      stuckDays: 900,
-    });
-    expect(parado.params.horizonSource).toBe('tempo parado');
-    expect(parado.suggestedPct).toBeGreaterThan(morto.suggestedPct);
-  });
-
-  it('a explicação sempre acompanha o número', () => {
-    expect(suggestedDiscount(200, 100, 90).rationale.length).toBeGreaterThan(10);
+  it('a forma posicional antiga continua funcionando (compatibilidade)', () => {
+    const r = suggestedDiscount(200, 100, null);
+    expect(r.maxPct).toBe(50);
+    expect(r.suggestedPct).toBe(20);
   });
 });
 
