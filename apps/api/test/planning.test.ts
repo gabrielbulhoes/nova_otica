@@ -9,7 +9,9 @@ import {
   storeCarriesBrand,
   annotateCardAges,
   suggestedDiscount,
+  analysisBrand,
   bestOutletStore,
+  outletTransfer,
   buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
@@ -868,11 +870,55 @@ describe('suggestedDiscount (feedback 05 — "liquidar como?")', () => {
     expect(lento.suggestedPct).toBeGreaterThan(rapido.suggestedPct);
   });
 
-  it('estoque morto (sem giro) vai ao horizonte máximo', () => {
-    const morto = suggestedDiscount(200, 100, null);
-    const lento = suggestedDiscount(200, 100, 400);
-    expect(morto.suggestedPct).toBeGreaterThanOrEqual(lento.suggestedPct);
+  it('sem giro, o TEMPO PARADO passa a diferenciar — não sai constante', () => {
+    // Era o defeito que o Galbe apontou: 730 dias fixos para todo estoque
+    // morto faziam o número depender só da razão custo/preço, e saía 28% em
+    // quase tudo. Agora peça parada há mais tempo pede mais desconto.
+    const novo = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 30 });
+    const velho = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 400 });
+    expect(velho.suggestedPct).toBeGreaterThan(novo.suggestedPct);
+    expect(velho.params.horizonSource).toBe('tempo parado');
+  });
+
+  it('marca que vende bem escoa com menos desconto', () => {
+    const base = { unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 400 };
+    const forte = suggestedDiscount({ ...base, brandUnitsSold: 200 });
+    const parada = suggestedDiscount({ ...base, brandUnitsSold: 1 });
+    expect(forte.suggestedPct).toBeLessThan(parada.suggestedPct);
+  });
+
+  it('devolve os parâmetros usados, para a tela poder explicar o número', () => {
+    const r = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null, stuckDays: 90 });
+    expect(r.params.marginPct).toBe(50);
+    expect(r.params.horizonDays).toBe(90);
+    expect(r.params.horizonSource).toBe('tempo parado');
+  });
+
+  it('quando a conta fica abaixo do piso, a explicação diz isso', () => {
+    // Sem esse aviso a tela mostrava 5% e o texto dizia "custa 1% do preço".
+    const r = suggestedDiscount({ unitPrice: 1000, unitCost: 100, coverageDays: 5 });
+    expect(r.suggestedPct).toBe(5);
+    expect(r.rationale).toMatch(/mínimo sugerido/i);
+  });
+
+  it('estoque morto sem sinal de tempo cai no horizonte padrão, e o tempo parado é que escala', () => {
+    // Sem cobertura e sem tempo parado não há informação de tempo nenhuma:
+    // o horizonte é o padrão de 1 ano, não o teto.
+    const morto = suggestedDiscount({ unitPrice: 200, unitCost: 100, coverageDays: null });
+    expect(morto.params.horizonSource).toBe('padrão');
+    expect(morto.params.horizonDays).toBe(365);
     expect(morto.rationale).toMatch(/sem giro/i);
+
+    // O que escala o desconto é o tempo parado — foi disso que o Galbe reclamou
+    // ("não tá sendo aplicada nenhuma lógica por tempo de estoque").
+    const parado = suggestedDiscount({
+      unitPrice: 200,
+      unitCost: 100,
+      coverageDays: null,
+      stuckDays: 900,
+    });
+    expect(parado.params.horizonSource).toBe('tempo parado');
+    expect(parado.suggestedPct).toBeGreaterThan(morto.suggestedPct);
   });
 
   it('a explicação sempre acompanha o número', () => {
@@ -933,5 +979,77 @@ describe('bestOutletStore — reserva por marca (peça sem venda própria)', () 
   it('sem giro nem na peça nem na marca, não inventa destino', () => {
     const marcaMorta = marca.map((m) => ({ ...m, unitsSold: 0 }));
     expect(bestOutletStore(semGiro, undefined, marcaMorta)).toBeNull();
+  });
+});
+
+
+describe('outletTransfer (feedback 05 — o card de liquidação virar transferência)', () => {
+  it('a origem é quem MENOS escoa, não quem tem mais saldo', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 12, currentStock: 3 },
+      // Muito saldo, mas ainda vende: não é o pior encalhe.
+      { storeId: 'grande', storeName: 'Grande', unitsSold: 8, currentStock: 20 },
+      // Menos saldo, zero saída: é daqui que a peça precisa sair.
+      { storeId: 'parada', storeName: 'Parada', unitsSold: 0, currentStock: 6 },
+    ];
+    const t = outletTransfer(pos, 'destino');
+    expect(t?.fromStoreId).toBe('parada');
+    // Sem nenhuma venda no período, vai o saldo inteiro.
+    expect(t?.quantity).toBe(6);
+  });
+
+  it('deixa na origem o que ela provou escoar no período', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 9, currentStock: 1 },
+      { storeId: 'lenta', storeName: 'Lenta', unitsSold: 2, currentStock: 10 },
+    ];
+    expect(outletTransfer(pos, 'destino')?.quantity).toBe(8);
+  });
+
+  it('empate na taxa desempata pelo saldo encalhado', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 5, currentStock: 0 },
+      { storeId: 'p', storeName: 'P', unitsSold: 0, currentStock: 4 },
+      { storeId: 'g', storeName: 'G', unitsSold: 0, currentStock: 15 },
+    ];
+    expect(outletTransfer(pos, 'destino')?.fromStoreId).toBe('g');
+  });
+
+  it('sem origem possível, não inventa transferência', () => {
+    // Só o destino tem saldo: não há de onde tirar.
+    const pos = [{ storeId: 'destino', storeName: 'Destino', unitsSold: 4, currentStock: 7 }];
+    expect(outletTransfer(pos, 'destino')).toBeNull();
+    expect(outletTransfer([], 'destino')).toBeNull();
+  });
+
+  it('nunca propõe transferência de zero unidade', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 3, currentStock: 0 },
+      // Vendeu mais do que tem em saldo: a subtração daria negativo.
+      { storeId: 'origem', storeName: 'Origem', unitsSold: 9, currentStock: 2 },
+    ];
+    expect(outletTransfer(pos, 'destino')?.quantity).toBe(1);
+  });
+});
+
+
+describe('analysisBrand (o balde de marca do fornecedor vazio)', () => {
+  it('a grife da descrição tem precedência sobre o fornecedor', () => {
+    expect(analysisBrand('MU52YS ZVN10R 54 OCULOS MIU MIU', 'OCULOS', 'FORNECEDOR X')).toBe('MIU MIU');
+  });
+
+  it('em lente, onde não se extrai grife, vale o fornecedor', () => {
+    // Na lente a descrição é a LINHA do produto, não a marca — por isso o
+    // extractBrand devolve null ali e o fornecedor é o dado bom.
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', 'ZEISS')).toBe('ZEISS');
+  });
+
+  it('fornecedor vazio ou "—" NÃO vira marca — era o balde único', () => {
+    // O campo brand do CDS é o fornecedor e vem assim na maior parte do
+    // catálogo real. Agrupar por ele dava "giro da marca" de 1.120 un. para uma
+    // peça que nunca vendeu, e mandava todo card para a mesma filial.
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', '—')).toBeNull();
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', '   ')).toBeNull();
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', null)).toBeNull();
   });
 });

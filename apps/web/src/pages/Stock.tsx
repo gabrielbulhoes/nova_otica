@@ -13,7 +13,7 @@ export function Stock() {
   const [onlyAvailable, setOnlyAvailable] = useState(false);
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
-  const categoryList = useQuery({ queryKey: ['categories'], queryFn: getCategories });
+  const categoryList = useQuery({ queryKey: ['categories', scope], queryFn: () => getCategories({ group: scope }) });
   const stock = useQuery({
     queryKey: ['stock', search, storeIds, categories, onlyAvailable, scope],
     queryFn: () =>

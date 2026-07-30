@@ -9,7 +9,7 @@ export function Products() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
 
-  const categories = useQuery({ queryKey: ['categories'], queryFn: getCategories });
+  const categories = useQuery({ queryKey: ['categories', scope], queryFn: () => getCategories({ group: scope }) });
   const products = useQuery({
     queryKey: ['products', search, category, scope],
     queryFn: () =>

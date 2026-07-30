@@ -4,6 +4,7 @@ import {
   getAbc,
   getBrandCoverage,
   getBrandMix,
+  getCategories,
   getRebalancePlan,
   getStores,
   getTurnover,
@@ -12,6 +13,7 @@ import {
 } from '../api/client';
 import { PageHeader, Loading, CoverageBadge, ExportCsv, fmtMonths } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { useScope, type Scope } from '../lib/scope';
 
 type Tab = 'abc' | 'turnover' | 'coverage' | 'transfers' | 'brandmix';
 
@@ -20,13 +22,23 @@ const classColor: Record<string, string> = { A: 'green', B: 'amber', C: 'gray' }
 /**
  * A análise por marca cobre só produto de moda. Sem dizer isso, o total menor
  * (nos dados reais, ~43% da receita) parece defeito — e é recorte.
+ *
+ * Fica FORA da barra de filtros: como bloco de largura cheia dentro do flex,
+ * ela reposicionava os filtros a cada troca de dimensão — foi o que o Galbe
+ * viu como "os filtros somem".
  */
-function BrandScopeNote() {
+function BrandScopeNote({ scope }: { scope: Scope }) {
+  if (scope === 'lentes') {
+    return (
+      <div className="banner warn" style={{ fontSize: 12.5, lineHeight: 1.4 }}>
+        ⚠︎ O recorte escolhido é <strong>Lentes</strong>, e a análise por marca ainda não cobre
+        lente nem tratamento — são do setor de produção (laboratório) e terão módulo próprio. Por
+        isso esta visão sai vazia: troque o recorte para <strong>Óculos e relógios</strong>.
+      </div>
+    );
+  }
   return (
-    <div
-      className="muted"
-      style={{ flexBasis: '100%', fontSize: 11.5, lineHeight: 1.35, marginTop: 4 }}
-    >
+    <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.35, marginBottom: 12 }}>
       ℹ︎ A análise por marca considera <strong>óculos, armações e relógios</strong>. Lentes e
       tratamentos ficam de fora — são do setor de produção (laboratório) e terão módulo próprio,
       então o total aqui é menor que o da visão por SKU.
@@ -36,26 +48,45 @@ function BrandScopeNote() {
 
 export function Reports() {
   const { isAdmin } = useAuth();
+  const { scope } = useScope();
   const [tab, setTab] = useState<Tab>('abc');
   const [dimension, setDimension] = useState<AbcDimension>('product');
   const [days, setDays] = useState('30');
   const [storeId, setStoreId] = useState('');
+  const [category, setCategory] = useState('');
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
-  const params = { days, storeId: storeId || undefined };
+  const categories = useQuery({
+    queryKey: ['categories', scope],
+    queryFn: () => getCategories({ group: scope }),
+  });
+
+  // Trocar o recorte no título pode deixar um tipo escolhido fora da lista;
+  // nesse caso o filtro se desfaz em vez de virar um fantasma.
+  const tipos = categories.data ?? [];
+  const tipo = category && tipos.length > 0 && !tipos.includes(category) ? '' : category;
+
+  // Transferências e Marcas × Bandeiras são leituras da rede inteira: loja e
+  // tipo não se aplicam. Nas outras três, aplicam-se sempre.
+  const filtraLoja = tab !== 'transfers' && tab !== 'brandmix';
+  const filtraTipo = filtraLoja;
+
+  // Um único conjunto de filtros para TODAS as visões e para as duas dimensões
+  // da curva ABC: trocar SKU por marca não mexe em filtro nenhum.
+  const params = { days, storeId: storeId || undefined, group: scope, category: tipo || undefined };
 
   const abc = useQuery({
-    queryKey: ['abc', days, storeId, dimension],
+    queryKey: ['abc', days, storeId, dimension, scope, tipo],
     queryFn: () => getAbc({ ...params, dimension }),
     enabled: tab === 'abc',
   });
   const turnover = useQuery({
-    queryKey: ['turnover', days, storeId],
+    queryKey: ['turnover', days, storeId, scope, tipo],
     queryFn: () => getTurnover(params),
     enabled: tab === 'turnover',
   });
   const coverage = useQuery({
-    queryKey: ['brand-coverage', days, storeId],
+    queryKey: ['brand-coverage', days, storeId, scope, tipo],
     queryFn: () => getBrandCoverage(params),
     enabled: tab === 'coverage',
   });
@@ -79,7 +110,8 @@ export function Reports() {
         subtitle="Curva ABC (SKU ou marca), giro, cobertura de estoque e transferências sugeridas — todos exportáveis em CSV."
       />
 
-      <div className="toolbar">
+      {/* Linha 1 — o que olhar. */}
+      <div className="toolbar" style={{ marginBottom: 10 }}>
         <div className="segmented">
           <button className={tab === 'abc' ? 'active' : ''} onClick={() => setTab('abc')}>
             Curva ABC
@@ -111,15 +143,19 @@ export function Reports() {
             </button>
           </div>
         )}
-        {((tab === 'abc' && dimension === 'brand') || tab === 'coverage') && <BrandScopeNote />}
-        <select value={days} onChange={(e) => setDays(e.target.value)}>
+      </div>
+
+      {/* Linha 2 — os filtros, sempre no MESMO lugar: mesma linha, mesma ordem,
+          em qualquer aba e em qualquer dimensão. */}
+      <div className="toolbar">
+        <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período">
           <option value="7">Últimos 7 dias</option>
           <option value="30">Últimos 30 dias</option>
           <option value="90">Últimos 90 dias</option>
           <option value="180">Últimos 180 dias</option>
         </select>
-        {isAdmin && tab !== 'transfers' && tab !== 'brandmix' && (
-          <select value={storeId} onChange={(e) => setStoreId(e.target.value)}>
+        {isAdmin && filtraLoja && (
+          <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Loja">
             <option value="">Toda a rede</option>
             {stores.data?.rows.map((s) => (
               <option key={s.id} value={s.id}>
@@ -127,6 +163,27 @@ export function Reports() {
               </option>
             ))}
           </select>
+        )}
+        {filtraTipo && (
+          <select value={tipo} onChange={(e) => setCategory(e.target.value)} aria-label="Tipo de produto">
+            <option value="">Todos os tipos</option>
+            {tipos.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
+        {(storeId || tipo) && (
+          <button
+            className="btn sm ghost"
+            onClick={() => {
+              setStoreId('');
+              setCategory('');
+            }}
+          >
+            Limpar filtros
+          </button>
         )}
         <span style={{ flex: 1 }} />
         {tab === 'abc' && (
@@ -209,6 +266,8 @@ export function Reports() {
           />
         )}
       </div>
+
+      {((tab === 'abc' && dimension === 'brand') || tab === 'coverage') && <BrandScopeNote scope={scope} />}
 
       {tab === 'abc' ? (
         abc.isLoading ? (

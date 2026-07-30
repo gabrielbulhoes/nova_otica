@@ -78,6 +78,8 @@ export interface Paged<T> {
 export interface DashboardSummary {
   stores: number;
   products: number;
+  /** Na demo, quantos SKUs a amostra carrega (o total é da rede). */
+  productsSampled?: number;
   customers: number;
   stockUnits: number;
   pendingMovements: number;
@@ -254,7 +256,8 @@ export interface Sale {
 
 // ─── Chamadas ────────────────────────────────────────────────────────────────
 
-export const getSummary = () => api.get<DashboardSummary>('/dashboard/summary').then((r) => r.data);
+export const getSummary = (params?: Record<string, string | undefined>) =>
+  api.get<DashboardSummary>('/dashboard/summary', { params }).then((r) => r.data);
 export const getStoreCoverage = (params?: Record<string, string | undefined>) =>
   api.get<{ days: number; rows: StoreCoverageRow[] }>('/dashboard/coverage', { params }).then((r) => r.data);
 
@@ -276,7 +279,8 @@ export interface StoresResponse extends Paged<Store> {
 export const getStores = () => api.get<StoresResponse>('/stores').then((r) => r.data);
 export const getProducts = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Product>>('/products', { params }).then((r) => r.data);
-export const getCategories = () => api.get<string[]>('/products/categories').then((r) => r.data);
+export const getCategories = (params?: Record<string, string | undefined>) =>
+  api.get<string[]>('/products/categories', { params }).then((r) => r.data);
 
 export const getSales = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Sale>>('/sales', { params }).then((r) => r.data);
@@ -551,10 +555,21 @@ export interface DecisionCard {
   discountPct?: number;
   discountMaxPct?: number;
   discountReason?: string;
+  discountParams?: {
+    marginPct: number;
+    carryingAnnualPct: number;
+    horizonDays: number;
+    horizonSource: 'cobertura' | 'tempo parado' | 'padrão';
+    brandUnitsSold: number | null;
+  };
   /** Liquidação: loja com maior chance de escoar. */
   outletStoreId?: string;
   outletStoreName?: string;
   outletBasis?: 'sku' | 'marca';
+  /** Liquidação: de onde sai e quantas — a transferência já resolvida. */
+  outletFromStoreId?: string;
+  outletFromStoreName?: string;
+  outletQuantity?: number;
 }
 
 /** Lote de geração: a execução do motor que produziu estes cards. */

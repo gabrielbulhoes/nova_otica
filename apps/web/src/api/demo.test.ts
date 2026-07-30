@@ -372,3 +372,70 @@ describe('demo: janela de vendas medida, não presumida', () => {
     expect(soma(principal)).toBeLessThanOrEqual(soma(todos));
   });
 });
+
+
+describe('demo: filtros de loja e tipo de produto nos relatórios (feedbacks 3.0)', () => {
+  const tipos = get('/products/categories') as string[];
+  const lojas = (get('/stores').rows as { id: string }[]).map((s) => s.id);
+
+  it('curva ABC: o tipo recorta por SKU E por marca — trocar a dimensão não desliga o filtro', () => {
+    // Um tipo que a análise de MARCA cobre: lente, tratamento e acessório
+    // ficam de fora dela por decisão do cliente, e ali o total por marca é
+    // zero mesmo — não é o filtro que falhou.
+    const tipo =
+      tipos.find((t) => get('/reports/abc', { dimension: 'brand', category: t }).totalRevenue > 0) ??
+      tipos[0];
+    const skuTudo = get('/reports/abc', { dimension: 'product' });
+    const skuTipo = get('/reports/abc', { dimension: 'product', category: tipo });
+    expect(skuTipo.totalRevenue).toBeGreaterThan(0);
+    expect(skuTipo.totalRevenue).toBeLessThanOrEqual(skuTudo.totalRevenue);
+    expect((skuTipo.rows as any[]).every((r) => r.category === tipo)).toBe(true);
+
+    const marcaTudo = get('/reports/abc', { dimension: 'brand' });
+    const marcaTipo = get('/reports/abc', { dimension: 'brand', category: tipo });
+    expect(marcaTipo.totalRevenue).toBeLessThanOrEqual(marcaTudo.totalRevenue);
+    // Mesma receita recortada, outro agrupamento.
+    expect(Math.abs(marcaTipo.totalRevenue - skuTipo.totalRevenue)).toBeLessThan(1);
+  });
+
+  it('curva ABC: a loja recorta a receita (o filtro não é decorativo)', () => {
+    const rede = get('/reports/abc', { dimension: 'product' });
+    const uma = get('/reports/abc', { dimension: 'product', storeId: lojas[0] });
+    expect(uma.totalRevenue).toBeGreaterThan(0);
+    expect(uma.totalRevenue).toBeLessThan(rede.totalRevenue);
+  });
+
+  it('giro: fora do recorte, fora do relatório', () => {
+    const r = get('/reports/turnover', { category: tipos[0] });
+    expect((r.rows as any[]).length).toBeGreaterThan(0);
+    expect((r.rows as any[]).every((x) => x.category === tipos[0])).toBe(true);
+  });
+
+  it('alertas: loja e tipo recortam a lista', () => {
+    const todos = get('/alerts', { group: 'principal' });
+    const tipo = (todos.rows as any[])[0]?.category;
+    if (tipo) {
+      const soTipo = get('/alerts', { group: 'principal', category: tipo });
+      expect((soTipo.rows as any[]).every((x) => x.category === tipo)).toBe(true);
+      expect(soTipo.total).toBeLessThanOrEqual(todos.total);
+    }
+    const soLoja = get('/alerts', { group: 'principal', storeId: lojas[0] });
+    expect((soLoja.rows as any[]).every((x) => x.storeId === lojas[0])).toBe(true);
+  });
+});
+
+describe('demo: card de liquidação virando transferência (feedbacks 3.0, item 05)', () => {
+  it('cada card com destino também diz de ONDE sai e QUANTAS', () => {
+    const board = get('/planning/decisions', { days: '90', group: 'principal' });
+    const liq = (board.cards as any[]).filter((c) => c.type === 'LIQUIDACAO' && c.outletStoreId);
+    expect(liq.length).toBeGreaterThan(0);
+    for (const c of liq) {
+      if (!c.outletFromStoreId) continue; // só o destino tem saldo: nada a mover
+      expect(c.outletFromStoreId).not.toBe(c.outletStoreId);
+      expect(c.outletQuantity).toBeGreaterThan(0);
+      expect(c.outletFromStoreName).toBeTruthy();
+    }
+    // A entrega do item 05 é a ação: pelo menos um card precisa ter rota completa.
+    expect(liq.some((c) => c.outletFromStoreId && c.outletQuantity > 0)).toBe(true);
+  });
+});

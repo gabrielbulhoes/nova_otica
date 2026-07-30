@@ -8,6 +8,7 @@
  *   REAIS da rede, agregados e sem qualquer dado de cliente.
  */
 import {
+  analysisBrand,
   abcFromItems,
   analyzeProduct,
   buildCommercialStrategy,
@@ -320,8 +321,8 @@ function stockRows(params: Record<string, string | string[] | undefined>) {
   return rows;
 }
 
-function alerts(group: ProductGroup = 'todos') {
-  const rows = stockRows({ group }).filter((x) => {
+function alerts(group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
+  const rows = stockRows({ group, category, storeId }).filter((x) => {
     // Com o dataset real (catálogo amostrado), só alerta posições que EXISTEM
     // na loja: linha de estoque presente ou venda no período. Sem isso, cada
     // produto ausente numa filial viraria "ruptura" fantasma.
@@ -388,6 +389,34 @@ const realSalesByProduct = new Map((real?.productSales ?? []).map((x) => [`pr_${
  * (ABC, análise e giro contam a mesma história).
  */
 let soldItemsCache: { p: Product; revenue: number; units: number }[] | null = null;
+/**
+ * Recorte de produto dos relatórios: grupo do console ∩ tipo escolhido na
+ * tela. Mesma regra pura da API (matchesProductGroup) — e a MESMA para SKU e
+ * para marca, que era o pedido: o filtro não pode sumir ao trocar a dimensão.
+ */
+function noRecorte(group: ProductGroup, category?: string | string[]) {
+  const sel = asSet(category);
+  return (p: { category: string }) => matchesProductGroup(p.category, group) && (!sel || sel.has(p.category));
+}
+
+/**
+ * Itens vendidos, opcionalmente recortados a UMA loja. As unidades saem exatas
+ * do mapa por (loja × produto); a receita é rateada pela participação da loja
+ * nas unidades daquele produto, porque o dataset não traz receita por loja ×
+ * produto. Ratear o que ele traz é melhor que deixar o filtro de loja sem
+ * efeito — e a régua está declarada aqui.
+ */
+function soldItemsScoped(storeId?: string) {
+  if (!storeId) return soldItems();
+  return soldItems()
+    .map((x) => {
+      const un = soldQty.get(key(storeId, x.p.id)) ?? 0;
+      const rede = stores.reduce((a, s) => a + (soldQty.get(key(s.id, x.p.id)) ?? 0), 0);
+      return { p: x.p, units: un, revenue: round2(x.revenue * (rede > 0 ? un / rede : 0)) };
+    })
+    .filter((x) => x.units > 0);
+}
+
 function soldItems() {
   soldItemsCache ??= products
     .map((p) => {
@@ -414,9 +443,9 @@ function brandLabel(p: { description: string; brand: string; category: string })
  * Calculado do catálogo, e não dos agregados prontos do dataset, para bater
  * com o que a API faz — os agregados são por fornecedor e incluem lente.
  */
-function brandSales() {
+function brandSales(itens: { p: { description: string; brand: string; category: string; id: string }; revenue: number; units: number }[] = soldItems()) {
   const acc = new Map<string, { revenue: number; units: number }>();
-  for (const x of soldItems()) {
+  for (const x of itens) {
     if (!isBrandAnalysable(x.p.category)) continue;
     const k = brandLabel(x.p);
     const cur = acc.get(k) ?? { revenue: 0, units: 0 };
@@ -427,17 +456,26 @@ function brandSales() {
   return acc;
 }
 
-function abc(days: number, dimension: 'product' | 'brand') {
+function abc(
+  days: number,
+  dimension: 'product' | 'brand',
+  group: ProductGroup = 'todos',
+  category?: string | string[],
+  storeId?: string,
+) {
+  // Um único recorte para as duas dimensões — trocar SKU por marca não mexe
+  // em filtro nenhum.
+  const vendidos = soldItemsScoped(storeId).filter((x) => noRecorte(group, category)(x.p));
   let items: AbcItem[];
   if (dimension === 'brand') {
     // Mesmo cálculo nos dois sabores da demo (fictício e real) e igual ao da
     // API: marca extraída da descrição e recorte de produto de moda.
-    const acc = brandSales();
+    const acc = brandSales(vendidos);
     items = [...acc.entries()].map(([label, v]) => ({
       key: label, label: label || 'Sem marca', brand: null, category: null, ...v,
     }));
   } else {
-    items = soldItems().map((x) => ({
+    items = vendidos.map((x) => ({
       key: x.p.id, label: x.p.description, brand: x.p.brand, category: x.p.category,
       revenue: x.revenue, units: x.units,
     }));
@@ -472,17 +510,19 @@ const realWindowDays = real ? medirJanela() : 0;
 const effectiveDays = (days: number) => (real ? realWindowDays : days);
 
 /** Cobertura geral e por marca (feedback 06). */
-function brandCoverageReport(rawDays: number) {
+function brandCoverageReport(rawDays: number, group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
   const days = effectiveDays(rawDays);
+  const dentro = noRecorte(group, category);
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
   // Do catálogo, não do agregado pronto do dataset: o agregado é por
   // FORNECEDOR e inclui lente. Aqui vale o recorte da análise de marca — o
   // mesmo da API e o mesmo nos dois sabores da demo.
   const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
   for (const p of products) {
-    if (!isBrandAnalysable(p.category)) continue;
+    if (!isBrandAnalysable(p.category) || !dentro(p)) continue;
     const k = brandLabel(p);
     const cur = acc.get(k) ?? { stockUnits: 0, unitsSold: 0 };
-    for (const st of stores) {
+    for (const st of escopo) {
       cur.stockUnits += stockQty.get(key(st.id, p.id)) ?? 0;
       cur.unitsSold += soldQty.get(key(st.id, p.id)) ?? 0;
     }
@@ -553,12 +593,18 @@ function salesAnalysisReport(rawDays: number, by: string) {
   return { days, by, rows: rows.slice(0, 500) };
 }
 
-function turnover(days: number) {
+function turnover(days: number, group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
+  const dentro = noRecorte(group, category);
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
   return {
     days,
-    rows: products.map((p) => {
-      const unitsSold = real ? realSalesByProduct.get(p.id)?.units ?? 0 : int(0, 60);
-      const currentStock = stores.reduce((a, s) => a + (stockQty.get(key(s.id, p.id)) ?? 0), 0);
+    rows: products.filter(dentro).map((p) => {
+      const unitsSold = storeId
+        ? soldQty.get(key(storeId, p.id)) ?? 0
+        : real
+          ? realSalesByProduct.get(p.id)?.units ?? 0
+          : int(0, 60);
+      const currentStock = escopo.reduce((a, s) => a + (stockQty.get(key(s.id, p.id)) ?? 0), 0);
       return {
         productId: p.id, description: p.description, brand: p.brand, category: p.category,
         unitsSold, currentStock, turnover: round2(unitsSold / Math.max(currentStock, 1)),
@@ -706,6 +752,11 @@ function lastSixAm(): Date {
 
 const demoBatchAt = lastSixAm();
 
+/** Semente estável por produto, para a idade não mudar entre recargas. */
+function cardIdParaProduto(productId: string): string {
+  return `LIQUIDACAO|${productId}`;
+}
+
 /** Hash estável do id do card → 0..99. */
 function cardSeed(cardId: string): number {
   let h = 2166136261;
@@ -795,13 +846,42 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   }
 
   // Dashboard
-  if (url === '/dashboard/summary')
+  if (url === '/dashboard/summary') {
+    // Feedback 01 do Galbe: "mostram 211.026 unidades, sendo que temos algo em
+    // torno de 35k". Os 211 mil são a rede INTEIRA: tratamento (55k), lentes
+    // (48k) e outros (28k) respondem por 170 mil deles. O KPI passa a respeitar
+    // o recorte, como as demais telas — no recorte de óculos dá 40.563.
+    const g = productGroup(params.group);
+    const unidades = real?.storeCategory?.length
+      ? real.storeCategory.reduce(
+          (a, r) => a + (matchesProductGroup(r.label, g) ? r.stockUnits : 0),
+          0,
+        )
+      : g === 'todos'
+        ? stockUnits
+        : products.reduce(
+            (a, p) =>
+              a +
+              (matchesProductGroup(p.category, g)
+                ? stores.reduce((b, st) => b + (stockQty.get(key(st.id, p.id)) ?? 0), 0)
+                : 0),
+            0,
+          );
+    // SKUs: o número da REDE, não o do catálogo amostrado que a demo carrega.
+    // "Não temos só 1631 SKU's" — correto: a rede tem 21.683.
+    const skusNaRede = real?.totals?.productCountNetwork;
+    const skusNoRecorte = products.filter((p) => matchesProductGroup(p.category, g)).length;
     return {
-      stores: stores.length, products: products.length, customers: 40, stockUnits,
+      stores: stores.length,
+      products: skusNaRede ?? skusNoRecorte,
+      productsSampled: real ? skusNoRecorte : undefined,
+      customers: 40,
+      stockUnits: unidades,
       pendingMovements: movements.filter((x) => ['REQUESTED', 'PENDING'].includes(x.status as string)).length,
       sales30d: { count: salesCount, total: revenue },
       lastSync: { status: 'SUCCESS', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), recordsWritten: 982, window: '06:00-07:00' },
     };
+  }
   if (url === '/dashboard/sales-by-store') return { rows: salesByStore };
   if (url === '/dashboard/coverage') {
     // Com dados reais, usa os totais POR LOJA da rede inteira (storeStats);
@@ -857,8 +937,13 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
 
   // Produtos — categorias derivadas do catálogo carregado (com dados reais,
   // são os grupos do CDS; a lista fixa fictícia mostrava rótulos sem match).
-  if (url === '/products/categories')
-    return [...new Set(products.map((x) => x.category))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  if (url === '/products/categories') {
+    // Feedback 02: categoria de lente continuava na lista e devolvia 0 linhas.
+    // Oferecer um filtro que não filtra nada é pior que não oferecer.
+    const g = productGroup(params.group);
+    return [...new Set(products.filter((x) => matchesProductGroup(x.category, g)).map((x) => x.category))]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }
   if (url === '/products') {
     const g = productGroup(params.group);
     let rows = products.filter((x) => matchesProductGroup(x.category, g));
@@ -939,9 +1024,13 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/bi/heatmap') return heatmap();
 
   // Relatórios
-  if (url === '/reports/abc') return abc(days, one(params.dimension) === 'brand' ? 'brand' : 'product');
-  if (url === '/reports/turnover') return turnover(days);
-  if (url === '/reports/coverage') return brandCoverageReport(days);
+  const grupoRel = productGroup(params.group);
+  const tipoRel = params.category;
+  const lojaRel = one(params.storeId) || undefined;
+  if (url === '/reports/abc')
+    return abc(days, one(params.dimension) === 'brand' ? 'brand' : 'product', grupoRel, tipoRel, lojaRel);
+  if (url === '/reports/turnover') return turnover(days, grupoRel, tipoRel, lojaRel);
+  if (url === '/reports/coverage') return brandCoverageReport(days, grupoRel, tipoRel, lojaRel);
   if (url === '/reports/sales-analysis') return salesAnalysisReport(days, one(params.by) ?? 'brand');
 
   // Planejamento & Compras (reusa a matemática do backend via @planning)
@@ -1160,15 +1249,26 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
     >();
     for (const prod of products) {
-      if (!prod.brand) continue;
-      const lista = porMarca.get(prod.brand) ?? stores.map((st) => ({
+      // MESMA regra do backend: agrupa pela marca de ANÁLISE (grife extraída da
+      // descrição), não pelo campo de fornecedor — que vem vazio na maior parte
+      // do catálogo real e jogaria produtos de marcas diferentes num só balde.
+      const marca = analysisBrand(prod.description, prod.category, prod.brand);
+      if (!marca) continue;
+      const lista = porMarca.get(marca) ?? stores.map((st) => ({
         storeId: st.id, storeName: st.name, unitsSold: 0, currentStock: 0,
       }));
       lista.forEach((x, i) => {
         x.unitsSold += soldQty.get(key(stores[i].id, prod.id)) ?? 0;
         x.currentStock += stockQty.get(key(stores[i].id, prod.id)) ?? 0;
       });
-      porMarca.set(prod.brand, lista);
+      porMarca.set(marca, lista);
+    }
+    // Dias parados por produto: a MESMA base que dá idade ao card no lote de
+    // geração. É o sinal de tempo que faz o desconto variar por peça.
+    const paradoPor = new Map<string, number>();
+    for (const prod of products) {
+      const idade = demoCardAge(cardIdParaProduto(prod.id));
+      paradoPor.set(prod.id, Math.round((demoBatchAt.getTime() - idade.firstSeenAt.getTime()) / 86_400_000));
     }
     const board = buildDecisionCards(
       planningPlans(planDays, one(params.storeId), planGroup),
@@ -1176,6 +1276,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       new Set(demoDecisions.map((r) => r.cardId)),
       posicoes,
       porMarca,
+      paradoPor,
     );
     const history = new Map(
       board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),
@@ -1312,7 +1413,8 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   }
 
   // Alertas
-  if (url === '/alerts') return alerts(productGroup(params.group));
+  if (url === '/alerts')
+    return alerts(productGroup(params.group), params.category, one(params.storeId) || undefined);
   if (url === '/alerts/min-stock' && m === 'PUT') {
     const prod = prodById(body.productId as string);
     if (!prod) return { __status: 404, error: 'Produto não encontrado' };

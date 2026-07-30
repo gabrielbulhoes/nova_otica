@@ -567,7 +567,7 @@ function SupplierRow({
  */
 function FairSplit() {
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
-  const categories = useQuery({ queryKey: ['categories'], queryFn: getCategories });
+  const categories = useQuery({ queryKey: ['categories'], queryFn: () => getCategories() });
   const [mode, setMode] = useState<'brand' | 'category'>('brand');
   const [brand, setBrand] = useState('');
   const [category, setCategory] = useState('');

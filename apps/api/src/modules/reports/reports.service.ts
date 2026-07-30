@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
+import { productWhereForGroup, scopeCategories } from '../products/product.scope.js';
 import {
   abcFromItems,
   buildBrandMix,
@@ -13,6 +14,7 @@ import {
   type AbcResult,
   type BrandBannerInput,
   type CoverageRow,
+  type ProductGroup,
 } from '../planning/planning.math.js';
 
 // A matemática pura da curva ABC vive em planning.math.ts (compartilhada com
@@ -35,6 +37,19 @@ function periodStart(days: number): Date {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
+ * Recorte de produto dos relatórios: o grupo do console (óculos/lente/tudo)
+ * INTERSECTADO com o tipo de produto escolhido na tela. Sai daqui como um
+ * `where` de Prisma para entrar no findMany dos metadados — quem não está no
+ * recorte simplesmente não aparece no mapa e cai fora do relatório.
+ */
+async function productScopeWhere(
+  group: ProductGroup,
+  categories?: string[],
+): Promise<Prisma.ProductWhereInput> {
+  return scopeCategories(await productWhereForGroup(group), categories) ?? {};
+}
+
+/**
  * Marca de exibição de um produto, na ordem de confiança:
  *  1. marca REAL extraída da descrição (grifes de armação/óculos/relógio);
  *  2. fornecedor (p.brand) — é o dado bom em LENTE, onde a descrição é a
@@ -53,9 +68,14 @@ export async function abcCurve(
   days: number,
   storeId?: string,
   dimension: AbcDimension = 'product',
+  group: ProductGroup = 'todos',
+  categories?: string[],
 ): Promise<AbcResult> {
   const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) } };
   if (storeId) saleFilter.storeId = storeId;
+  // O mesmo recorte vale para as DUAS dimensões: era esse o pedido — o filtro
+  // não pode sumir quando se troca SKU por marca.
+  const scoped = await productScopeWhere(group, categories);
 
   if (dimension === 'brand') {
     // Marca REAL do produto, extraída da descrição (o campo p.brand carrega o
@@ -72,7 +92,7 @@ export async function abcCurve(
     });
     const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
     const products = await prisma.product.findMany({
-      where: { id: { in: ids } },
+      where: { id: { in: ids }, ...scoped },
       select: { id: true, description: true, brand: true, category: true },
     });
     const metaById = new Map(products.map((p) => [p.id, p]));
@@ -107,13 +127,14 @@ export async function abcCurve(
     _sum: { total: true, quantity: true },
   });
   const products = await prisma.product.findMany({
-    where: { id: { in: grouped.map((g) => g.productId as string) } },
+    where: { id: { in: grouped.map((g) => g.productId as string) }, ...scoped },
     select: { id: true, description: true, brand: true, category: true },
   });
   const byId = new Map(products.map((p) => [p.id, p]));
 
   return abcFromItems(
-    grouped.map((g) => {
+    // Fora do recorte, fora do relatório (e fora do total).
+    grouped.filter((g) => byId.has(g.productId as string)).map((g) => {
       const p = byId.get(g.productId as string);
       return {
         key: g.productId as string,
@@ -146,7 +167,12 @@ export interface BrandCoverageResult {
  * RECORTE DECLARADO: só óculos, armação e relógio — lente e tratamento têm
  * módulo próprio. A linha GERAL soma apenas o que está no recorte.
  */
-export async function coverageByBrand(days: number, storeId?: string): Promise<BrandCoverageResult> {
+export async function coverageByBrand(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'todos',
+  categories?: string[],
+): Promise<BrandCoverageResult> {
   // GMAIS e outros CDs ficam fora da cobertura (matemática de lojas).
   const stockWhere: Prisma.StockItemWhereInput = storeId ? { storeId } : { ...stockPlannedWhere };
   const saleScope = storeId ? { storeId } : { store: PLANNED_STORE_WHERE };
@@ -166,7 +192,7 @@ export async function coverageByBrand(days: number, storeId?: string): Promise<B
   const netById = new Map(netStock.map((r) => [r.productId, r._sum.quantity ?? 0]));
   const ids = Array.from(new Set([...displayStock.map((r) => r.productId), ...sold.map((r) => r.productId as string)]));
   const products = await prisma.product.findMany({
-    where: { id: { in: ids } },
+    where: { id: { in: ids }, ...(await productScopeWhere(group, categories)) },
     select: { id: true, description: true, brand: true, category: true },
   });
   const metaById = new Map(products.map((p) => [p.id, p]));
@@ -356,7 +382,12 @@ export interface TurnoverRow {
  * Giro de estoque no período. Como só há o snapshot atual da fonte, usa-se o
  * estoque atual como aproximação do estoque médio (limitação documentada).
  */
-export async function inventoryTurnover(days: number, storeId?: string): Promise<{
+export async function inventoryTurnover(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'todos',
+  categories?: string[],
+): Promise<{
   days: number;
   rows: TurnoverRow[];
 }> {
@@ -384,12 +415,14 @@ export async function inventoryTurnover(days: number, storeId?: string): Promise
   const netStock = await prisma.stockItem.groupBy({ by: ['productId'], where: stockPlannedWhere, _sum: { quantity: true } });
   const netById = new Map(netStock.map((n) => [n.productId, n._sum.quantity ?? 0]));
 
-  const productIds = Array.from(new Set([...soldByProduct.keys(), ...stockByProduct.keys()]));
+  const allIds = Array.from(new Set([...soldByProduct.keys(), ...stockByProduct.keys()]));
   const products = await prisma.product.findMany({
-    where: { id: { in: productIds } },
+    where: { id: { in: allIds }, ...(await productScopeWhere(group, categories)) },
     select: { id: true, description: true, brand: true, category: true },
   });
   const byId = new Map(products.map((p) => [p.id, p]));
+  // Fora do recorte, fora do giro (sem linha "—" órfã).
+  const productIds = allIds.filter((id) => byId.has(id));
 
   const rows: TurnoverRow[] = productIds
     .map((id) => {

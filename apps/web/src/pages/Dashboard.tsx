@@ -16,7 +16,7 @@ import { useScope } from '../lib/scope';
 export function Dashboard() {
   const { isAdmin } = useAuth();
   const { scope } = useScope();
-  const summary = useQuery({ queryKey: ['summary'], queryFn: getSummary });
+  const summary = useQuery({ queryKey: ['summary', scope], queryFn: () => getSummary({ group: scope }) });
   const coverage = useQuery({
     queryKey: ['coverage', scope],
     queryFn: () => getStoreCoverage({ group: scope }),

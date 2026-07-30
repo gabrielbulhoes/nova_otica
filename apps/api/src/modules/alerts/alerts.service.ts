@@ -35,7 +35,11 @@ export function resolveThreshold(
  * Gera alertas de ruptura (OUT, saldo <= 0) e estoque baixo (LOW, saldo <=
  * mínimo). O mínimo é o da loja, senão o do produto, senão o padrão da rede.
  */
-export async function stockAlerts(storeId?: string, group: ProductGroup = 'todos'): Promise<{
+export async function stockAlerts(
+  storeId?: string,
+  group: ProductGroup = 'todos',
+  categories?: string[],
+): Promise<{
   total: number;
   out: number;
   low: number;
@@ -44,7 +48,9 @@ export async function stockAlerts(storeId?: string, group: ProductGroup = 'todos
   // GMAIS e outros CDs ficam fora da ruptura: sem loja específica, o escopo é
   // só as lojas planejáveis.
   const storeIds = storeId ? [storeId] : await plannedStoreIds();
-  const { rows } = await listStock({ storeIds, group, limit: 100_000, skip: 0 });
+  // O tipo de produto (categoria) se COMBINA com o recorte do console — quem
+  // escolhe "ARMACAO" não traz lente de volta (isso é feito no scopeCategories).
+  const { rows } = await listStock({ storeIds, group, categories, limit: 100_000, skip: 0 });
   const def = env.DEFAULT_MIN_STOCK;
 
   // Lentes por encomenda não entram na ruptura: são feitas sob demanda, então

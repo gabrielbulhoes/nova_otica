@@ -81,6 +81,40 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
     }
   };
   const [err, setErr] = useState('');
+  // Transferência de escoamento (card de liquidação) — estado próprio, para
+  // não se confundir com a aprovação do card de remanejamento.
+  const [escoa, setEscoa] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [escoaErr, setEscoaErr] = useState('');
+
+  /**
+   * "Ainda não está gerando o direcionamento e sugestão de transferência, que
+   * para mim é a grande entrega dessa categoria" (feedback 05). O card de
+   * liquidação agora cria a movimentação: origem, destino e quantidade saem do
+   * próprio motor.
+   */
+  const criarEscoamento = async () => {
+    if (!c.outletFromStoreId || !c.outletStoreId || !c.outletQuantity) return;
+    setEscoa('loading');
+    try {
+      await createMovement({
+        type: 'TRANSFER',
+        productId: c.productId,
+        fromStoreId: c.outletFromStoreId,
+        toStoreId: c.outletStoreId,
+        quantity: c.outletQuantity,
+        reason: `Escoamento sugerido no portal de Decisões: liquidar a −${c.discountPct}% em ${
+          c.outletStoreName
+        } (${c.outletBasis === 'marca' ? 'onde a marca mais sai' : 'onde a peça mais sai'}).`,
+      });
+      setEscoa('done');
+      qc.invalidateQueries({ queryKey: ['movements'] });
+      qc.invalidateQueries({ queryKey: ['decisions'] });
+    } catch (e) {
+      setEscoa('error');
+      const ex = e as { response?: { data?: { error?: string } } };
+      setEscoaErr(ex.response?.data?.error ?? 'Falha ao criar a transferência.');
+    }
+  };
 
   const approveTransfer = async () => {
     if (!c.fromStoreId || !c.toStoreId || !c.quantity) return;
@@ -162,8 +196,49 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
                 </span>
               </div>
             )}
+            {/* Destino é informação; transferência é ação. */}
+            {c.outletFromStoreId && c.outletQuantity != null && (
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11.5 }}>
+                  <span className="muted">Mover </span>
+                  <strong>{c.outletQuantity} un.</strong>
+                  <span className="muted"> de {c.outletFromStoreName} → {c.outletStoreName}</span>
+                </span>
+                {escoa === 'done' ? (
+                  <span className="badge green">Transferência solicitada ✓</span>
+                ) : (
+                  <button
+                    className="btn sm"
+                    disabled={escoa === 'loading'}
+                    onClick={criarEscoamento}
+                    title="Cria a movimentação de transferência com origem, destino e quantidade do motor"
+                  >
+                    {escoa === 'loading' ? 'Criando…' : 'Criar transferência'}
+                  </button>
+                )}
+                {escoa === 'error' && (
+                  <span style={{ fontSize: 11, color: 'var(--red)' }}>{escoaErr}</span>
+                )}
+              </div>
+            )}
             {c.discountReason && (
               <div className="muted" style={{ marginTop: 3, fontSize: 11.5 }}>{c.discountReason}</div>
+            )}
+            {/* "É importante entender os parâmetros que estão sendo utilizados
+                pra sugestão" — então eles ficam na tela, não no código. */}
+            {c.discountParams && (
+              <div
+                className="muted"
+                style={{ marginTop: 4, fontSize: 10.5, fontFamily: 'ui-monospace, monospace' }}
+                title="Parâmetros usados no cálculo do desconto"
+              >
+                margem {c.discountParams.marginPct}% · custo de carregar{' '}
+                {c.discountParams.carryingAnnualPct}%/ano · horizonte{' '}
+                {c.discountParams.horizonDays}d ({c.discountParams.horizonSource})
+                {c.discountParams.brandUnitsSold != null
+                  ? ` · marca ${c.discountParams.brandUnitsSold} un.`
+                  : ''}
+              </div>
             )}
           </div>
         )}

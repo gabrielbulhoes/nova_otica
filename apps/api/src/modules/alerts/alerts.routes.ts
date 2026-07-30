@@ -1,19 +1,23 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma.js';
-import { asyncHandler, notFound } from '../../http/helpers.js';
+import { asyncHandler, notFound, parseList } from '../../http/helpers.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { stockAlerts } from './alerts.service.js';
 import { parseGroup } from '../products/product.scope.js';
 
 export const alertsRouter = Router();
 
-/** GET /api/alerts — alertas de ruptura e estoque baixo (escopo por loja). */
+/**
+ * GET /api/alerts — alertas de ruptura e estoque baixo. Aceita recorte por
+ * loja (`storeId`) e por tipo de produto (`category`, repetível), porque uma
+ * lista de ruptura da rede inteira e de tudo junto não é operável.
+ */
 alertsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await stockAlerts(storeId, parseGroup(req.query.group)));
+    res.json(await stockAlerts(storeId, parseGroup(req.query.group), parseList(req.query.category)));
   }),
 );
 

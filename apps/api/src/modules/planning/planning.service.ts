@@ -7,6 +7,7 @@ import { loadBrandCatalog } from './brandCatalog.js';
 import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
 import {
+  analysisBrand,
   analyzeProduct,
   annotateCardAges,
   buildCommercialStrategy,
@@ -292,8 +293,12 @@ export async function generateCards(days: number, storeId?: string, group: Produ
     { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
   >();
   for (const r of reb.inputs ?? []) {
-    if (!r.brand) continue;
-    const lista = porMarca.get(r.brand) ?? [];
+    // Agrupa pela marca de ANÁLISE (grife da descrição), não pelo campo de
+    // fornecedor — que vem vazio na maior parte do catálogo real e faria um
+    // balde único com produtos de marcas diferentes.
+    const marca = analysisBrand(r.description, r.category ?? null, r.brand);
+    if (!marca) continue;
+    const lista = porMarca.get(marca) ?? [];
     const atual = lista.find((x) => x.storeId === r.storeId);
     if (atual) {
       atual.unitsSold += r.unitsSold;
@@ -306,7 +311,7 @@ export async function generateCards(days: number, storeId?: string, group: Produ
         currentStock: r.currentStock,
       });
     }
-    porMarca.set(r.brand, lista);
+    porMarca.set(marca, lista);
   }
   const board = buildDecisionCards(productPlans, reb.rows, undefined, posicoes, porMarca);
   return {
@@ -419,6 +424,7 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
       productId: pos.productId,
       description: product.description,
       brand: product.brand,
+      category: product.category,
       unitsSold: pos.sold,
       currentStock: pos.stock,
     });
