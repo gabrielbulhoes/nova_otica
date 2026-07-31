@@ -83,6 +83,15 @@ export function BI() {
         <Loading />
       ) : (
         <>
+          {/* A janela pedida pode ser maior do que o histórico carregado: dizer
+              isso evita a leitura de que "o filtro não faz nada". */}
+          {kpis.data.requestedDays != null && kpis.data.days < kpis.data.requestedDays && (
+            <div className="banner warn" style={{ marginBottom: 12 }}>
+              Os dados carregados cobrem <strong>{kpis.data.days} dia(s)</strong> — menos que os{' '}
+              {kpis.data.requestedDays} pedidos no filtro. Os números abaixo são desta janela real.
+            </div>
+          )}
+
           {/* KPIs numéricos */}
           <div className="grid grid-4">
             <StatCard label="Faturamento" value={formatBRL(kpis.data.revenue)} hint={`${kpis.data.salesCount} vendas`} />

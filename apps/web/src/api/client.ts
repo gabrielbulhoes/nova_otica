@@ -699,7 +699,10 @@ export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) 
 // ─── BI ──────────────────────────────────────────────────────────────────────
 
 export interface BiKpis {
+  /** Janela realmente coberta pelos dados (pode ser menor que a pedida). */
   days: number;
+  /** Janela pedida no filtro — presente quando a fonte sabe distinguir. */
+  requestedDays?: number;
   revenue: number;
   salesCount: number;
   avgTicket: number;
@@ -744,7 +747,10 @@ export const getBiKpis = (params: BiParams) =>
   api.get<BiKpis>('/bi/kpis', { params }).then((r) => r.data);
 export const getBiTimeseries = (params: BiParams) =>
   api
-    .get<{ days: number; granularity: string; points: TimeseriesPoint[] }>('/bi/sales-timeseries', { params })
+    .get<{ days: number; requestedDays?: number; granularity: string; points: TimeseriesPoint[] }>(
+      '/bi/sales-timeseries',
+      { params },
+    )
     .then((r) => r.data);
 export const getBiDimension = (by: string, params: BiParams) =>
   api
