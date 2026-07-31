@@ -22,7 +22,16 @@ import {
   type Recommendation,
   type RebalanceSuggestion,
 } from '../api/client';
-import { PageHeader, Loading, ExportCsv, Selo, Botao, BotaoPrimario, type TomDeSelo } from '../components/ui';
+import {
+  PageHeader,
+  Loading,
+  ExportCsv,
+  Selo,
+  Botao,
+  BotaoPrimario,
+  AberturaDeSecao,
+  type TomDeSelo,
+} from '../components/ui';
 import { Icon, type IconName } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { downloadCsv, toCsv } from '../bi/csv';
@@ -374,7 +383,7 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
             {order.items.length} {order.items.length === 1 ? 'item' : 'itens'} · {order.units} un. · entrega em{' '}
             {order.leadTimeDays} dias
             {order.stockoutInDays !== null && (
-              <span style={{ color: 'var(--red)' }}> · ruptura em ~{order.stockoutInDays}d se não pedir</span>
+              <span style={{ color: 'var(--red)' }}> · vai faltar em ~{order.stockoutInDays}d se não pedir</span>
             )}
           </div>
         </div>
@@ -470,12 +479,13 @@ function OrderHistory() {
   };
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="section-title" style={{ marginBottom: 2 }}>Histórico de pedidos (enviado → recebido)</div>
-      <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
-        Pedidos em trânsito são abatidos das sugestões (não compra duas vezes). Confirme o recebimento quando a
-        mercadoria chegar e for conferida.
-      </div>
+    <>
+    <AberturaDeSecao
+      eyebrow="Trilha"
+      titulo="Histórico de pedidos (enviado → recebido)"
+      descricao="Pedidos em trânsito são abatidos das sugestões (não compra duas vezes). Confirme o recebimento quando a mercadoria chegar e for conferida."
+    />
+    <div className="card">
       {history.isLoading ? (
         <Loading />
       ) : (history.data?.rows.length ?? 0) === 0 ? (
@@ -536,6 +546,7 @@ function OrderHistory() {
         </table>
       )}
     </div>
+    </>
   );
 }
 
@@ -584,7 +595,9 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
       <td className="num">
         {s.toCoverageDays === null ? '—' : `${s.toCoverageDays}d`}
         {s.stockoutInDays !== null && (
-          <div style={{ fontSize: 11, color: 'var(--red)' }}>ruptura ~{s.stockoutInDays}d</div>
+          <div style={{ fontSize: 11, color: 'var(--red)' }}>
+                          {s.stockoutInDays === 0 ? 'já em falta' : `falta em ~${s.stockoutInDays}d`}
+                        </div>
         )}
       </td>
       <td className="right" style={{ whiteSpace: 'nowrap' }}>
@@ -718,13 +731,13 @@ function FairSplit() {
   };
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="section-title" style={{ marginBottom: 2 }}>Modo Feira — como distribuir uma compra nova</div>
-      <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
-        Lançamentos de feira não têm histórico. Escolha a marca ou o grupo, a quantidade comprada, e o sistema
-        rateia entre as lojas pela participação de cada uma nas vendas desse recorte (a soma bate exatamente com o
-        total).
-      </div>
+    <>
+    <AberturaDeSecao
+      eyebrow="Feira"
+      titulo="Modo Feira — como distribuir uma compra nova"
+      descricao="Lançamentos de feira não têm histórico. Escolha a marca ou o grupo, a quantidade comprada, e o sistema rateia entre as lojas pela participação de cada uma nas vendas desse recorte (a soma bate exatamente com o total)."
+    />
+    <div className="card">
       <div className="toolbar" style={{ marginBottom: 0 }}>
         <div className="segmented">
           <button type="button" className={mode === 'brand' ? 'active' : ''} onClick={() => setMode('brand')}>Por marca</button>
@@ -827,6 +840,7 @@ function FairSplit() {
         ) : null
       )}
     </div>
+    </>
   );
 }
 
@@ -919,11 +933,22 @@ export function Planning() {
           subiu para cima do número (era .action-label, em Inter semibold,
           embaixo): é a ordem do <StatCard> e a única que impede a frase de 12px
           pesar mais que o nome do cartão. */}
-      <hr className="rule-section" />
-      <p className="eyebrow">O que fazer hoje</p>
+      {/* ONDA 5 · A régua e o sobretítulo estavam soltos, sem título — e o
+          sobretítulo tinha 16 caracteres em mono CAIXA ALTA a 0.18em, acima do
+          limite de ~14 em que a entreletras deixa de separar letras e passa a
+          desmanchar a palavra. O nome inteiro desceu para o título, em Fraunces,
+          onde ele se LÊ; o sobretítulo ficou com uma palavra, que é a dose que o
+          de-para pede. É a mesma abertura que as outras seis seções desta tela
+          passaram a usar — e é o que faz esta ser reconhecível como a primeira
+          entre iguais, em vez de flutuar. */}
+      <AberturaDeSecao
+        eyebrow="Hoje"
+        titulo="O que fazer hoje"
+        descricao="As quatro frentes do dia. Clique em uma para pular direto para o bloco que a resolve."
+      />
       <div className="grid grid-4 action-center">
         <button type="button" className="card action-card red" onClick={() => goTo(purchaseRef, 'BUY')}>
-          <div className="label">Risco de ruptura</div>
+          <div className="label">Risco de faltar</div>
           <div className="action-count" style={contadorHeroi}>{urgentCount}</div>
           <div className="hint">
             {urgentCount > 0 ? 'sem estoque na rede para a demanda — pedir já' : 'nenhum item em risco na rede'}
@@ -952,25 +977,24 @@ export function Planning() {
         </button>
       </div>
 
-      {/* ── 1º: redistribuir o que já existe (não custa nada) ── */}
-      <div className="card" style={{ marginTop: 16 }} ref={rebalanceRef}>
-        <div className="row-between">
-          <div>
-            <div className="section-title" style={{ marginBottom: 2 }}>Redistribuir entre lojas (antes de comprar)</div>
-            {/* A frase trazia um ← apontando para trás no meio do texto: seta
-                como pontuação até funciona ("De → Para"), mas invertida ela
-                obriga a ler a linha de trás para frente. Reescrita no sentido
-                da leitura, sem glifo nenhum. */}
-            <div className="muted" style={{ fontSize: 12.5 }}>
-              O produto sai de onde está parado ou sobrando e vai para onde ele vende e está acabando. Visão de toda a rede.
-            </div>
-          </div>
-          {reb && reb.rows.length > 0 && (
+      {/* ── 1º: redistribuir o que já existe (não custa nada) ──
+          A frase da descrição trazia um ← apontando para trás no meio do texto:
+          seta como pontuação até funciona ("De → Para"), mas invertida ela
+          obriga a ler a linha de trás para frente. Reescrita no sentido da
+          leitura, sem glifo nenhum. */}
+      <AberturaDeSecao
+        eyebrow="Remanejar"
+        titulo="Redistribuir entre lojas (antes de comprar)"
+        descricao="O produto sai de onde está parado ou sobrando e vai para onde ele vende e está acabando. Visão de toda a rede."
+        acoes={
+          reb && reb.rows.length > 0 ? (
             <Selo tom="blue" icone="transferencias" title="Total do plano de redistribuição desta visão.">
               {reb.summary.units} un. em {reb.summary.storesInvolved} lojas
             </Selo>
-          )}
-        </div>
+          ) : undefined
+        }
+      />
+      <div className="card" ref={rebalanceRef}>
         {rebalance.isLoading ? (
           <Loading />
         ) : (reb?.rows.length ?? 0) === 0 ? (
@@ -996,16 +1020,12 @@ export function Planning() {
       </div>
 
       {/* ── 2º: pedidos prontos por fornecedor, com total e data-limite ── */}
-      <div className="card" style={{ marginTop: 16 }} ref={ordersRef}>
-        <div className="row-between">
-          <div>
-            <div className="section-title" style={{ marginBottom: 2 }}>Pedidos por fornecedor (rascunho)</div>
-            <div className="muted" style={{ fontSize: 12.5 }}>
-              Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item
-              mais urgente define o prazo do pedido. Exporte e envie.
-            </div>
-          </div>
-          {orders.data && orders.data.orders.length > 0 && (
+      <AberturaDeSecao
+        eyebrow="Comprar"
+        titulo="Pedidos por fornecedor (rascunho)"
+        descricao="Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item mais urgente define o prazo do pedido. Exporte e envie."
+        acoes={
+          orders.data && orders.data.orders.length > 0 ? (
             <Botao
               variante="discreto"
               pequeno
@@ -1014,8 +1034,10 @@ export function Planning() {
             >
               Exportar tudo (CSV)
             </Botao>
-          )}
-        </div>
+          ) : undefined
+        }
+      />
+      <div className="card" ref={ordersRef}>
         {orders.isLoading ? (
           <Loading />
         ) : (orders.data?.orders.length ?? 0) === 0 ? (
@@ -1041,8 +1063,11 @@ export function Planning() {
 
       {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>
-        <div className="row-between" style={{ marginTop: 22, marginBottom: 12 }}>
-          <div className="section-title" style={{ margin: 0 }}>O que comprar (e o que não)</div>
+        <AberturaDeSecao
+          eyebrow="Item a item"
+          titulo="O que comprar (e o que não)"
+          descricao="A análise completa por SKU, com o giro, a cobertura e o veredito do motor para cada um."
+          acoes={
           <div className="segmented">
             {([
               ['ALL', 'Todos'],
@@ -1061,7 +1086,30 @@ export function Planning() {
               </button>
             ))}
           </div>
-        </div>
+          }
+        />
+
+        {/* Feedbacks 6.0, item 02 ("ainda estou achando o número de sugestão de
+            pedidos baixo"): o que faltava era o denominador. O motor não está
+            calado — ele analisou os SKUs que a base carregada tem, e a base
+            atual é uma AMOSTRA da grade do CDS. Dizer "126 de 440 analisados,
+            num recorte que tem 5.849 na rede" transforma "está baixo" numa
+            pergunta respondível. */}
+        {suggestions.data?.summary.analisados ? (
+          <p className="muted" style={{ fontSize: 12.5, margin: '-6px 0 12px' }}>
+            <strong>{suggestions.data.summary.buy}</strong> sugestões de compra entre{' '}
+            <strong>{suggestions.data.summary.analisados.toLocaleString('pt-BR')}</strong> SKUs analisados.
+            {suggestions.data.summary.universo &&
+            suggestions.data.summary.universo > suggestions.data.summary.analisados ? (
+              <>
+                {' '}O recorte tem cerca de{' '}
+                <strong>{suggestions.data.summary.universo.toLocaleString('pt-BR')}</strong> SKUs na rede — a
+                extração atual do CDS trouxe uma amostra da grade, e o motor só decide sobre o que
+                enxerga.
+              </>
+            ) : null}
+          </p>
+        ) : null}
 
         {suggestions.isLoading || !suggestions.data ? (
           <Loading />
@@ -1135,7 +1183,9 @@ export function Planning() {
                           mesma que o selo de cobertura usa no resto do console. */}
                       {r.coverageDays === null ? <span className="muted">sem venda</span> : `${r.coverageDays}d`}
                       {r.stockoutInDays !== null && (
-                        <div style={{ fontSize: 11, color: 'var(--red)' }}>ruptura ~{r.stockoutInDays}d</div>
+                        <div style={{ fontSize: 11, color: 'var(--red)' }}>
+                          {r.stockoutInDays === 0 ? 'já em falta' : `falta em ~${r.stockoutInDays}d`}
+                        </div>
                       )}
                     </td>
                     <td>
@@ -1173,12 +1223,12 @@ export function Planning() {
       </div>
 
       {/* ── Prazos por fornecedor: quem entrega rápido, quem demora ── */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="section-title" style={{ marginBottom: 2 }}>Prazos dos fornecedores (lead time)</div>
-        <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
-          Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo
-          da marca. Sem prazo definido, vale o padrão de {suppliers.data?.defaultLeadTimeDays ?? 14} dias.
-        </div>
+      <AberturaDeSecao
+        eyebrow="Prazos"
+        titulo="Prazos dos fornecedores (lead time)"
+        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias.`}
+      />
+      <div className="card">
         {suppliers.isLoading || !suppliers.data ? (
           <Loading />
         ) : (
@@ -1215,9 +1265,15 @@ export function Planning() {
       {overview.isLoading || !overview.data ? (
         <Loading />
       ) : (
-        <div className="grid grid-2" style={{ marginTop: 16, alignItems: 'start' }}>
+        <>
+        <AberturaDeSecao
+          eyebrow="Panorama"
+          titulo="Onde o capital está parado"
+          descricao="Leitura de fundo, para depois da decisão do dia: como o dinheiro da rede está distribuído e quais itens concentram o que não gira."
+        />
+        <div className="grid grid-2" style={{ alignItems: 'start' }}>
           <div className="card">
-            <div className="section-title">Panorama do capital imobilizado</div>
+            <div className="section-title" style={{ marginTop: 0 }}>Panorama do capital imobilizado</div>
             <Bar
               segments={[
                 { value: overview.data.capital.healthy, color: 'var(--green)', label: 'Saudável' },
@@ -1318,6 +1374,7 @@ export function Planning() {
             </table>
           </div>
         </div>
+        </>
       )}
     </>
   );

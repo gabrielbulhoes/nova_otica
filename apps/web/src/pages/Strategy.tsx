@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getCommercialStrategy } from '../api/client';
 import type { RiskProfile, StrategySegment } from '../api/client';
-import { Loading, PageHeader, Selo } from '../components/ui';
+import { AberturaDeSecao, Loading, PageHeader, Selo, StatCard, Unidade } from '../components/ui';
 import { Icon } from '../brand/Icon';
 
 /**
@@ -59,17 +59,30 @@ export function Strategy() {
       <div className="grid grid-2" style={{ alignItems: 'start', gap: 16 }}>
         {/* ── Parâmetros ── */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <p className="eyebrow">Parâmetros</p>
+          {/* O sobretítulo estava solto, sem a régua e sem título: `.eyebrow`
+              sozinho é a etiqueta da seção, não a seção. A abertura completa
+              (régua dourada + sobretítulo + título) é o que o manual prevê, e
+              esta tela tinha ZERO `.rule-section`. */}
+          <AberturaDeSecao
+            eyebrow="Entrada"
+            titulo="Parâmetros da compra"
+            descricao="O que você define. O motor valida contra a rede à direita."
+          />
 
           {/* Deixou de ser um <label> só: ele envolvia DOIS campos, e o rótulo
               nativo só endereça o primeiro. Cada campo carrega o seu aria-label. */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div className="label">Piso de compra</div>
-            {/* Número herói em Fraunces, unidade em mono caixa alta: é a mesma
-                gramática do indicador em todo o console. */}
+            {/* ONDA 5 · O "un." estava em `.label` — que desde esta onda é Inter
+                12/600 caixa normal, ou seja, o carimbo de unidade tinha virado
+                um rótulo do tamanho e do peso de um nome de campo, colado a um
+                número de 34px. É o caso que o de-para proíbe por escrito
+                ("NUNCA .label para carimbo de unidade"). `.unidade` dimensiona
+                em relação ao número (0.34em) e volta à mono caixa alta, que é o
+                papel legítimo dela: etiquetar, não nomear. */}
             <div className="kpi">
               {fmt(floor)}
-              <span className="label" style={{ marginLeft: 8 }}>un.</span>
+              <Unidade>un.</Unidade>
             </div>
             <input
               type="range"
@@ -125,7 +138,16 @@ export function Strategy() {
 
         {/* ── Decisão do motor ── */}
         <div className="card">
-          <p className="eyebrow">Decisão do motor</p>
+          {/* "Decisão do motor" tem 16 caracteres, e o sobretítulo é mono caixa
+              alta a 0.18em — acima de ~14 caracteres a entreletras desmancha a
+              palavra. Encurtado para uma palavra, que é a dose que o de-para
+              pede para `.eyebrow` (1 a 2 palavras); o nome inteiro passou para o
+              título, em Fraunces, onde ele se lê. */}
+          <AberturaDeSecao
+            eyebrow="Motor"
+            titulo="Decisão do motor"
+            descricao="A validação contra a capacidade real da rede na janela escolhida."
+          />
           {q.isLoading || !s ? (
             <Loading />
           ) : (
@@ -145,22 +167,25 @@ export function Strategy() {
                 <span style={{ lineHeight: 1.45 }}>{s.verdict}</span>
               </div>
 
-              <div style={{ display: 'flex', gap: 28, marginBottom: 18, flexWrap: 'wrap' }}>
-                <div>
-                  <div className="label">Capacidade na janela</div>
-                  <div className="kpi">
-                    {fmt(s.capacity)}
-                    <span className="label" style={{ marginLeft: 6 }}>un.</span>
-                  </div>
-                </div>
-                <div>
-                  <div className="label">Uso da capacidade</div>
-                  <div className="kpi">{s.capacityUsedPct}%</div>
-                </div>
-                <div>
-                  <div className="label">Com lastro</div>
-                  <div className="kpi">{s.backedPct}%</div>
-                </div>
+              {/* Os três números que sustentam o veredito eram três <div> soltos
+                  com `.label` + `.kpi`, num flex de 28px de intervalo: a mesma
+                  informação que o resto do console entrega em <StatCard>, mas
+                  desenhada à mão e sem nível. São CONTEXTO do banner de veredito
+                  logo acima — a conta que o motor fez para dizer "viável" —, e
+                  contexto é literalmente o papel do nível 3: filete de topo,
+                  sem moldura e sem fundo, número em 20px. Recuam sem sumir, e
+                  ocupam 102px em vez de 181px.
+                  O "un." do primeiro saiu de `.label` para `.unidade`, pelo
+                  mesmo motivo do piso de compra acima. */}
+              <div className="grid grid-3" style={{ marginBottom: 18 }}>
+                <StatCard
+                  nivel={3}
+                  label="Capacidade na janela"
+                  value={fmt(s.capacity)}
+                  unidade="un."
+                />
+                <StatCard nivel={3} label="Uso da capacidade" value={`${s.capacityUsedPct}%`} />
+                <StatCard nivel={3} label="Com lastro" value={`${s.backedPct}%`} />
               </div>
 
               {/* Barra empilhada */}
@@ -192,16 +217,29 @@ export function Strategy() {
                 <div className="banner warn" style={{ marginTop: 14, marginBottom: 0 }}>
                   <Icon name="atencao" size={18} />
                   <span>
-                    <strong>{fmt(s.withoutBacking)} un.</strong> acima da demanda projetada (sem lastro).
+                    <strong>
+                      {fmt(s.withoutBacking)}
+                      <Unidade>un.</Unidade>
+                    </strong>{' '}
+                    acima da demanda projetada (sem lastro).
                   </span>
                 </div>
               )}
 
               <div className="grid grid-3" style={{ marginTop: 16, gap: 10 }}>
                 {s.segments.map((seg) => (
+                  // Os três seguem NO MESMO nível de propósito: são as três
+                  // fatias de uma divisão, e promover uma seria mentir sobre a
+                  // decisão do motor. O que os separa é o filete de topo de 3px
+                  // na cor da fatia — o mesmo canal geométrico do nível 1,
+                  // usado aqui para IDENTIDADE e não para hierarquia, e na
+                  // mesma ordem da barra empilhada logo acima.
                   <div key={seg.key} className="card" style={{ padding: 14, borderTop: `3px solid ${segColor[seg.key]}` }}>
                     <div className="label">{seg.label}</div>
-                    <div className="kpi">{fmt(seg.units)}</div>
+                    <div className="kpi">
+                      {fmt(seg.units)}
+                      <Unidade>un.</Unidade>
+                    </div>
                     <div className="hint">{seg.rationale} · {seg.pct}%</div>
                   </div>
                 ))}

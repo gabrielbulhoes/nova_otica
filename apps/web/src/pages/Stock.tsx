@@ -1,7 +1,14 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getStock, getStores, getCategories, formatBRL, type StockRow } from '../api/client';
-import { PageHeader, Loading, Selo, type TomDeSelo } from '../components/ui';
+import {
+  PageHeader,
+  Loading,
+  Selo,
+  AberturaDeSecao,
+  Codigo,
+  type TomDeSelo,
+} from '../components/ui';
 import { Icon, type IconName } from '../brand/Icon';
 import { MultiSelect } from '../components/MultiSelect';
 import { useScope } from '../lib/scope';
@@ -56,7 +63,7 @@ function situacaoDoSaldo(disponivel: number): SituacaoDeSaldo {
     tom: 'red',
     icone: 'atencao',
     forte: true,
-    label: 'Ruptura',
+    label: 'Em falta',
     nota: 'Sem saldo livre para venda. Ação: repor ou transferir para cá.',
   };
 }
@@ -131,6 +138,31 @@ export function Stock() {
         </label>
       </div>
 
+      {/* A contagem SUBIU para a abertura da seção. Ela estava depois da tabela,
+          ou seja, depois de até 200 linhas: quem precisa saber "estou vendo 200
+          de 21.683" é justamente quem ainda não rolou, porque é essa a
+          informação que diz se vale refinar o filtro antes de ler. Agora ela
+          chega junto com o título do bloco.
+
+          Esta tela não ganha indicador de nível 1, e é decisão, não omissão: é
+          uma tela de CONSULTA — não existe um número da rede aqui, existe a
+          linha que o operador veio procurar. Inventar um destaque no topo seria
+          demarcar como principal algo que a tela não tem. A hierarquia aqui é a
+          régua de seção separando filtro de resultado. */}
+      <AberturaDeSecao
+        eyebrow="Resultado"
+        titulo="Saldo por produto e loja"
+        descricao={
+          stock.data ? (
+            <>
+              Mostrando{' '}
+              <strong>{stock.data.rows.length.toLocaleString('pt-BR')}</strong> de{' '}
+              <strong>{stock.data.total.toLocaleString('pt-BR')}</strong> registros no recorte atual.
+            </>
+          ) : undefined
+        }
+      />
+
       {/* overflowX no card, e não na página: a tabela ganhou a coluna Situação e
           em tela estreita ela rola dentro do próprio painel, sem arrastar a
           barra lateral junto. */}
@@ -159,8 +191,17 @@ export function Stock() {
                   <tr key={`${r.storeId}-${r.productId}`}>
                     <td>
                       <div>{r.description}</div>
+                      {/* O código do produto é IDENTIFICADOR — o operador o
+                          compara caractere a caractere com o que está na etiqueta
+                          da armação. É um dos quatro lugares onde a mono trabalha,
+                          e vai em <Codigo>: caixa normal, entreletras zero,
+                          tabular. Antes era `.muted`, ou seja, o mesmo tratamento
+                          de uma frase de apoio — perdia a largura fixa que é a
+                          única razão de a mono existir aqui.
+                          O tipo (ARMACAO/OCULOS) fica fora do <Codigo>: é
+                          categoria, não identificador. */}
                       <div className="muted" style={{ fontSize: 12 }}>
-                        #{r.productExternalId}
+                        <Codigo>#{r.productExternalId}</Codigo>
                         {r.category ? ` · ${r.category}` : ''}
                       </div>
                     </td>
@@ -191,13 +232,11 @@ export function Stock() {
           </div>
         )}
       </div>
-      {stock.data && (
-        // Contagem é rótulo de dado, curto: mono caixa alta. A frase explicativa
-        // fica no subtítulo, em Inter — mono não carrega texto corrido.
-        <p className="label" style={{ marginTop: 10 }}>
-          {stock.data.rows.length.toLocaleString('pt-BR')} de {stock.data.total.toLocaleString('pt-BR')} registros
-        </p>
-      )}
+      {/* A contagem que ficava aqui subiu para a abertura da seção (ver acima).
+          De quebra, o `.label` que a envolvia era um erro de vocabulário pelo
+          de-para novo: "1.234 de 21.683 registros" é FRASE, não rótulo — e sob a
+          regra antiga saía em mono caixa alta com 0.18em, que é exatamente o
+          tratamento que o cliente reclamou. */}
     </>
   );
 }

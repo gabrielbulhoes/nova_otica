@@ -9,13 +9,26 @@ import {
   setMinStock,
   type StockAlert,
 } from '../api/client';
-import { PageHeader, Loading, ErrorState, StatCard, Selo, Botao } from '../components/ui';
+import {
+  PageHeader,
+  Loading,
+  ErrorState,
+  StatCard,
+  Selo,
+  Botao,
+  AberturaDeSecao,
+} from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { useScope } from '../lib/scope';
 
 /**
- * Alertas de ruptura — a tela que diz o que está faltando agora.
+ * Alertas de falta — a tela que diz o que está faltando agora.
+ *
+ * "Ruptura" saiu do texto da tela por pedido do Galbe (Feedbacks 6.0, item
+ * 03): é jargão de gestão de estoque, e quem opera loja diz "em falta" ou
+ * "furou". O estado no código continua OUT — o que mudou é a palavra que a
+ * pessoa lê, não a semântica.
  *
  * SEM BOTÃO PRIMÁRIO SÓLIDO, e por decisão: esta tela é leitura e triagem. As
  * únicas coisas que ela deixa fazer são ajustar o mínimo de uma linha (utilitário
@@ -73,8 +86,9 @@ export function Alerts() {
   return (
     <>
       <PageHeader
-        title="Alertas de ruptura"
-        subtitle="Produtos sem saldo (ruptura) ou abaixo do estoque mínimo, por loja."
+        eyebrow="Operação"
+        title="Alertas de falta"
+        subtitle="Produtos sem saldo (em falta) ou abaixo do estoque mínimo, por loja."
       />
 
       {/* Filtros da tela: sem loja e sem tipo de produto, uma lista da rede
@@ -99,8 +113,8 @@ export function Alerts() {
           ))}
         </select>
         <select value={level} onChange={(e) => setLevel(e.target.value)} aria-label="Nível do alerta">
-          <option value="">Ruptura e estoque baixo</option>
-          <option value="OUT">Somente rupturas</option>
+          <option value="">Em falta e estoque baixo</option>
+          <option value="OUT">Somente os que faltam</option>
           <option value="LOW">Somente estoque baixo</option>
         </select>
         <span style={{ flex: 1 }} />
@@ -121,20 +135,63 @@ export function Alerts() {
       </div>
 
       {alerts.data && (
-        <div className="grid grid-3">
-          <StatCard
-            label="Total de alertas"
-            value={alerts.data.total}
-            hint={[lojaEscolhida ?? 'Toda a rede', tipo || 'todos os tipos'].join(' · ')}
-          />
-          {/* Ícone nos dois indicadores de risco: é o segundo canal de leitura
-              antes do número, e é o que separa "ruptura" de "baixo" no cinza. */}
-          <StatCard label="Rupturas (saldo 0)" value={alerts.data.out} icon="atencao" />
-          <StatCard label="Estoque baixo" value={alerts.data.low} icon="prazo" />
-        </div>
+        <>
+          {/* HIERARQUIA — os três indicadores tinham UMA assinatura só: mesmo
+              fundo, mesma moldura, mesmo corpo de número. Enfileirados assim,
+              "2097", "288" e "1809" pesavam igual, e o maior deles (o total) é
+              justamente o que menos manda agir.
+
+              NÍVEL 1 é EM FALTA (saldo 0), e a escolha é operacional: é o único
+              dos três que representa venda perdida AGORA. Estoque baixo é aviso
+              (ainda há o que vender); total de alertas é a soma dos dois, ou
+              seja, não é um fato novo — é aritmética dos outros dois cartões.
+              `largo` porque este é o número em torno do qual a tela inteira
+              existe, e a coluna dupla o separa do vizinho antes mesmo da cor. */}
+          <div className="grid grid-3">
+            {/* Ícone nos dois indicadores de risco: é o segundo canal de leitura
+                antes do número, e é o que separa "em falta" de "baixo" no cinza. */}
+            <StatCard
+              nivel={1}
+              className="largo"
+              label="Em falta (saldo 0)"
+              value={alerts.data.out}
+              icon="atencao"
+              unidade="itens"
+              hint="Sem saldo para vender nesta seleção — cada linha é uma venda que a loja não faz hoje."
+            />
+            <StatCard
+              label="Estoque baixo"
+              value={alerts.data.low}
+              icon="prazo"
+              unidade="itens"
+              hint="Ainda há o que vender, mas abaixo do mínimo."
+            />
+          </div>
+
+          {/* NÍVEL 3 — contexto. O total não é um quarto fato: é a soma dos dois
+              acima, e serve para dizer sobre QUE recorte eles foram contados.
+              Sem moldura e sem fundo, recua sem sumir. */}
+          <div className="grid grid-3" style={{ marginTop: 10 }}>
+            <StatCard
+              nivel={3}
+              label="Total de alertas"
+              value={alerts.data.total}
+              hint={[lojaEscolhida ?? 'Toda a rede', tipo || 'todos os tipos'].join(' · ')}
+            />
+          </div>
+        </>
       )}
 
-      <div className="card" style={{ marginTop: 16, padding: 0 }}>
+      {/* A lista abre com a régua dourada do manual, como no Dashboard: sem ela
+          os indicadores e a tabela chegavam ao olho como uma pilha só, que é a
+          "confusão de informações" que o cliente apontou. */}
+      <AberturaDeSecao
+        eyebrow="Lista"
+        titulo="O que está faltando agora"
+        descricao="Uma linha por produto e loja. O mínimo pode ser ajustado na própria linha."
+      />
+
+      <div className="card" style={{ padding: 0 }}>
         {alerts.isError ? (
           <ErrorState message={alerts.error instanceof Error ? alerts.error.message : undefined} />
         ) : alerts.isLoading ? (
@@ -161,7 +218,7 @@ export function Alerts() {
                         a mesma luminância (1.19:1 entre si). */}
                     {r.level === 'OUT' ? (
                       <Selo tom="red" icone="atencao" forte title="Saldo zero: não há o que vender nesta loja.">
-                        Ruptura
+                        Em falta
                       </Selo>
                     ) : (
                       <Selo tom="amber" icone="prazo" title="Abaixo do estoque mínimo definido para esta loja.">
@@ -198,17 +255,25 @@ export function Alerts() {
       </div>
 
       {isAdmin && rebalance.data && transfers.length > 0 && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h3 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Icon name="transferencias" size={20} />
-            Transferências sugeridas — remanejar antes de comprar
-          </h3>
-          <p className="muted" style={{ marginTop: -4, marginBottom: 10, fontSize: 12.5 }}>
-            A rede tem <strong>{rebalance.data.summary.units}</strong> unidades a mover em{' '}
-            <strong>{rebalance.data.summary.suggestions}</strong> sugestões (custo zero): produto parado numa loja
-            com saída em outra.
-          </p>
-          <table>
+        <>
+          {/* Mesma abertura de seção do bloco acima: o sobretítulo em mono é
+              etiqueta curta (1 palavra) — é onde a caixa alta espaçada está no
+              lugar dela — e o título vai em Fraunces. O <Icon> saiu porque a
+              régua dourada já é o marcador de seção; os dois juntos marcavam a
+              mesma coisa duas vezes. */}
+          <AberturaDeSecao
+            eyebrow="Remanejamento"
+            titulo="Transferências sugeridas — remanejar antes de comprar"
+            descricao={
+              <>
+                A rede tem <strong>{rebalance.data.summary.units}</strong> unidades a mover em{' '}
+                <strong>{rebalance.data.summary.suggestions}</strong> sugestões (custo zero): produto
+                parado numa loja com saída em outra.
+              </>
+            }
+          />
+          <div className="card">
+            <table>
             <thead>
               <tr>
                 <th>Produto</th>
@@ -247,7 +312,8 @@ export function Alerts() {
             <Icon name="relatorios" size={15} />
             Ver o relatório completo de transferências
           </Link>
-        </div>
+          </div>
+        </>
       )}
     </>
   );

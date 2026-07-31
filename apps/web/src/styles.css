@@ -921,6 +921,43 @@ header > .eyebrow {
   font-weight: 500;
 }
 
+/* ONDA 5 · A ZONA DE AÇÃO DENTRO DO CARD (`.acao-do-card`).
+   Os três níveis acima resolvem a hierarquia ENTRE cartões. Esta resolve a
+   hierarquia DENTRO de um — que é o problema das telas de decisão, onde um card
+   carrega, com a mesma assinatura, o que a pessoa vai FAZER (o desconto a
+   aplicar, a rota da transferência) e a JUSTIFICATIVA de por que o motor sugeriu
+   aquilo. Com uma assinatura só, distinguir as duas exige LER as duas.
+
+   Usa deliberadamente a MESMA gramática do nível 1 — superfície própria
+   (--panel-2) + filete de 3px em ouro + respiro maior —, para que o console
+   tenha UM jeito de dizer "isto é o principal", e não um por escala.
+
+   O filete vai à ESQUERDA, e não no topo como no cartão: dentro do card o
+   vizinho de cima é conteúdo do MESMO card, e um filete horizontal ali leria
+   como separador de seção (o papel de `hr.rule`), não como promoção. À esquerda
+   ele corre ao lado do bloco inteiro e o marca como uma faixa.
+
+   No escuro segue a mesma inversão do nível 1: o ouro claro é o que separa
+   quando o vizinho é grafite. */
+.acao-do-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border-left: 3px solid var(--ouro);
+}
+[data-tema='escuro'] .acao-do-card {
+  background: var(--grafite);
+  border-left-color: var(--ouro-lux);
+}
+/* No papel a superfície morre por regra (ver o bloco de impressão no fim do
+   arquivo): sobra o filete, que é geométrico e imprime. */
+@media print {
+  .acao-do-card {
+    background: transparent;
+    border-left: 3px solid #000;
+  }
+}
+
 /* Indicador: número em Fraunces (herói), rótulo em Inter (serviço).
    ONDA 5 · o rótulo saiu da mono — ver a nota longa em `.label`. Esta regra
    existe só para o par de tamanhos do indicador; a família vem de `.label`. */
@@ -1321,7 +1358,14 @@ table {
 th,
 td {
   text-align: left;
-  padding: 11px 14px; /* densidade preservada: o console vive de tabela grande */
+  /* ONDA 5 · 14 → 12px de respiro lateral. Dez colunas × 28px de respiro são
+     280px de largura gastos só em ar — e é essa largura que falta às colunas de
+     TEXTO, que são as que quebram e definem a altura da linha. Medido na tabela
+     de recomendação de compra do Planejamento (10 colunas, 440 linhas): a
+     redução devolve 40px às colunas de conteúdo. O respiro VERTICAL não se
+     move: é ele que separa uma linha da outra, e mexer nele seria apertar a
+     leitura em vez de aproveitar espaço morto. */
+  padding: 11px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 13.5px;
 }
@@ -1882,7 +1926,13 @@ td .codigo {
   margin-top: 4px;
 }
 .action-card {
-  text-align: left;
+  /* Feedbacks 6.0, item 04: texto centralizado. São quatro contadores lado a
+     lado, e alinhados à esquerda cada bloco começava numa altura diferente por
+     causa do comprimento do rótulo — o olho lia quatro cartões desalinhados em
+     vez de uma régua de indicadores. O filete colorido continua à esquerda:
+     ele é o canal de estado, não o eixo do texto. */
+  text-align: center;
+  align-items: center;
   cursor: pointer;
   font: inherit;
   color: inherit;

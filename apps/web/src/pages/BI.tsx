@@ -171,9 +171,9 @@ export function BI() {
           */}
           <div className="grid grid-3" style={{ marginTop: 16 }}>
             <div className="card">
-              <h3 className="section-title">Taxa de ruptura</h3>
+              <h3 className="section-title">Taxa de itens em falta</h3>
               <EChart
-                option={(tema) => gaugeOption(indicadores.rupturaRate, 100, '% em ruptura', COR.critico, '%', { tema })}
+                option={(tema) => gaugeOption(indicadores.rupturaRate, 100, '% em falta', COR.critico, '%', { tema })}
                 height={200}
               />
             </div>

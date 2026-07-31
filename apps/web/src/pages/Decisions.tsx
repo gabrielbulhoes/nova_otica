@@ -8,7 +8,18 @@ import type {
   DecisionPriority,
   DecisionBoard as DecisionBoardT,
 } from '../api/client';
-import { Loading, ErrorState, PageHeader, StatCard, Selo, Botao, type TomDeSelo } from '../components/ui';
+import {
+  Loading,
+  ErrorState,
+  PageHeader,
+  StatCard,
+  Selo,
+  Botao,
+  Codigo,
+  Unidade,
+  AberturaDeSecao,
+  type TomDeSelo,
+} from '../components/ui';
 import { Icon, type IconName } from '../brand/Icon';
 
 /**
@@ -98,13 +109,59 @@ function Numero({ rotulo, valor, title }: { rotulo: string; valor: string; title
   );
 }
 
-/** Parâmetro da regra em linha: rótulo curto em mono, valor em Inter legível. */
+/**
+ * Parâmetro da regra, em linha.
+ *
+ * ONDA 5 · A LINHA TROCOU DE LADO. Ela tinha o RÓTULO em `.label` (Inter 12/600,
+ * escuro) e o VALOR em Inter regular — ou seja, o nome do parâmetro pesava mais
+ * que o número, e "Margem / Degraus / Parada" chegavam ao olho com a mesma
+ * força do desconto sugerido logo acima, que é a única coisa desta caixa em que
+ * alguém age. Agora o rótulo recua (Inter 12, `--muted`, peso normal) e o valor
+ * vem em `.codigo`.
+ *
+ * O valor em mono aqui não é decoração: "45%", "0 de 10 p.p.", "15 dias" são
+ * exatamente o que se COMPARA de um card para o outro, lado a lado, numa grade
+ * de três. É a regra de ouro do de-para — mono para o que se compara, Inter
+ * para o que se lê — e é caixa NORMAL com entreletras zero, porque comparar
+ * dígito com dígito é o que a largura fixa serve, e a caixa alta atrapalharia.
+ */
 function Parametro({ rotulo, valor }: { rotulo: string; valor: string }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
-      <span className="label">{rotulo}</span>
-      <span style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>{valor}</span>
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span className="muted" style={{ fontSize: 12 }}>{rotulo}</span>
+      <Codigo>{valor}</Codigo>
     </span>
+  );
+}
+
+/* A hierarquia DENTRO do card é resolvida por `.acao-do-card` (styles.css): a
+   zona que carrega o que a pessoa vai FAZER — o desconto a aplicar, a rota da
+   transferência — ganha superfície própria e filete dourado de 3px, a mesma
+   gramática do cartão nível 1, enquanto a JUSTIFICATIVA do motor fica fora
+   dela, em Inter recuado. A nota longa sobre por que o filete vai à esquerda,
+   e não no topo, está junto da regra. */
+
+/**
+ * Rota de transferência: "de A → B". É a informação que a pessoa executa, e por
+ * isso vem em Inter com o par de lojas em <strong> — nome de loja é NOME, se lê
+ * inteiro, e mono aqui só custaria contorno de palavra.
+ *
+ * A seta é pontuação dentro da frase, não ícone: continua caractere.
+ */
+function Rota({ de, para, quantidade }: { de: string; para: string; quantidade?: number | null }) {
+  return (
+    <p style={{ margin: '4px 0 0', fontSize: 13, lineHeight: 1.4 }}>
+      {quantidade != null && quantidade > 0 && (
+        <>
+          <strong>{quantidade}</strong>
+          <Unidade>un.</Unidade>{' '}
+        </>
+      )}
+      <span className="muted">de </span>
+      <strong>{de}</strong>
+      <span className="muted"> → </span>
+      <strong>{para}</strong>
+    </p>
   );
 }
 
@@ -249,8 +306,15 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
             {c.ageDays}d sem decisão
           </Selo>
         )}
-        <span className="carimbo" style={{ marginLeft: 'auto', marginTop: 0 }}>
-          {c.id}
+        {/* ONDA 5 · O identificador saiu de `.carimbo` (mono CAIXA ALTA a
+            0.18em) para `.codigo` (mono caixa normal, entreletras ZERO). "#L3L.MV4"
+            é a cadeia que o operador cola num chamado e confere caractere a
+            caractere; a caixa alta apagava a diferença entre o 0 e o O, e o
+            0.18em separava tanto os glifos que a cadeia deixava de se ler como
+            uma unidade. É o caso em que a mono é FUNÇÃO — e função pede a caixa
+            e o espaçamento que a leitura usa, não os que a etiqueta usa. */}
+        <span style={{ marginLeft: 'auto' }}>
+          <Codigo>{c.id}</Codigo>
         </span>
       </div>
 
@@ -264,120 +328,167 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
         </p>
       </div>
 
+      {/* No card de remanejamento o "Alvo" É a rota, e a rota agora vive na zona
+          de ação logo abaixo. Repeti-la aqui punha o mesmo dado duas vezes no
+          mesmo card, com pesos diferentes — que é exatamente a confusão que esta
+          onda veio desfazer. Aqui sobra o prazo, que é o que ainda não foi dito. */}
       <div style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 9 }}>
-        <span className="muted">Alvo:</span>
-        <strong>{c.target}</strong>
-        {c.quantity != null && c.quantity > 0 && <span className="muted">· {c.quantity} un.</span>}
+        {c.type !== 'REMANEJAMENTO' && (
+          <>
+            <span className="muted">Alvo:</span>
+            <strong>{c.target}</strong>
+            {c.quantity != null && c.quantity > 0 && (
+              <span className="muted">
+                · {c.quantity}
+                <Unidade>un.</Unidade>
+              </span>
+            )}
+          </>
+        )}
         {c.urgencyDays != null && (
           <span style={{ color: 'var(--red)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <Icon name="atencao" size={13} />
-            ruptura em ~{c.urgencyDays}d
+            vai faltar em ~{c.urgencyDays}d
           </span>
         )}
       </div>
 
-      {/* Feedback 05: "liquidar como? remanejar para onde?" — o card passa
-          a responder as duas, com o porquê do número. O bloco deixou de ser uma
-          caixa dentro da caixa: a régua hierárquica abre a seção, que é como o
-          manual constrói hierarquia (filete, não empilhamento de superfícies —
-          panel-2 sobre panel dá 1.22:1 e simplesmente não se vê). */}
+      {/* ═══ O QUE FAZER ═══════════════════════════════════════════════════
+          Feedback 05 pedia que o card respondesse "liquidar como?" e "remanejar
+          para onde?" — e ele respondia, só que na mesma voz de tudo o mais.
+          Onda 5 separa as duas naturezas que o card carrega:
+
+            · a AÇÃO — o desconto a aplicar e a rota da transferência. É o que
+              a pessoa vai executar, e agora mora numa zona promovida
+              (`.acao-do-card`: superfície própria + filete de 3px em ouro à
+              esquerda), com o número em Fraunces 27px, o mesmo corpo do
+              indicador nível 2.
+            · a JUSTIFICATIVA — margem, degraus, dias parado, o texto da regra.
+              Fica FORA da zona, em Inter recuado, sob o rótulo "Por que este
+              número". Continua inteira na tela (ele pediu os parâmetros
+              explicitamente), mas para de disputar a leitura com a ação.
+
+          Sem isso, "o desconto é 30%" e "a margem estimada é 45%" chegam com o
+          mesmo peso, e são coisas de ordens diferentes: uma é ordem de serviço,
+          a outra é nota de rodapé. */}
       {c.type === 'LIQUIDACAO' && (c.discountPct ?? 0) > 0 && (
         <>
           <hr className="rule" />
-          <div className="label">Como liquidar</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-            <span
-              style={{
-                fontFamily: 'var(--font-titulo)',
-                fontSize: 20,
-                lineHeight: 1,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              −{c.discountPct}%
-            </span>
-            <span className="muted" style={{ fontSize: 12.5 }}>
-              desconto sugerido
-            </span>
-            {c.discountMaxPct != null && (
-              <span className="muted" style={{ fontSize: 12.5 }}>
-                · teto {c.discountMaxPct}%{' '}
-                {c.discountParams?.ceilingEstimated ? '(margem estimada)' : '(zera a margem)'}
+          <div className="acao-do-card">
+            <div className="label">Como liquidar</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+              <span
+                style={{
+                  fontFamily: 'var(--font-titulo)',
+                  // 20px → 27px: o mesmo corpo do número do cartão nível 2. O
+                  // desconto é o dado que a tela existe para entregar neste
+                  // card; a 20px ele ficava menor que o impacto do rodapé.
+                  fontSize: 27,
+                  lineHeight: 1,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                −{c.discountPct}%
               </span>
+              <span className="muted" style={{ fontSize: 12.5 }}>
+                desconto sugerido
+              </span>
+            </div>
+            {c.outletStoreName && (
+              <p style={{ margin: '6px 0 0', fontSize: 12.5 }}>
+                <span className="muted">Melhor destino: </span>
+                <strong>{c.outletStoreName}</strong>
+                <span className="muted">
+                  {c.outletBasis === 'marca' ? ' — é onde a marca mais sai' : ' — é onde a peça mais sai'}
+                </span>
+              </p>
+            )}
+            {/* Destino é informação; transferência é ação — as duas ficam na
+                zona promovida porque a segunda depende da primeira. */}
+            {c.outletFromStoreId && c.outletQuantity != null && (
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <Rota
+                  de={c.outletFromStoreName ?? '—'}
+                  para={c.outletStoreName ?? '—'}
+                  quantidade={c.outletQuantity}
+                />
+                {escoa === 'done' ? (
+                  <Selo tom="green" icone="aprovar">
+                    Transferência solicitada
+                  </Selo>
+                ) : (
+                  <Botao
+                    variante="discreto"
+                    pequeno
+                    icone="transferencias"
+                    disabled={escoa === 'loading'}
+                    aria-disabled={escoa === 'loading'}
+                    onClick={criarEscoamento}
+                    title="Cria a movimentação de transferência com origem, destino e quantidade do motor"
+                  >
+                    {escoa === 'loading' ? 'Criando…' : 'Criar transferência'}
+                  </Botao>
+                )}
+                {escoa === 'error' && <ErroInline>{escoaErr}</ErroInline>}
+              </div>
             )}
           </div>
-          {c.outletStoreName && (
-            <p style={{ margin: '5px 0 0', fontSize: 12.5 }}>
-              <span className="muted">Melhor destino: </span>
-              <strong>{c.outletStoreName}</strong>
-              <span className="muted">
-                {c.outletBasis === 'marca' ? ' — é onde a marca mais sai' : ' — é onde a peça mais sai'}
-              </span>
-            </p>
-          )}
-          {/* Destino é informação; transferência é ação. A seta em "de A → B" é
-              pontuação dentro da frase, não ícone — por isso continua caractere. */}
-          {c.outletFromStoreId && c.outletQuantity != null && (
-            <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12 }}>
-                <span className="muted">Mover </span>
-                <strong>{c.outletQuantity} un.</strong>
-                <span className="muted">
-                  {' '}
-                  de {c.outletFromStoreName} → {c.outletStoreName}
-                </span>
-              </span>
-              {escoa === 'done' ? (
-                <Selo tom="green" icone="aprovar">
-                  Transferência solicitada
-                </Selo>
-              ) : (
-                <Botao
-                  variante="discreto"
-                  pequeno
-                  icone="transferencias"
-                  disabled={escoa === 'loading'}
-                  aria-disabled={escoa === 'loading'}
-                  onClick={criarEscoamento}
-                  title="Cria a movimentação de transferência com origem, destino e quantidade do motor"
-                >
-                  {escoa === 'loading' ? 'Criando…' : 'Criar transferência'}
-                </Botao>
-              )}
-              {escoa === 'error' && <ErroInline>{escoaErr}</ErroInline>}
-            </div>
-          )}
-          {c.discountReason && (
-            <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
-              {c.discountReason}
-            </p>
-          )}
+
           {/* "É importante entender os parâmetros que estão sendo utilizados
-              pra sugestão" — então eles ficam na tela, não no código. Saíram do
-              bloco em mono corrido: mono é rótulo curto, não frase de 75
-              caracteres. Rótulo em mono, valor em Inter. */}
-          {c.discountParams && (
-            <>
-              <div
-                style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 7 }}
-                title="Parâmetros da regra da rede, usados para chegar neste número"
-              >
-                <Parametro rotulo="Margem" valor={`${c.discountParams.marginPct}%`} />
-                <Parametro
-                  rotulo="Degraus"
-                  valor={`${c.discountParams.steps} de ${c.discountParams.stepPct} p.p.`}
-                />
-                {c.discountParams.stuckDays != null && (
-                  <Parametro rotulo="Parada" valor={`${c.discountParams.stuckDays} dias`} />
+              pra sugestão" — então eles ficam na tela, não no código. Fora da
+              zona de ação e sob um rótulo que diz o que são: justificativa. */}
+          {(c.discountReason || c.discountParams || c.discountMaxPct != null) && (
+            <div style={{ marginTop: 9 }} title="Parâmetros da regra da rede, usados para chegar neste número">
+              <p className="hint" style={{ margin: 0, fontWeight: 600 }}>Por que este número</p>
+              {c.discountReason && (
+                <p className="muted" style={{ margin: '3px 0 0', fontSize: 12, lineHeight: 1.4 }}>
+                  {c.discountReason}
+                </p>
+              )}
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 6 }}>
+                {c.discountMaxPct != null && <Parametro rotulo="Teto" valor={`${c.discountMaxPct}%`} />}
+                {c.discountParams && (
+                  <>
+                    <Parametro rotulo="Margem" valor={`${c.discountParams.marginPct}%`} />
+                    <Parametro
+                      rotulo="Degraus"
+                      valor={`${c.discountParams.steps} de ${c.discountParams.stepPct} p.p.`}
+                    />
+                    {c.discountParams.stuckDays != null && (
+                      <Parametro rotulo="Parada" valor={`${c.discountParams.stuckDays} dias`} />
+                    )}
+                  </>
                 )}
               </div>
-              {c.discountParams.ceilingEstimated && (
+              {c.discountParams?.ceilingEstimated && (
                 <p className="muted" style={{ margin: '5px 0 0', fontSize: 11.5 }}>
                   Margem estimada — falta o valor de compra deste produto.
                 </p>
               )}
-            </>
+            </div>
           )}
+        </>
+      )}
+
+      {/* O card de remanejamento tinha a rota SÓ dentro do título ("Mover X de A
+          para B", em frase corrida) e o botão de aprovar no rodapé, a três
+          blocos de distância do dado que ele executa. Quem opera precisa ver
+          origem → destino → quantidade sem ler a frase: agora a rota é a zona
+          promovida do card, na mesma assinatura da liquidação. */}
+      {c.type === 'REMANEJAMENTO' && c.target.includes('→') && (
+        <>
+          <hr className="rule" />
+          <div className="acao-do-card">
+            <div className="label">Rota da transferência</div>
+            {/* O motor já entrega o par pronto em `target` ("ORIGEM → DESTINO",
+                planning.math.ts). Aqui ele é partido só para que cada ponta
+                receba o <strong> — o par é o dado, a seta é pontuação. */}
+            <Rota
+              de={c.target.split('→')[0].trim()}
+              para={c.target.split('→')[1].trim()}
+              quantidade={c.quantity}
+            />
+          </div>
         </>
       )}
 
@@ -536,7 +647,10 @@ function BatchLine({ board }: { board?: DecisionBoardT }) {
     >
       <span className="label">Lote</span>
       <span>
-        <strong>{quando}</strong>
+        {/* Carimbo de data/hora: o de-para manda em `.codigo` — mono, caixa
+            normal, entreletras zero, tabular. "31/07, 06:00" é uma cadeia que se
+            compara com a de ontem, e a tabular é o que faz as duas alinharem. */}
+        <Codigo>{quando}</Codigo>
         <span className="muted">
           {b.source === 'CRON' ? ' · sincronização das 6h' : ' · sincronização manual'}
         </span>
@@ -597,35 +711,79 @@ export function Decisions() {
       ) : (
         <>
           <BatchLine board={board.data} />
-          <div className="grid grid-4" style={{ marginBottom: 18 }}>
+          {/* ═══ HIERARQUIA DA GRADE DE INDICADORES ═══════════════════════════
+              Os três indicadores eram três `.card.stat` idênticos: mesma
+              superfície, mesmo filete, mesmo corpo de número. Três respostas com
+              a mesma voz para três perguntas de importâncias diferentes — e o
+              olho, sem nada que o guie, lê da esquerda para a direita e para no
+              primeiro que encontra, seja ele qual for.
+
+              Agora a tela declara o que é: uma FILA de decisões, com uma parte
+              que tem prazo.
+
+                nível 1 (largo) · Cards em aberto — o tamanho da fila. É o
+                  número que a tela existe para mostrar, e ocupa duas colunas.
+                nível 2 · Críticos e Alta prioridade — o recorte com prazo.
+                  Apoio: o que se consulta depois de saber o tamanho da fila.
+                nível 3 · a repartição por tipo. Era uma frase de 60 caracteres
+                  espremida no `hint` de cima ("126 comprar · 1203 remanejar ·
+                  51 liquidar"), onde três números diferentes chegavam como
+                  texto corrido. Como três cartões de contexto eles voltam a ser
+                  números — e custam 102px em vez dos 181px de um cartão normal,
+                  o que devolve à tela a altura que o nível 1 tomou. A
+                  hierarquia aqui não cobra densidade: ela paga. */}
+          <div className="grid grid-4">
             <StatCard
+              nivel={1}
+              className="largo"
               label="Cards em aberto"
               value={String(s.total)}
-              hint={`${s.byType.compra} comprar · ${s.byType.remanejamento} remanejar · ${s.byType.liquidacao} liquidar${
-                s.decididos > 0 ? ` · ${s.decididos} já decidido${s.decididos > 1 ? 's' : ''}` : ''
-              }`}
+              hint={
+                s.decididos > 0
+                  ? `${s.decididos} já decidido${s.decididos > 1 ? 's' : ''} neste lote — esses saíram da fila.`
+                  : 'Nenhum decidido neste lote ainda.'
+              }
             />
-            <StatCard
-              label="Impacto sob decisão"
-              value={formatBRL(s.impactTotal)}
-              hint="Capital a comprar somado ao capital a liberar."
-            />
+            {/* Feedbacks 6.0, item 01 (Galbe): "vamos tirar essa info? acho que é
+                confusa de entender e passa a impressão de uma falsa verdade".
+                Ele está certo, e o defeito é de soma: `impactTotal` juntava
+                capital que SAI (comprar) com capital que VOLTA (liquidar). São
+                sinais opostos no caixa, e o resultado não é dinheiro nenhum —
+                era um número grande sem referente. Os dois valores continuam
+                onde significam alguma coisa: no card de cada decisão. */}
             {/* Ícone só nos dois indicadores que carregam risco — é a regra do
                 StatCard. Com ele, "alta prioridade" e "crítico" continuam se
                 distinguindo do resto sem depender do vermelho que estava aqui. */}
             <StatCard
-              label="Alta prioridade"
-              value={String(s.byPriority.alta)}
-              icon="atencao"
-              hint={`${s.byPriority.media} de prioridade média · ${s.byPriority.baixa} de baixa.`}
-            />
-            <StatCard
               label="Críticos (~7 dias)"
               value={String(s.criticos)}
               icon="prazo"
-              hint="Ruptura próxima: o estoque acaba antes de o pedido chegar."
+              hint="Vai faltar antes de o pedido chegar."
+            />
+            <StatCard
+              label="Alta prioridade"
+              value={String(s.byPriority.alta)}
+              icon="atencao"
+              hint={`${s.byPriority.media} de média · ${s.byPriority.baixa} de baixa.`}
             />
           </div>
+
+          <div className="grid grid-3" style={{ marginTop: 6, marginBottom: 18 }}>
+            <StatCard nivel={3} label="A comprar" value={String(s.byType.compra)} />
+            <StatCard nivel={3} label="A remanejar" value={String(s.byType.remanejamento)} />
+            <StatCard nivel={3} label="A liquidar" value={String(s.byType.liquidacao)} />
+          </div>
+
+          {/* A grade de cards abria sem nada que dissesse onde a leitura dos
+              indicadores termina e onde o trabalho começa: os filtros vinham
+              soltos, e depois deles a grade, sem título. Esta tela tinha ZERO
+              `.rule-section` — a ferramenta que o manual prevê para abrir seção
+              estava no CSS e não na tela. */}
+          <AberturaDeSecao
+            eyebrow="Quadro"
+            titulo="Cards de decisão"
+            descricao="Cada card traz a ação em destaque e a justificativa do motor logo abaixo."
+          />
 
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
             <div className="segmented" role="group" aria-label="Filtrar por tipo de decisão">

@@ -1222,8 +1222,19 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     : 'principal';
   if (url === '/planning/overview')
     return buildOverview(planningPlans(planDays, one(params.storeId), planGroup), planDays);
-  if (url === '/planning/purchase-suggestions')
-    return buildSuggestions(planningPlans(planDays, one(params.storeId), planGroup), planDays);
+  if (url === '/planning/purchase-suggestions') {
+    const r = buildSuggestions(planningPlans(planDays, one(params.storeId), planGroup), planDays);
+    // Feedbacks 6.0, item 02: a demo carrega uma AMOSTRA do catálogo (1.631 de
+    // 21.683 SKUs). O motor analisa o que existe aqui; o universo do recorte na
+    // rede é maior, e a tela precisa dizer os dois para a contagem de sugestões
+    // ter referência.
+    const naRede = real?.totals?.productCountNetwork;
+    if (naRede != null && products.length > 0) {
+      const noRecorte = products.filter((p) => matchesProductGroup(p.category, planGroup)).length;
+      r.summary.universo = Math.round(naRede * (noRecorte / products.length));
+    }
+    return r;
+  }
   if (url === '/planning/purchase-orders' && m === 'GET')
     return buildPurchaseOrders(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-orders' && m === 'POST') {

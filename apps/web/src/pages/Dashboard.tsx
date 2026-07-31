@@ -110,7 +110,7 @@ export function Dashboard() {
         <div className="banner warn">
           <span className="dot amber" />
           <div>
-            <strong>{alerts.data.out}</strong> ruptura(s) e <strong>{alerts.data.low}</strong> item(ns) com
+            <strong>{alerts.data.out}</strong> item(ns) em falta e <strong>{alerts.data.low}</strong> item(ns) com
             estoque baixo. <Link to="/admin/alertas" style={{ color: 'var(--accent)' }}>Ver alertas →</Link>
           </div>
         </div>
@@ -138,18 +138,38 @@ export function Dashboard() {
         <Loading />
       ) : summary.data ? (
         <>
-          {/* NÍVEL 1 — os dois indicadores que respondem "como está o estoque da
-              rede AGORA?", que é a pergunta que faz esta tela existir. Dois é o
-              teto: com três, a tela volta a não ter principal.
-              O `largo` (duas colunas) vai para a COBERTURA e não para as
-              unidades, por medida e não por gosto: a explicação da cobertura tem
-              76 caracteres e, numa coluna de 265px, quebrava em três linhas —
-              três linhas que empurravam a tabela para fora do primeiro quadro.
-              Na coluna dupla ela cabe em duas, e a área extra fica no indicador
-              que mais precisa dela. */}
+          {/* NÍVEL 1 — UM SÓ, e é a COBERTURA DA REDE.
+              A onda anterior deixou dois cartões em nível 1 (unidades e
+              cobertura). O teto do sistema é dois, mas teto não é meta: com dois
+              destaques lado a lado, de mesma superfície e mesmo corpo de número,
+              o olho não escolhe — ele alterna. A tela voltava a não ter um
+              principal, que é exatamente a queixa do cliente ("demarcar melhor
+              as informações principais").
+
+              Por que a cobertura e não as unidades:
+              · "38.453 un." é MAGNITUDE, não veredito. Sozinho não diz se está
+                bom ou ruim, e não muda de forma legível de um dia para o outro —
+                ninguém age por causa dele.
+              · "21,9 meses" é RAZÃO, e já vem julgada: o gestor sabe de cor qual
+                é a faixa saudável da rede dele, então o número se lê como
+                diagnóstico no mesmo movimento em que se lê como dado.
+              · as unidades são o NUMERADOR da cobertura. Quem olha a cobertura
+                já olhou as unidades; o inverso não vale. Destacar os dois é
+                destacar a mesma informação duas vezes, uma delas pela metade.
+              · e a ruptura, terceira candidata, não perde espaço com isso: ela
+                tem banner próprio acima e tela própria em Alertas. Ruptura é
+                lista de exceção — se resolve item a item, não se lê como estado
+                da rede.
+
+              O `largo` (duas colunas) segue na cobertura, e agora por dois
+              motivos: a explicação tem 76 caracteres e numa coluna de 265px
+              quebrava em três linhas; e a largura dupla passou a ser o canal que
+              faz o único nível 1 vencer sem depender só do filete. */}
           <div className="grid grid-4">
+            {/* NÍVEL 2 — o saldo bruto. Continua sendo o primeiro número da
+                grade (é a leitura natural: quanto eu tenho, depois por quantos
+                meses dá), mas em assinatura de apoio. */}
             <StatCard
-              nivel={1}
               label="Unidades em estoque"
               value={summary.data.stockUnits.toLocaleString('pt-BR')}
               unidade="un."
@@ -176,7 +196,8 @@ export function Dashboard() {
               }
             />
             {/* NÍVEL 2 — apoio: não é o retrato do estoque, é a fila de trabalho
-                que sai dele. Assinatura de cartão padrão. */}
+                que sai dele. Assinatura de cartão padrão, igual à das unidades:
+                os dois são satélites do mesmo destaque. */}
             <StatCard
               label="Transferências pendentes"
               value={summary.data.pendingMovements}

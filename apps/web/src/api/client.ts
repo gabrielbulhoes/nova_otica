@@ -481,7 +481,18 @@ export interface PlanningOverview {
 
 export interface PurchaseSuggestions {
   days: number;
-  summary: { buy: number; hold: number; dontBuy: number; liquidate: number; buyCapital: number; avoidedCapital: number };
+  summary: {
+    buy: number;
+    hold: number;
+    dontBuy: number;
+    liquidate: number;
+    buyCapital: number;
+    avoidedCapital: number;
+    /** Quantos SKUs o motor analisou — o denominador de `buy`. */
+    analisados?: number;
+    /** Quantos SKUs o recorte tem na rede, quando a base carregada é amostra. */
+    universo?: number;
+  };
   rows: ProductPlan[];
 }
 

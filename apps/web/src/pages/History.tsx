@@ -8,12 +8,15 @@ import {
   formatBRL,
 } from '../api/client';
 import {
+  AberturaDeSecao,
   BotaoPrimario,
+  Codigo,
   ExportCsv,
   Loading,
   PageHeader,
   Selo,
   StatCard,
+  Unidade,
   type TomDeSelo,
 } from '../components/ui';
 import type { IconName } from '../brand/Icon';
@@ -153,52 +156,92 @@ export function History() {
       />
 
       {s && (
-        <div className="grid grid-4">
-          {/* Os quatro indicadores usavam <div className="muted"> como rótulo,
+        <>
+          {/* ═══ HIERARQUIA ══════════════════════════════════════════════════
+              Os quatro indicadores usavam <div className="muted"> como rótulo,
               em Inter minúsculo, enquanto Dashboard, BI, Alertas e Decisões
-              desenham o mesmo componente conceitual com <StatCard> (rótulo em
-              mono caixa alta, número em Fraunces). Duas aparências para a mesma
-              coisa no mesmo produto. Agora é o componente compartilhado. */}
-          <StatCard
-            label="Aprovados (30d)"
-            icon="aprovar"
-            value={<span style={{ color: 'var(--green)' }}>{s.approved}</span>}
-            hint={`${formatBRL(s.approvedImpact)} em impacto`}
-          />
-          <StatCard
-            label="Recusados (30d)"
-            icon="recusar"
-            value={<span style={{ color: 'var(--red)' }}>{s.rejected}</span>}
-            hint={`${formatBRL(s.rejectedImpact)} em impacto`}
-          />
-          <StatCard
-            label="Tempo até decidir"
-            value={s.avgDaysToDecide != null ? `${s.avgDaysToDecide}d` : '—'}
-            hint="média desde que o card apareceu"
-          />
-          <StatCard
-            label="SLA de decisão"
-            value={`${s.slaDays}d`}
-            hint="além disso o card vira crítico"
-          />
-        </div>
+              desenham o mesmo componente conceitual com <StatCard>. Duas
+              aparências para a mesma coisa no mesmo produto — resolvido na onda
+              anterior trocando pelo componente compartilhado.
+
+              O que faltava era o NÍVEL. Os quatro chegavam idênticos, e dois
+              deles não são indicadores: o SLA é um PARÂMETRO da rede (não
+              mede nada, declara a régua), e o tempo médio até decidir é a
+              leitura desse parâmetro. Os dois viram contexto — que é
+              literalmente o papel do nível 3 — e a decisão fica com o par que
+              esta tela existe para contar: quantas foram aprovadas e quantas
+              foram recusadas.
+
+              Aprovados é o nível 1. Não por ser maior, e sim porque é a
+              pergunta: "o que a equipe deixou passar no mês". A recusa é o
+              contraponto e fica no nível 2, ao lado. */}
+          <div className="grid grid-4">
+            <StatCard
+              nivel={1}
+              className="largo"
+              label="Aprovados (30 dias)"
+              icon="aprovar"
+              value={<span style={{ color: 'var(--green)' }}>{s.approved}</span>}
+              hint={`${formatBRL(s.approvedImpact)} em impacto passaram por esta trilha.`}
+            />
+            <StatCard
+              label="Recusados (30 dias)"
+              icon="recusar"
+              value={<span style={{ color: 'var(--red)' }}>{s.rejected}</span>}
+              hint={`${formatBRL(s.rejectedImpact)} em impacto`}
+            />
+            <StatCard
+              label="Tempo até decidir"
+              value={s.avgDaysToDecide != null ? String(s.avgDaysToDecide) : '—'}
+              unidade={s.avgDaysToDecide != null ? 'dias' : undefined}
+              hint="média desde que o card apareceu"
+            />
+          </div>
+          <div className="grid grid-3" style={{ marginTop: 6 }}>
+            <StatCard
+              nivel={3}
+              label="SLA de decisão"
+              value={String(s.slaDays)}
+              unidade="dias"
+              hint="além disso o card vira crítico"
+            />
+          </div>
+        </>
       )}
 
+      {/* ═══ AS TRÊS SEÇÕES DESTA TELA ═════════════════════════════════════
+          Série, equipe e trilha eram três `.card` empilhados com `.section-title`
+          dentro — três caixas idênticas, sem nada dizendo que são assuntos
+          diferentes (o gráfico do mês, as pessoas, o registro). A abertura de
+          seção é a ferramenta do manual para isso, e esta tela tinha ZERO
+          `.rule-section`: a régua dourada + o sobretítulo em mono + o título em
+          Fraunces separam o assunto ANTES do cartão, que é onde a separação
+          custa zero altura de conteúdo. */}
       {s && s.series.length > 0 && (
+        <>
+          <AberturaDeSecao
+            eyebrow="Ritmo"
+            titulo={`Aprovações e recusas — últimos ${s.series.length} dias`}
+            descricao="Quanto a rede decidiu por dia, e em que proporção."
+          />
         <div className="card">
-          <h3 className="section-title">Aprovações e recusas — últimos {s.series.length} dias</h3>
-          <p className="muted" style={{ margin: '-4px 0 0', fontSize: 12 }}>
+          <p className="muted" style={{ margin: 0, fontSize: 12 }}>
             <Amostra preenchimento={PREENCHIMENTO.aprovado} /> aprovados ·{' '}
             <Amostra preenchimento={PREENCHIMENTO.recusado} /> recusados
           </p>
           <Series data={s.series} />
         </div>
+        </>
       )}
 
       {s && s.byUser.length > 0 && (
+        <>
+          <AberturaDeSecao
+            eyebrow="Equipe"
+            titulo="Desempenho da equipe"
+            descricao="Quem está decidindo — e quanto impacto passou pela mão de cada um."
+          />
         <div className="card">
-          <h3 className="section-title">Desempenho da equipe</h3>
-          <p className="muted">Quem está decidindo — e quanto impacto passou pela mão de cada um.</p>
           <table className="table">
             <thead>
               <tr>
@@ -224,13 +267,16 @@ export function History() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
+      <AberturaDeSecao
+        eyebrow="Registro"
+        titulo="Trilha de decisões"
+        descricao="Nada é sobrescrito: cada linha guarda quem decidiu, quando, com que justificativa e qual era o impacto naquele momento."
+      />
       <div className="card">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <h3 className="section-title" style={{ marginRight: 'auto', marginBottom: 0 }}>
-            Trilha de decisões
-          </h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginRight: 'auto' }}>
           <div className="segmented">
             {(['ALL', 'APPROVED', 'REJECTED'] as const).map((k) => (
               <button key={k} className={outcomeF === k ? 'active' : ''} onClick={() => setOutcomeF(k)}>
@@ -274,14 +320,24 @@ export function History() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
+                  {/* Data/hora e id do card são IDENTIFICADORES, e o de-para os
+                      manda para `.codigo`: mono caixa normal, entreletras zero,
+                      tabular. Numa trilha de auditoria essas duas colunas são
+                      lidas verticalmente, uma linha contra a outra — a largura
+                      fixa é o que faz "31/07, 06:12" e "31/07, 16:12" alinharem
+                      dígito com dígito, e é o único motivo de a mono estar aqui.
+                      A segunda linha de cada célula é frase, e fica em Inter. */}
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    {shortDateTime(r.decidedAt)}
+                    <Codigo>{shortDateTime(r.decidedAt)}</Codigo>
                     {r.daysToDecide != null && (
-                      <div className="muted" style={{ fontSize: 11 }}>{r.daysToDecide}d para decidir</div>
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        {r.daysToDecide}
+                        <Unidade>d</Unidade> para decidir
+                      </div>
                     )}
                   </td>
                   <td>
-                    <span style={{ fontVariantNumeric: 'tabular-nums' }}>{r.cardId}</span>
+                    <Codigo>{r.cardId}</Codigo>
                     <div className="muted" style={{ fontSize: 11 }}>{TYPE_LABEL[r.cardType] ?? r.cardType}</div>
                   </td>
                   <td>

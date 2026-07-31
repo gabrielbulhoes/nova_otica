@@ -923,6 +923,15 @@ export interface PurchaseSuggestions {
     buyCapital: number;
     /** Capital que NÃO deve ser reposto / pode ser liberado (excesso + parado). */
     avoidedCapital: number;
+    /** Quantos SKUs o motor analisou — o denominador de `buy`. */
+    analisados: number;
+    /**
+     * Quantos SKUs o recorte tem de fato, quando a base carregada é uma
+     * amostra. Feedbacks 6.0, item 02 ("o número de sugestão de pedidos está
+     * baixo"): sem esses dois números ao lado, 126 sugestões parecem pouco
+     * sem que se saiba pouco EM RELAÇÃO A QUÊ.
+     */
+    universo?: number;
   };
   rows: ProductPlan[];
 }
@@ -938,6 +947,7 @@ export function buildSuggestions(plans: ProductPlan[], days: number): PurchaseSu
     liquidate: 0,
     buyCapital: 0,
     avoidedCapital: 0,
+    analisados: plans.length,
   };
   for (const p of plans) {
     if (p.recommendation === 'BUY') {

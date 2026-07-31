@@ -11,7 +11,16 @@ import {
   formatBRL,
   type AbcDimension,
 } from '../api/client';
-import { PageHeader, Loading, CoverageBadge, ExportCsv, fmtMonths, Selo, Botao } from '../components/ui';
+import {
+  PageHeader,
+  Loading,
+  CoverageBadge,
+  ExportCsv,
+  fmtMonths,
+  Selo,
+  Botao,
+  StatCard,
+} from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { useScope, SCOPE_LABEL, type Scope } from '../lib/scope';
@@ -377,31 +386,59 @@ export function Reports() {
           <Loading />
         ) : abc.data ? (
           <>
+            {/* HIERARQUIA — os quatro cartões eram `div.card.stat` escritos à
+                mão, com UMA assinatura só: as três classes e a receita pesavam
+                igual. Agora usam <StatCard>, que é onde os níveis moram.
+
+                NÍVEL 1 é RECEITA NO RECORTE, e vem PRIMEIRO. É o número que
+                ancora a leitura de todos os outros: as contagens 172/85/49 só
+                querem dizer alguma coisa depois que se sabe sobre que receita
+                elas foram repartidas — e é exatamente esse o mal-entendido que
+                a tela foi negociada para desfazer ("os números da curva ABC
+                estão muito baixos"). Com a receita e o seu percentual em
+                destaque, "recortado" para de parecer "errado" antes mesmo de o
+                gestor ler a nota.
+
+                A, B e C ficam TODAS em nível 2, e isso é deliberado: são um
+                CONJUNTO COMPARÁVEL. Destacar a classe A sobre as outras duas
+                destruiria a única leitura que o trio serve — a de proporção
+                entre elas. Hierarquia é para separar famílias, não para eleger
+                membro dentro de uma família.
+
+                Nenhum texto desta tela mudou: a tela foi acordada frase a frase
+                com o cliente nesta semana e o que se mexeu aqui é vocabulário
+                tipográfico e nível, não conteúdo. */}
             <div className="grid grid-4">
+              <StatCard
+                nivel={1}
+                label="Receita no recorte"
+                // O corpo de 40px do nível 1 é para número curto; um valor em
+                // reais com milhar tem 13 caracteres e estouraria a coluna. O
+                // destaque continua vencendo pelos outros três canais —
+                // superfície própria, filete dourado de 3px e respiro maior —
+                // que é justamente por que eles são canais independentes.
+                value={<span style={{ fontSize: 26 }}>{formatBRL(abc.data.totalRevenue)}</span>}
+                /* "Os números da curva ABC estão muito baixos" — estavam
+                   certos: é o recorte. Sem o denominador ao lado, "recortado"
+                   parecia "errado". */
+                hint={
+                  abc.data.periodRevenue != null && abc.data.periodRevenue > 0 ? (
+                    <>
+                      {((abc.data.totalRevenue / abc.data.periodRevenue) * 100).toFixed(0)}% dos{' '}
+                      {formatBRL(abc.data.periodRevenue)} vendidos no período
+                    </>
+                  ) : undefined
+                }
+              />
               {(['A', 'B', 'C'] as const).map((k) => (
-                <div className="card stat" key={k}>
-                  <div className="label">
-                    Classe {k} {k === 'A' ? '(alta)' : k === 'C' ? '(cauda)' : '(média)'}
-                  </div>
-                  <div className="value">{abc.data.summary[k].items}</div>
-                  <div className="hint">{formatBRL(abc.data.summary[k].revenue)}</div>
-                </div>
+                <StatCard
+                  key={k}
+                  label={`Classe ${k} ${k === 'A' ? '(alta)' : k === 'C' ? '(cauda)' : '(média)'}`}
+                  value={abc.data.summary[k].items}
+                  unidade="SKUs"
+                  hint={formatBRL(abc.data.summary[k].revenue)}
+                />
               ))}
-              <div className="card stat">
-                <div className="label">Receita no recorte</div>
-                <div className="value" style={{ fontSize: 20 }}>
-                  {formatBRL(abc.data.totalRevenue)}
-                </div>
-                {/* "Os números da curva ABC estão muito baixos" — estavam
-                    certos: é o recorte. Sem o denominador ao lado, "recortado"
-                    parecia "errado". */}
-                {abc.data.periodRevenue != null && abc.data.periodRevenue > 0 && (
-                  <div className="hint">
-                    {((abc.data.totalRevenue / abc.data.periodRevenue) * 100).toFixed(0)}% dos{' '}
-                    {formatBRL(abc.data.periodRevenue)} vendidos no período
-                  </div>
-                )}
-              </div>
             </div>
 
             <div className="card" style={{ marginTop: 16, padding: 0 }}>
@@ -500,26 +537,36 @@ export function Reports() {
           <Loading />
         ) : coverage.data ? (
           <>
-            <div className="grid grid-3">
-              <div className="card stat">
-                <div className="label">Cobertura geral</div>
-                <div className="value">{fmtMonths(coverage.data.total.coverageMonths)}</div>
-                <div className="hint">
-                  {coverage.data.total.stockUnits.toLocaleString('pt-BR')} un. ÷{' '}
-                  {coverage.data.total.monthlyUnits.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un./mês
-                  {' · '}mesma base do Dashboard
-                </div>
-              </div>
-              <div className="card stat">
-                <div className="label">Marcas com estoque</div>
-                <div className="value">{coverage.data.rows.length}</div>
-                <div className="hint">"Sem marca" = grade do CDS sem fornecedor (o backfill preenche)</div>
-              </div>
-              <div className="card stat">
-                <div className="label">Marcas paradas</div>
-                <div className="value">{coverage.data.rows.filter((r) => r.coverageMonths === null && r.stockUnits > 0).length}</div>
-                <div className="hint">Com estoque e nenhuma venda no período</div>
-              </div>
+            {/* NÍVEL 1 é COBERTURA GERAL, pelo mesmo motivo que no Dashboard: é
+                a única razão dos três, e é a que foi conciliada com a home
+                ("mesma base do Dashboard" está na frase, e a frase não mudou).
+                As contagens de marcas são recorte do catálogo — apoio.
+                `largo` porque a explicação do cálculo tem 60+ caracteres e numa
+                coluna só ela quebrava em três linhas. */}
+            <div className="grid grid-4">
+              <StatCard
+                nivel={1}
+                className="largo"
+                label="Cobertura geral"
+                value={fmtMonths(coverage.data.total.coverageMonths)}
+                hint={
+                  <>
+                    {coverage.data.total.stockUnits.toLocaleString('pt-BR')} un. ÷{' '}
+                    {coverage.data.total.monthlyUnits.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un./mês
+                    {' · '}mesma base do Dashboard
+                  </>
+                }
+              />
+              <StatCard
+                label="Marcas com estoque"
+                value={coverage.data.rows.length}
+                hint={'"Sem marca" = grade do CDS sem fornecedor (o backfill preenche)'}
+              />
+              <StatCard
+                label="Marcas paradas"
+                value={coverage.data.rows.filter((r) => r.coverageMonths === null && r.stockUnits > 0).length}
+                hint="Com estoque e nenhuma venda no período"
+              />
             </div>
             {/* "Essa cobertura de estoque não bate com a cobertura média do
                 dashboard inicial da home" — batia, não: a linha GERAL lia a
@@ -719,19 +766,21 @@ export function Reports() {
         <Loading />
       ) : transfers.data ? (
         <>
-          <div className="grid grid-3">
-            <div className="card stat">
-              <div className="label">Transferências sugeridas</div>
-              <div className="value">{transfers.data.summary.suggestions}</div>
-            </div>
-            <div className="card stat">
-              <div className="label">Unidades a mover</div>
-              <div className="value">{transfers.data.summary.units}</div>
-            </div>
-            <div className="card stat">
-              <div className="label">Lojas envolvidas</div>
-              <div className="value">{transfers.data.summary.storesInvolved}</div>
-            </div>
+          {/* NÍVEL 1 é UNIDADES A MOVER: é a única das três que mede o TAMANHO
+              do trabalho. "Sugestões" conta linhas de plano e "lojas envolvidas"
+              descreve o alcance — as duas são recorte da primeira, e é por isso
+              que descem para contexto (nível 3) em vez de disputar o topo. */}
+          <div className="grid grid-4">
+            <StatCard
+              nivel={1}
+              className="largo"
+              label="Unidades a mover"
+              value={transfers.data.summary.units}
+              unidade="un."
+              hint="Produto parado numa loja com saída em outra — remanejar custa zero."
+            />
+            <StatCard nivel={3} label="Transferências sugeridas" value={transfers.data.summary.suggestions} />
+            <StatCard nivel={3} label="Lojas envolvidas" value={transfers.data.summary.storesInvolved} />
           </div>
           <div className="card" style={{ marginTop: 16, padding: 0 }}>
             <table>
