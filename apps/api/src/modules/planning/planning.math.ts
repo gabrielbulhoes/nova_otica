@@ -59,7 +59,18 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
  * excluído para a tela poder dizer o que ficou de fora.
  */
 export function isBrandAnalysable(category: string | null | undefined): boolean {
-  return matchesProductGroup(category, 'principal');
+  return ehProdutoDeModa(category);
+}
+
+/**
+ * Óculos, armação e relógio — onde existe GRIFE. É o antigo `principal`, de
+ * quando relógio ainda morava dentro dele; desde os Feedbacks 5.0 relógio tem
+ * recorte próprio, mas a análise de marca continua abraçando os dois: Technos
+ * e Ray-Ban são a mesma pergunta comercial.
+ */
+export function ehProdutoDeModa(category: string | null | undefined): boolean {
+  const g = grupoDaCategoria(category);
+  return g === 'principal' || g === 'relogios';
 }
 
 // ─── Economia da decisão: carregamento, margem e faixas de preço ─────────────
@@ -273,15 +284,29 @@ export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
 // ─── Grupos de cobertura (recorte por categoria) ─────────────────────────────
 
 /**
- * Visões de cobertura pedidas pela operação:
- * - `principal`: o que a rede chama de "cobertura" no dia a dia — óculos
- *   (solares), óculos de grau/armações e relógios;
- * - `lentes`: lentes analisadas à parte, para as reposições;
- * - `todos`: consolidado com todas as demais categorias (estojos, acessórios…).
+ * Visões de cobertura pedidas pela operação.
+ *
+ * Feedbacks 5.0 (Galbe): "lente 80 mil + óculos e relógio 40 mil = 120 mil,
+ * porém o total é 211.026". Ele está certo — e a conta não fechava porque os
+ * três recortes antigos NÃO particionavam o catálogo: 88.661 unidades
+ * (tratamento e o resto) não tinham opção nenhuma no seletor. Ele também pediu
+ * relógio separado de óculos, que estavam no mesmo balde.
+ *
+ * Agora os quatro recortes são uma PARTIÇÃO — cada produto cai em exatamente
+ * um, e a soma dos quatro é `todos`:
+ * - `principal`: óculos (solares) e óculos de grau / armações;
+ * - `relogios`: relógio, separado de óculos por pedido do Galbe;
+ * - `lentes`: lente E tratamento — os dois são do laboratório, e o rótulo da
+ *   tela já dizia "lentes e tratamentos" enquanto o código só olhava "lente";
+ * - `outros`: acessórios, estojos, porta-óculos, bijuteria, voucher…;
+ * - `todos`: o catálogo inteiro.
  */
-export type ProductGroup = 'principal' | 'lentes' | 'todos';
+export type ProductGroup = 'principal' | 'relogios' | 'lentes' | 'outros' | 'todos';
 
-export const PRODUCT_GROUPS: ProductGroup[] = ['principal', 'lentes', 'todos'];
+/** Os que particionam o catálogo — `todos` fica de fora porque é a soma deles. */
+export const PARTITION_GROUPS: ProductGroup[] = ['principal', 'relogios', 'lentes', 'outros'];
+
+export const PRODUCT_GROUPS: ProductGroup[] = [...PARTITION_GROUPS, 'todos'];
 
 /** Normaliza para comparação: minúsculas, sem acentos. */
 const normCategory = (s: string) =>
@@ -298,20 +323,33 @@ const normCategory = (s: string) =>
  */
 export function matchesProductGroup(category: string | null | undefined, group: ProductGroup): boolean {
   if (group === 'todos') return true;
+  return grupoDaCategoria(category) === group;
+}
+
+/**
+ * O grupo de UMA categoria — a função que garante a partição. Escrita como
+ * cascata de exclusão justamente para que nenhuma categoria caia em dois
+ * recortes nem fique sem recorte nenhum: quem não é lente, relógio nem óculos
+ * é, por definição, `outros`.
+ */
+export function grupoDaCategoria(category: string | null | undefined): ProductGroup {
   const c = normCategory(category ?? '');
-  const isLente = c.includes('lente');
-  if (group === 'lentes') return isLente;
-  if (isLente) return false;
+  // Lente e tratamento são o laboratório, e vêm primeiro: "LENTE COM
+  // TRATAMENTO" não pode escapar para óculos por causa de outra palavra.
+  if (c.includes('lente') || c.includes('tratamento')) return 'lentes';
   // Acessórios que citam "óculos" no nome (PORTA OCULOS, LENCO DE OCULOS…)
-  // não são óculos: entram só no consolidado, nunca no recorte principal.
-  if (/\b(porta|estojo|case|lenco|cordao|corrente|limpa)\b/.test(c)) return false;
-  return (
+  // não são óculos: são `outros`.
+  if (/\b(porta|estojo|case|lenco|cordao|corrente|limpa)\b/.test(c)) return 'outros';
+  if (c.includes('relogio')) return 'relogios';
+  if (
     c.includes('oculos') ||
     c.includes('armacao') ||
-    c.includes('relogio') ||
     c.includes('grau') ||
     c.includes('solar')
-  );
+  ) {
+    return 'principal';
+  }
+  return 'outros';
 }
 
 // ─── Marca do produto (extraída da descrição) ───────────────────────────────
@@ -357,7 +395,7 @@ export function extractBrand(
   // virava dezesseis). Nesses casos devolvemos null para o chamador cair no
   // fornecedor (p.brand), que é o dado confiável ali.
   // Sem categoria informada, mantém o comportamento antigo (extrai sempre).
-  if (category != null && !matchesProductGroup(category, 'principal')) return null;
+  if (category != null && !ehProdutoDeModa(category)) return null;
   const raw = (description ?? '').trim();
   if (!raw) return null;
   const tokens = raw.split(/\s+/);

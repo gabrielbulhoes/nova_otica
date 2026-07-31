@@ -20,6 +20,7 @@ import {
   forecastDemand,
   isMadeToOrderLens,
   matchesProductGroup,
+  PARTITION_GROUPS,
   isBrandAnalysable,
   carryingCost,
   marginPct,
@@ -370,13 +371,34 @@ describe('forecastDemand (suavização + sazonalidade)', () => {
 });
 
 describe('matchesProductGroup (recortes de cobertura)', () => {
-  it('cobertura principal = óculos + óculos de grau/armações + relógios', () => {
-    for (const cat of ['Óculos de Sol', 'OCULOS SOLAR', 'Armação', 'ARMACAO RX', 'Óculos de Grau', 'Relógio', 'RELOGIO']) {
+  it('cobertura principal = óculos + óculos de grau/armações (relógio saiu)', () => {
+    for (const cat of ['Óculos de Sol', 'OCULOS SOLAR', 'Armação', 'ARMACAO RX', 'Óculos de Grau']) {
       expect(matchesProductGroup(cat, 'principal')).toBe(true);
     }
     for (const cat of ['Lente', 'LENTE PRONTA', 'Estojo', 'Acessório', null]) {
       expect(matchesProductGroup(cat, 'principal')).toBe(false);
     }
+    // Feedbacks 5.0, item 03: relógio pediu recorte próprio.
+    expect(matchesProductGroup('RELOGIO', 'principal')).toBe(false);
+    expect(matchesProductGroup('Relógio', 'relogios')).toBe(true);
+  });
+
+  it('os quatro recortes PARTICIONAM o catálogo: um grupo por categoria, nenhum órfão', () => {
+    // A queixa do Galbe era aritmética: "lente 80 mil + óculos e relógio 40 mil
+    // = 120 mil, porém o total é 211.026". Faltava recorte para 88.661 unidades.
+    const catalogo = [
+      'OCULOS', 'ARMACAO', 'RELOGIO', 'LENTES', 'TRATAMENTO', 'LENTES PRONTAS',
+      'PORTA OCULOS', 'LENCOS', 'ACESSORIOS', 'VOUCHER', 'BRINCO', 'OUTROS',
+      'LENTES DE CONTATO ESTOQUE', 'CLIP ON', 'HASTES', null, undefined, '',
+    ];
+    for (const cat of catalogo) {
+      const casam = PARTITION_GROUPS.filter((g) => matchesProductGroup(cat, g));
+      expect(casam, `categoria ${String(cat)}`).toHaveLength(1);
+      expect(matchesProductGroup(cat, 'todos')).toBe(true);
+    }
+    // E tratamento é do laboratório, junto com lente — o rótulo da tela já
+    // dizia "lentes e tratamentos" enquanto o código só olhava "lente".
+    expect(matchesProductGroup('TRATAMENTO', 'lentes')).toBe(true);
   });
 
   it('lentes isola qualquer categoria com "lente" — inclusive lente de grau', () => {
@@ -484,10 +506,13 @@ describe('matchesProductGroup · acessórios que citam "óculos"', () => {
     expect(matchesProductGroup('CORDAO DE OCULOS', 'principal')).toBe(false);
   });
 
-  it('produto de moda de verdade segue no principal', () => {
+  it('produto de moda de verdade segue no seu recorte', () => {
     expect(matchesProductGroup('OCULOS', 'principal')).toBe(true);
     expect(matchesProductGroup('ARMACAO', 'principal')).toBe(true);
-    expect(matchesProductGroup('RELOGIO', 'principal')).toBe(true);
+    expect(matchesProductGroup('RELOGIO', 'relogios')).toBe(true);
+    // Relógio saiu do principal, mas NÃO saiu da análise de marca: Technos e
+    // Ray-Ban são a mesma pergunta comercial.
+    expect(isBrandAnalysable('RELOGIO')).toBe(true);
   });
 });
 

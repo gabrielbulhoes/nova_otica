@@ -14,7 +14,7 @@ import {
 import { PageHeader, Loading, CoverageBadge, ExportCsv, fmtMonths, Selo, Botao } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
-import { useScope, type Scope } from '../lib/scope';
+import { useScope, SCOPE_LABEL, type Scope } from '../lib/scope';
 
 type Tab = 'abc' | 'turnover' | 'coverage' | 'transfers' | 'brandmix';
 
@@ -65,9 +65,9 @@ function BrandScopeNote({ scope }: { scope: Scope }) {
       <div className="banner warn" style={{ fontSize: 12.5, lineHeight: 1.4 }}>
         <Icon name="atencao" size={18} />
         <div>
-          O recorte escolhido é <strong>Lentes</strong>, e a análise por marca ainda não cobre
-          lente nem tratamento — são do setor de produção (laboratório) e terão módulo próprio. Por
-          isso esta visão sai vazia: troque o recorte para <strong>Óculos e relógios</strong>.
+          O recorte escolhido é <strong>Lentes e tratamentos</strong>, e a análise por marca ainda
+          não cobre esse grupo — é do setor de produção (laboratório) e terá módulo próprio. Por
+          isso esta visão sai vazia: troque o recorte para <strong>Óculos e armações</strong>.
         </div>
       </div>
     );
@@ -349,9 +349,26 @@ export function Reports() {
           na tela — não no suporte. */}
       {tab === 'abc' && dimension === 'product' && scope !== 'todos' && abc.data?.periodRevenue != null && (
         <NotaDeEscopo>
-          O total abaixo é do recorte <strong>{scope === 'lentes' ? 'Lentes' : 'óculos, armações e relógios'}</strong>
+          O total abaixo é do recorte <strong>{SCOPE_LABEL[scope]}</strong>
           {tipo ? <> · <strong>{tipo}</strong></> : null}. A receita da rede no mesmo período foi{' '}
           {formatBRL(abc.data.periodRevenue)} — a diferença é lente, tratamento e demais categorias.
+        </NotaDeEscopo>
+      )}
+
+      {/* Feedbacks 5.0, item 05: a curva é curta porque só entra quem vendeu na
+          janela, e a janela do CDS é menor do que o rótulo do período sugere.
+          Dizer isso é diferente de a tela parecer quebrada. */}
+      {tab === 'abc' && abc.data?.skusComVenda != null && abc.data.skusNoCatalogo != null && (
+        <NotaDeEscopo>
+          A curva tem <strong>{abc.data.skusComVenda.toLocaleString('pt-BR')}</strong> produtos porque
+          só entra quem <strong>vendeu</strong> no período — o catálogo tem{' '}
+          {abc.data.skusNoCatalogo.toLocaleString('pt-BR')} SKUs, e o resto ficou parado.
+          {abc.data.janelaRealDias != null && abc.data.janelaRealDias < abc.data.days ? (
+            <>
+              {' '}A extração atual do CDS cobre <strong>{abc.data.janelaRealDias} dias</strong> de venda,
+              não {abc.data.days}: com a janela cheia a curva cresce.
+            </>
+          ) : null}
         </NotaDeEscopo>
       )}
 

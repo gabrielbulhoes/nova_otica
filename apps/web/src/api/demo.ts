@@ -17,6 +17,7 @@ import {
   extractBrand,
   isBrandAnalysable,
   matchesProductGroup,
+  PRODUCT_GROUPS,
   buildBrandMix,
   buildFairSplit,
   buildOverview,
@@ -308,8 +309,8 @@ function asSet(v?: string | string[]) {
 
 /** Recorte pedido pela tela; 'todos' é o padrão (compatível com a API). */
 function productGroup(v: string | string[] | undefined): ProductGroup {
-  const g = one(v);
-  return g === 'principal' || g === 'lentes' ? g : 'todos';
+  const g = one(v) as ProductGroup;
+  return PRODUCT_GROUPS.includes(g) ? g : 'todos';
 }
 
 function stockRows(params: Record<string, string | string[] | undefined>) {
@@ -512,8 +513,20 @@ function abc(
     : real
       ? round2(real.totals.revenue30d)
       : round2(soldItems().reduce((a, x) => a + x.revenue, 0));
+  // Feedbacks 5.0, item 05 ("a curva ABC ainda traz pouco produto"): não é
+  // filtro comendo linha — é a janela. A extração do CDS que alimenta a demo
+  // cobre 7 dias, e só entra na curva quem VENDEU no período. O catálogo tem
+  // 21.683 SKUs e 727 tiveram movimento. A tela precisa desses dois números
+  // para dizer isso ao operador em vez de parecer quebrada.
+  const skusComVenda = new Set(vendidos.map((x) => x.p.id)).size;
   // A classificação (ponto médio, resumo por classe) é a MESMA do backend.
-  return { ...abcFromItems(items, days, dimension), periodRevenue };
+  return {
+    ...abcFromItems(items, days, dimension),
+    periodRevenue,
+    skusComVenda,
+    skusNoCatalogo: real?.totals?.productCountNetwork ?? products.length,
+    janelaRealDias: real ? realWindowDays : days,
+  };
 }
 
 /**
@@ -935,11 +948,28 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           );
     // SKUs: o número da REDE, não o do catálogo amostrado que a demo carrega.
     // "Não temos só 1631 SKU's" — correto: a rede tem 21.683.
+    //
+    // Feedbacks 5.0, item 01: "a quantidade total de produtos permanece 21683
+    // independente da categoria que escolho em cima". Era verdade, e a culpa
+    // era desta linha — o total da rede entrava cru, sem passar pelo recorte.
+    // A rede só nos manda a CONTAGEM de SKUs, não o catálogo inteiro, então o
+    // recorte é aplicado pela fatia que o grupo ocupa na amostra e o número
+    // vai à tela marcado como estimado. Estimar e dizer que estimou é honesto;
+    // repetir o total da rede em todo recorte não é.
     const skusNaRede = real?.totals?.productCountNetwork;
     const skusNoRecorte = products.filter((p) => matchesProductGroup(p.category, g)).length;
+    const fatia = products.length > 0 ? skusNoRecorte / products.length : 0;
+    const skus =
+      skusNaRede == null
+        ? skusNoRecorte
+        : g === 'todos'
+          ? skusNaRede
+          : Math.round(skusNaRede * fatia);
     return {
       stores: stores.length,
-      products: skusNaRede ?? skusNoRecorte,
+      products: skus,
+      productsEstimated: skusNaRede != null && g !== 'todos',
+      productsNetwork: skusNaRede,
       productsSampled: real ? skusNoRecorte : undefined,
       customers: 40,
       stockUnits: unidades,
@@ -1160,11 +1190,17 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       ),
     );
   };
-  const planDays = Number(one(params.days)) || 90;
+  // Feedbacks 5.0, item 04 ("poucas sugestões de reposição"): a tela pede 90
+  // dias, mas a fotografia do CDS cobre 7 — dividir a venda de 7 dias por 90
+  // achatava a demanda diária ~13× e quase nada cruzava o ponto de pedido. A
+  // cobertura já corrigia isso com `effectiveDays`; o planejamento, não.
+  const planDays = effectiveDays(Number(one(params.days)) || 90);
   const rawGroup = one(params.group);
-  // Padrão operacional: 'principal' (óculos de grau/sol + relógio). Lentes só
-  // entram quando pedidas explicitamente (faturamento/consolidado).
-  const planGroup: ProductGroup = rawGroup === 'lentes' || rawGroup === 'todos' ? rawGroup : 'principal';
+  // Padrão operacional: 'principal' (óculos de grau e sol). Os demais recortes
+  // entram quando pedidos explicitamente.
+  const planGroup: ProductGroup = PRODUCT_GROUPS.includes(rawGroup as ProductGroup)
+    ? (rawGroup as ProductGroup)
+    : 'principal';
   if (url === '/planning/overview')
     return buildOverview(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-suggestions')
@@ -1215,7 +1251,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const inputs: StoreProductInput[] = [];
     for (const s of stores)
       for (const prod of products.filter(
-        (x) => matchesProductGroup(x.category, planGroup) && !matchesProductGroup(x.category, 'lentes'),
+        // O recorte já é uma partição: quem está em `planGroup` não está em
+        // lentes. A exclusão extra que existia aqui era de quando 'principal'
+        // ainda podia deixar lente passar.
+        (x) => matchesProductGroup(x.category, planGroup),
       ))
         inputs.push({
           storeId: s.id,

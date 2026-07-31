@@ -21,19 +21,29 @@ import { Icon } from '../brand/Icon';
  * Um controle só, no shell, em vez de um filtro repetido em cinco telas: a
  * pergunta "estou olhando o quê?" tem uma resposta só por sessão.
  */
-export type Scope = 'principal' | 'lentes' | 'todos';
+export type Scope = 'principal' | 'relogios' | 'lentes' | 'outros' | 'todos';
 
 export const SCOPE_LABEL: Record<Scope, string> = {
-  principal: 'Óculos, armações e relógios',
+  principal: 'Óculos e armações',
+  relogios: 'Relógios',
   lentes: 'Lentes e tratamentos',
+  outros: 'Acessórios e outros',
   todos: 'Tudo',
 };
 
 export const SCOPE_HINT: Record<Scope, string> = {
-  principal: 'Lentes e tratamentos ficam de fora — são do laboratório e terão módulo próprio.',
-  lentes: 'Só lentes e tratamentos — a prévia do módulo do laboratório.',
-  todos: 'Catálogo inteiro, lentes e tratamentos inclusos.',
+  principal: 'Óculos solares e de grau / armações. Relógio agora tem recorte próprio.',
+  relogios: 'Só relógio — separado de óculos a pedido da rede.',
+  lentes: 'Lente e tratamento: o que é do laboratório, que terá módulo próprio.',
+  outros: 'Estojo, porta-óculos, cordão, bijuteria, voucher — o que não é óculos, relógio nem lente.',
+  todos: 'O catálogo inteiro. É exatamente a soma dos quatro recortes acima.',
 };
+
+/** Os quatro que particionam o catálogo — a soma deles é `todos`. */
+export const SCOPES_PARTICAO: Scope[] = ['principal', 'relogios', 'lentes', 'outros'];
+
+/** Ordem do seletor: a partição e, no fim, o consolidado. */
+export const TODOS_OS_RECORTES: Scope[] = [...SCOPES_PARTICAO, 'todos'];
 
 const KEY = 'novaotica.scope';
 
@@ -46,7 +56,8 @@ const ScopeContext = createContext<Ctx>({ scope: 'principal', setScope: () => {}
 export function ScopeProvider({ children }: { children: ReactNode }) {
   const [scope, setScope] = useState<Scope>(() => {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null;
-    return saved === 'lentes' || saved === 'todos' ? saved : 'principal';
+    // Sessão antiga pode ter gravado um recorte que não existe mais; cai no padrão.
+    return TODOS_OS_RECORTES.includes(saved as Scope) ? (saved as Scope) : 'principal';
   });
   useEffect(() => {
     try { localStorage.setItem(KEY, scope); } catch { /* modo privado */ }
@@ -63,8 +74,10 @@ export const useScope = () => useContext(ScopeContext);
  * titlebar ele empurraria os outros controles para fora da barra.
  */
 const SCOPE_CHIP: Record<Scope, string> = {
-  principal: 'Óculos e relógios',
+  principal: 'Óculos',
+  relogios: 'Relógios',
   lentes: 'Lentes',
+  outros: 'Outros',
   todos: 'Tudo',
 };
 
@@ -97,7 +110,7 @@ export function ScopePicker({ className }: { className?: string }) {
         Recorte
       </span>
       <div className="segmented sm" role="group" aria-labelledby={idRotulo} title={SCOPE_HINT[scope]}>
-        {(['principal', 'lentes', 'todos'] as Scope[]).map((s) => {
+        {TODOS_OS_RECORTES.map((s) => {
           const ativo = scope === s;
           return (
             <button

@@ -488,3 +488,46 @@ describe('demo: os números batem entre as telas (feedbacks 30/07)', () => {
     }
   });
 });
+
+/**
+ * Feedbacks 5.0 (Galbe): "lente 80 mil + óculos e relógio 40 mil = 120 mil,
+ * porém o total é 211.026". Ele estava certo — os recortes não somavam o
+ * catálogo, e 88.661 unidades não tinham opção nenhuma no seletor.
+ */
+describe('demo: os recortes particionam o catálogo', () => {
+  const un = (group: string) => get('/dashboard/summary', { group }).stockUnits as number;
+
+  it('a soma dos quatro recortes é exatamente o total da rede', () => {
+    const partes = ['principal', 'relogios', 'lentes', 'outros'].map(un);
+    expect(partes.reduce((a, b) => a + b, 0)).toBe(un('todos'));
+    for (const p of partes) expect(p).toBeGreaterThan(0);
+  });
+
+  it('o KPI de produtos deixa de ser o mesmo número em todo recorte', () => {
+    // Item 01: "a quantidade total de produtos permanece 21683 independente da
+    // categoria que escolho em cima".
+    const skus = (g: string) => get('/dashboard/summary', { group: g }).products as number;
+    expect(skus('principal')).toBeLessThan(skus('todos'));
+    expect(skus('relogios')).toBeLessThan(skus('principal'));
+  });
+
+  it('relógio tem recorte próprio e saiu de dentro de óculos', () => {
+    // Item 03.
+    const cats = (g: string) =>
+      new Set((get('/stock', { group: g }).rows as { category: string }[]).map((r) => r.category));
+    expect([...cats('principal')].some((c) => /rel[oó]gio/i.test(c))).toBe(false);
+    for (const c of cats('relogios')) expect(c).toMatch(/rel[oó]gio/i);
+  });
+
+  it('o plano de transferências obedece ao recorte (item 02: lente nos alertas)', () => {
+    const rows = get('/planning/rebalance', { days: '90', group: 'principal' }).rows as {
+      description: string;
+    }[];
+    expect(rows.length).toBeGreaterThan(0);
+    const lentes = get('/planning/rebalance', { days: '90', group: 'lentes' }).rows as unknown[];
+    // Os dois planos existem e são disjuntos: pedir óculos não traz lente.
+    expect(lentes.length).toBeGreaterThan(0);
+    const ids = new Set(rows.map((r) => r.description));
+    expect((lentes as { description: string }[]).some((r) => ids.has(r.description))).toBe(false);
+  });
+});

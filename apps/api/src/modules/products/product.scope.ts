@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
-import { matchesProductGroup, type ProductGroup } from '../planning/planning.math.js';
+import { matchesProductGroup, PRODUCT_GROUPS, type ProductGroup } from '../planning/planning.math.js';
 
 /**
  * Recorte de produto para as telas de operação (feedback do Galbe, 29/07:
@@ -56,7 +56,7 @@ export async function productFilterForGroup(
 
 /** Lê o parâmetro `group` da query, com 'todos' como padrão (compatível). */
 export function parseGroup(v: unknown): ProductGroup {
-  return v === 'principal' || v === 'lentes' ? v : 'todos';
+  return PRODUCT_GROUPS.includes(v as ProductGroup) ? (v as ProductGroup) : 'todos';
 }
 
 /**

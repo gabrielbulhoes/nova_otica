@@ -55,9 +55,13 @@ export function Alerts() {
 
   // Alerta de transferência (feedback 07): antes de comprar, remanejar o que a
   // rede já tem. Só ADMIN (o plano é da rede inteira).
+  //
+  // Feedbacks 5.0, item 02 ("ainda aparece lente nos alertas"): este bloco não
+  // passava `group`, então o plano vinha no padrão da API e ignorava o recorte
+  // do topo — a tabela de cima obedecia, a de baixo não.
   const rebalance = useQuery({
-    queryKey: ['planning-rebalance', '90'],
-    queryFn: () => getRebalancePlan({ days: '90' }),
+    queryKey: ['planning-rebalance', '90', scope],
+    queryFn: () => getRebalancePlan({ days: '90', group: scope }),
     enabled: isAdmin,
     staleTime: 5 * 60_000,
   });

@@ -63,18 +63,28 @@ type Filter = 'ALL' | Recommendation;
 const GROUP_OPTIONS: { value: ProductGroup; label: string; hint: string }[] = [
   {
     value: 'principal',
-    label: 'Cobertura principal',
-    hint: 'Óculos, óculos de grau (armações) e relógios — o que a rede chama de cobertura no dia a dia.',
+    label: 'Óculos e armações',
+    hint: 'Óculos solares e de grau / armações — o que a rede chama de cobertura no dia a dia.',
+  },
+  {
+    value: 'relogios',
+    label: 'Relógios',
+    hint: 'Somente relógio, separado de óculos a pedido da rede (Feedbacks 5.0).',
   },
   {
     value: 'lentes',
-    label: 'Lentes',
-    hint: 'Somente lentes — a visão usada para programar as reposições de lentes prontas.',
+    label: 'Lentes e tratamentos',
+    hint: 'Lente e tratamento — a visão usada para programar as reposições do laboratório.',
+  },
+  {
+    value: 'outros',
+    label: 'Acessórios e outros',
+    hint: 'Estojo, porta-óculos, cordão, bijuteria, voucher — o que não é óculos, relógio nem lente.',
   },
   {
     value: 'todos',
     label: 'Consolidado',
-    hint: 'Todos os produtos juntos, incluindo estojos, acessórios e demais categorias.',
+    hint: 'Todos os produtos juntos. É exatamente a soma dos quatro recortes acima.',
   },
 ];
 

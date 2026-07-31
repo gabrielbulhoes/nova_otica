@@ -80,6 +80,10 @@ export interface DashboardSummary {
   products: number;
   /** Na demo, quantos SKUs a amostra carrega (o total é da rede). */
   productsSampled?: number;
+  /** `products` é uma projeção do total da rede sobre o recorte, não uma contagem. */
+  productsEstimated?: boolean;
+  /** O total de SKUs da rede, sem recorte — o denominador da projeção. */
+  productsNetwork?: number;
   customers: number;
   stockUnits: number;
   pendingMovements: number;
@@ -336,6 +340,12 @@ export const getAbc = (params: Record<string, string | number | undefined>) =>
       totalRevenue: number;
       /** Receita do período sem o recorte de produto — para reconciliar. */
       periodRevenue?: number;
+      /** Quantos SKUs tiveram VENDA na janela (só eles entram na curva). */
+      skusComVenda?: number;
+      /** Quantos SKUs o catálogo tem — o contraste que explica a curva curta. */
+      skusNoCatalogo?: number;
+      /** Dias que a extração realmente cobre, que podem ser menos que `days`. */
+      janelaRealDias?: number;
       summary: Record<'A' | 'B' | 'C', { items: number; revenue: number }>;
       rows: AbcRow[];
     }>('/reports/abc', { params })
@@ -407,7 +417,7 @@ export const setMinStock = (productId: string, minStock: number | null, storeId?
 export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
 /** Recorte de cobertura: principal (óculos+grau+relógio), lentes ou tudo. */
-export type ProductGroup = 'principal' | 'lentes' | 'todos';
+export type ProductGroup = 'principal' | 'relogios' | 'lentes' | 'outros' | 'todos';
 
 export interface ProductPlan {
   productId: string;

@@ -127,6 +127,7 @@ export async function abcCurve(
         dimension,
       ),
       periodRevenue,
+      ...(await contagemDeSkus(grouped, metaById, scoped)),
     };
   }
 
@@ -159,7 +160,27 @@ export async function abcCurve(
       dimension,
     ),
     periodRevenue,
+    ...(await contagemDeSkus(grouped, byId, scoped)),
   };
+}
+
+/**
+ * Feedbacks 5.0, item 05 ("a curva ABC ainda traz pouco produto"): a curva só
+ * pode conter quem VENDEU na janela. Devolver quantos venderam ao lado de
+ * quantos existem no recorte deixa a tela explicar a curva curta em vez de
+ * parecer que um filtro comeu as linhas.
+ */
+async function contagemDeSkus(
+  grouped: { productId: string | null }[],
+  noRecorte: Map<string, unknown>,
+  scoped: Prisma.ProductWhereInput | undefined,
+): Promise<{ skusComVenda: number; skusNoCatalogo: number }> {
+  // Só conta quem sobreviveu ao recorte — senão o numerador seria da rede
+  // inteira e o denominador do recorte, e a frase da tela mentiria.
+  const comVenda = new Set(
+    grouped.map((g) => g.productId).filter((id): id is string => !!id && noRecorte.has(id)),
+  );
+  return { skusComVenda: comVenda.size, skusNoCatalogo: await prisma.product.count({ where: scoped }) };
 }
 
 // ─── Cobertura de estoque geral e por marca (feedback 06) ────────────────────

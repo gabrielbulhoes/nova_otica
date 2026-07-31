@@ -192,10 +192,18 @@ export function Dashboard() {
             <StatCard nivel={3} label="Lojas na rede" value={summary.data.stores} />
             {/* toLocaleString: o catálogo saía "21683" enquanto o estoque logo
                 acima saía "40.563" — dois formatos de milhar na mesma tela. */}
+            {/* O número segue o recorte do topo (Feedbacks 5.0, item 01). Como
+                a rede só nos manda a contagem total de SKUs, o recorte é uma
+                projeção — e a tela diz isso em vez de fingir contagem. */}
             <StatCard
               nivel={3}
               label="Produtos no catálogo"
               value={summary.data.products.toLocaleString('pt-BR')}
+              hint={
+                summary.data.productsEstimated && summary.data.productsNetwork != null
+                  ? `Estimado no recorte · ${summary.data.productsNetwork.toLocaleString('pt-BR')} SKUs na rede inteira`
+                  : 'SKUs da rede inteira'
+              }
             />
             <StatCard
               nivel={3}

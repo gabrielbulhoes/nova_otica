@@ -332,7 +332,7 @@ textarea:focus-visible,
    por esta tela. A abertura tem que ser LIDA, não espaçosa: quem marca a seção
    é a régua dourada e o sobretítulo, não o ar em volta deles. */
 .abertura {
-  margin: 16px 0 8px;
+  margin: 12px 0 6px;
 }
 .abertura:first-child {
   margin-top: 0;
@@ -354,7 +354,7 @@ textarea:focus-visible,
    título já está desenhado acima, e a primeira coisa dentro do cartão é o
    cabeçalho da tabela, que tem o próprio padding. */
 .abertura + .card {
-  padding-top: 8px;
+  padding-top: 4px;
 }
 
 /* Malha Nano: pontos de 1px a cada 22px, máscara radial obrigatória (é ela que
@@ -908,7 +908,7 @@ header > .eyebrow {
   background: transparent;
   border: 0;
   border-top: 1px solid var(--border);
-  padding: 12px 0 4px;
+  padding: 10px 0 2px;
 }
 .card.contexto .value,
 .card.contexto .kpi {
@@ -1482,10 +1482,15 @@ td .codigo {
 }
 /* Banner é bloco de aviso: reto, com filete dourado à esquerda quando exige
    atenção. */
+/* ONDA 5 · o respiro caiu de 12/18 para 10/12. No Dashboard os avisos chegam
+   empilhados (integração + rupturas + ponto de reposição) e, com 18px entre
+   eles, os três consumiam 190px do primeiro quadro antes de o operador ver um
+   número sequer. Três avisos seguidos são um GRUPO — o filete esquerdo já os
+   separa; o ar em volta só empurra a tabela para fora da tela. */
 .banner {
   border-radius: 0;
-  padding: 12px 16px;
-  margin-bottom: 18px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
   display: flex;
