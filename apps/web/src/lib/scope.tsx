@@ -1,4 +1,13 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import { Icon } from '../brand/Icon';
 
 /**
  * Recorte de produto do console (feedback do Galbe, 29/07: "ainda continua
@@ -48,21 +57,57 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
 
 export const useScope = () => useContext(ScopeContext);
 
-/** Seletor do recorte, para o topo do console. */
+/**
+ * Texto curto do chip. É diferente de SCOPE_LABEL de propósito: o rótulo longo
+ * ("Óculos, armações e relógios") é para relatório e cabeçalho de página; na
+ * titlebar ele empurraria os outros controles para fora da barra.
+ */
+const SCOPE_CHIP: Record<Scope, string> = {
+  principal: 'Óculos e relógios',
+  lentes: 'Lentes',
+  todos: 'Tudo',
+};
+
+/** useId() devolve ":r3:" — legal como id, mas os dois-pontos quebram seletor CSS. */
+const idLimpo = (bruto: string) => bruto.replace(/[^a-zA-Z0-9]/g, '');
+
+/** Seletor do recorte, para a titlebar do console. */
 export function ScopePicker() {
   const { scope, setScope } = useScope();
+  const idRotulo = `recorte-${idLimpo(useId())}`;
+
   return (
-    <div className="segmented sm" title={SCOPE_HINT[scope]} aria-label="Recorte de produto">
-      {(['principal', 'lentes', 'todos'] as Scope[]).map((s) => (
-        <button
-          key={s}
-          className={scope === s ? 'active' : ''}
-          aria-pressed={scope === s}
-          onClick={() => setScope(s)}
-        >
-          {s === 'principal' ? 'Óculos e relógios' : s === 'lentes' ? 'Lentes' : 'Tudo'}
-        </button>
-      ))}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+      {/* Antes o controle só tinha aria-label: quem enxerga via três chips sem
+          nome e não sabe o que eles recortam. O rótulo agora é visível, em mono
+          caixa alta (.label), e é ELE que nomeia o grupo — o nome acessível
+          passa a ser a mesma palavra que está na tela. */}
+      <span className="label" id={idRotulo}>
+        Recorte
+      </span>
+      <div className="segmented sm" role="group" aria-labelledby={idRotulo} title={SCOPE_HINT[scope]}>
+        {(['principal', 'lentes', 'todos'] as Scope[]).map((s) => {
+          const ativo = scope === s;
+          return (
+            <button
+              key={s}
+              type="button"
+              className={ativo ? 'active' : ''}
+              aria-pressed={ativo}
+              onClick={() => setScope(s)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              {/* Segundo canal para o estado ativo, além da inversão de fundo: a
+                  marca de conferido é FORMA, sobrevive ao P&B e ao monitor mal
+                  calibrado da loja. Fica sempre no fluxo, só invisível quando o
+                  chip está inativo, para a largura do controle não pular a cada
+                  troca de recorte. */}
+              <Icon name="check" size={11} style={{ opacity: ativo ? 1 : 0 }} />
+              {SCOPE_CHIP[s]}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -2,11 +2,11 @@
  * Transformers puros: convertem as respostas da API em `option` do ECharts.
  *
  * Continuam sem React e sem manipular o DOM (testáveis diretamente, metodologia
- * Qodo). A ÚNICA leitura de ambiente é `temaDoGrafico()`, que consulta o
- * atributo `data-tema` do <html> para saber em que superfície o gráfico vai
- * cair — e mesmo essa leitura é opcional: todas as funções aceitam `tema`
- * explícito, e em ambiente sem `document` (vitest roda em `node`) o padrão é
- * o tema CLARO, que é o padrão do produto.
+ * Qodo). A ÚNICA leitura de ambiente é `temaDoGrafico()`, que resolve o tema
+ * A PARTIR DE UM ELEMENTO (sobe até o `[data-tema]` mais próximo) para saber em
+ * que superfície o gráfico vai cair — e mesmo essa leitura é opcional: todas as
+ * funções aceitam `tema` explícito, e em ambiente sem `document` (vitest roda
+ * em `node`) o padrão é o tema CLARO, que é o padrão do produto.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * POR QUE ESTE ARQUIVO PARECE GRANDE PARA "SÓ MONTAR GRÁFICO"
@@ -131,18 +131,33 @@ export const LIMIAR_ROSCA = 3;
 const TOP_PADRAO = 8;
 
 /**
- * Tema em vigor. Claro é o padrão do produto; escuro é escolha explícita
- * (data-tema="escuro" no <html>, como o CSS do design system define).
+ * Tema em vigor, resolvido POR ELEMENTO.
+ *
+ * POR QUE POR ELEMENTO, E NÃO PELA RAIZ. O styles.css declara os tokens do
+ * escuro em dois seletores de propósito — `:root[data-tema='escuro']` e
+ * `[data-tema='escuro']` — justamente para permitir escurecer só um bloco de
+ * alta densidade (o painel de BI), que é o único uso que o manual autoriza para
+ * o escuro. Ler apenas `document.documentElement` fazia o CSS e o gráfico
+ * discordarem: o card ficava preto e as séries, eixos e rótulos continuavam
+ * claros. Subindo com `closest('[data-tema]')` a partir do contêiner do
+ * gráfico, a resposta é a mesma que a cascata do CSS dá — o `[data-tema]` mais
+ * próximo vence, e a raiz é só o último degrau da subida.
+ *
+ * Sem nenhum `[data-tema]` no caminho (e em ambiente sem DOM), o resultado é
+ * CLARO, que é o padrão do produto.
  */
-export function temaDoGrafico(explicito?: TemaGrafico): TemaGrafico {
+export function temaDoGrafico(explicito?: TemaGrafico, origem?: Element | null): TemaGrafico {
   if (explicito) return explicito;
   if (typeof document === 'undefined') return 'claro';
-  return document.documentElement.getAttribute('data-tema') === 'escuro' ? 'escuro' : 'claro';
+  // `closest` já inclui o próprio elemento e passa pelo <html>; a raiz só entra
+  // como fallback para quando a origem não está (ou ainda não está) no documento.
+  const escopo = origem?.closest?.('[data-tema]') ?? document.documentElement;
+  return escopo.getAttribute('data-tema') === 'escuro' ? 'escuro' : 'claro';
 }
 
 /** Superfície do tema — usada também pelo export de PNG (ver EChart.tsx). */
-export function superficieDoGrafico(tema?: TemaGrafico): string {
-  return PALETA_DADOS[temaDoGrafico(tema)].superficie;
+export function superficieDoGrafico(tema?: TemaGrafico, origem?: Element | null): string {
+  return PALETA_DADOS[temaDoGrafico(tema, origem)].superficie;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -243,15 +258,22 @@ function encurtar(texto: string, limite: number): string {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface OpcoesGrafico {
-  /** Força um tema em vez de ler o `data-tema` do documento. */
+  /** Força um tema em vez de resolvê-lo pelo `data-tema` em vigor. */
   tema?: TemaGrafico;
+  /**
+   * Elemento a partir do qual o tema é resolvido (sobe até o `[data-tema]` mais
+   * próximo). É o caminho preferido para quem monta a option fora do React; no
+   * React use `tema`, alimentado por `useTemaDoElemento` (ver EChart.tsx), para
+   * que a troca de tema vire re-render e a option seja de fato reconstruída.
+   */
+  origem?: Element | null;
   /** Unidade do valor. Sem isso, é inferida da forma do dado. */
   unidade?: UnidadeGrafico;
   /** Quantas barras antes de agregar a cauda em "Outros". */
   maxCategorias?: number;
 }
 
-const paleta = (opcoes?: OpcoesGrafico) => PALETA_DADOS[temaDoGrafico(opcoes?.tema)];
+const paleta = (opcoes?: OpcoesGrafico) => PALETA_DADOS[temaDoGrafico(opcoes?.tema, opcoes?.origem)];
 
 /**
  * Caixa do tooltip: superfície do tema, filete de 1px, canto reto.

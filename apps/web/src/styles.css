@@ -26,9 +26,12 @@
    · Botão tem corte assimétrico (superior-esquerdo e inferior-direito);
      campo e chip permanecem retos — é o contraste entre os dois que faz o
      botão ser lido como ação sem depender de cor.
-   · Ouro puro (#C9A227) é preenchimento, traço, filete e superfície.
-     TEXTO de ênfase sobre claro usa --ouro-dark (#8A6914), que passa contraste.
+   · Ouro puro (#C9A227) é preenchimento, traço, filete e superfície — nunca
+     texto sobre claro (2.17:1). TEXTO de ênfase sobre claro usa --ouro-texto.
    · Hierarquia por filete de 1px, não por sombra difusa.
+   · Estado operacional nunca é comunicado só por cor: rótulo escrito, forma
+     própria do marcador e espessura do filete carregam a mesma informação,
+     porque a cor some no daltonismo, na impressão P&B e no monitor de loja.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -47,18 +50,54 @@
   --linha2: rgba(246, 242, 233, 0.1);
   --linha-clara: rgba(13, 11, 8, 0.13);
 
+  /* ─── Derivações da camada 1 (não são do manual — são deste produto) ─────
+     O manual dá UM tom de ênfase sobre claro (--ouro-dark) e ele só aguenta a
+     superfície mais clara: 4.57:1 sobre o branco-papel, mas 3.74:1 sobre
+     --panel-2 e 4.32:1 sobre a lavagem de hover. Como --accent pinta TODO link
+     e todo botão contornado, o token reprovava assim que o elemento caía dentro
+     de um card elevado, de uma linha em hover ou de um banner — sem ninguém
+     perceber. --ouro-texto é o mesmo ouro escurecido até aguentar as NOVE
+     superfícies claras que o produto realmente tem (pior caso 4.94:1), para que
+     o valor de --ouro-dark, que é do manual, não precise mudar. */
+  --ouro-texto: #74570f; /* ênfase sobre claro · pior caso 4.94:1 */
+  --ouro-press: #6d520f; /* fundo do botão pressionado · --branco em cima dá 6.6:1 */
+  --linha-clara-forte: rgba(13, 11, 8, 0.24); /* filete de destaque, no claro */
+  --linha2-forte: rgba(246, 242, 233, 0.22); /* idem no escuro — ver nota de elevação */
+  /* Contorno de CAMPO é caso à parte: pela 1.4.11 ele precisa de 3:1, porque é
+     ele que identifica "aqui se digita". Em --border-strong o campo ficava a
+     1.72:1 no claro e 1.92:1 no escuro — contorno que o olho não fecha. Estes
+     dois tons existem só para input/select/textarea e para o botão do
+     multi-seleção, que abre um campo; chip, filete de tabela e botão fantasma
+     continuam finos, senão a tela vira uma grade de caixas e perde o desenho
+     do manual, que constrói hierarquia com filete de 1px. */
+  --linha-campo-clara: rgba(13, 11, 8, 0.46); /* 3.16:1 sobre o branco-papel */
+  --linha-campo-escura: rgba(246, 242, 233, 0.38); /* 3.31:1 sobre o grafite */
+
   /* Estados operacionais derivados da paleta quente do manual.
      A paleta NANOFLOW é monocromática quente: importar verde/vermelho de iOS
-     brigaria com ela. Estes três tons são derivações do mesmo eixo terroso e
-     todos passam 4.5:1 sobre o branco-papel, porque servem de TEXTO também
-     (as páginas usam var(--green)/var(--red) em color:). O significado nunca
-     depende só da cor: todo badge carrega rótulo escrito. */
-  --verde: #3e5e32; /* saudável · 6.6:1 sobre branco-papel */
-  --verde-claro: #a8cc85; /* mesmo estado, para fundo preto */
-  --ambar: #7e5111; /* atenção · 6.1:1 — bronze, distinto do ouro da marca */
-  --ambar-claro: #f0d482;
-  --terra: #8e2f1e; /* crítico · 7.3:1 — óxido, não vermelho de alerta digital */
-  --terra-claro: #e39074;
+     brigaria com ela. Estes três tons são derivações do mesmo eixo terroso.
+
+     A REGRA QUE ORGANIZA OS TRÊS, e que é o motivo de eles terem mudado de
+     valor: o estado mais grave é sempre o de MAIOR CONTRASTE contra o fundo —
+     no claro, o mais escuro; no escuro, o mais claro. Antes os três tinham
+     praticamente a mesma luminância (razão 1.08 a 1.19 entre si), então sob
+     deuteranopia "saudável" e "crítico" viravam a mesma cor (ΔE 8.9) e em
+     escala de cinza ficavam no mesmo tom — inclusive no @media print de
+     Reports.tsx. Separá-los por luminância é o que sobrevive ao daltonismo E
+     ao preto-e-branco, porque nenhum dos dois apaga a diferença de claro/escuro.
+     Mesmo assim a cor nunca decide sozinha: badge tem rótulo escrito e filete
+     esquerdo com espessura crescente, e .dot tem FORMA própria por estado. */
+  --verde: #486441; /* saudável · claro · 5.9:1 sobre branco-papel · cinza 92 */
+  --verde-claro: #7d9f62; /* saudável · ESCURO · 7.0:1 sobre preto · cinza 147 */
+  --ambar: #71430a; /* atenção · claro · 7.3:1 · bronze, não o ouro da marca · cinza 73 */
+  /* --ambar-claro era #f0d482 — o MESMO hex de --ouro-lux. No tema escuro o
+     estado "atenção" ficava pixel a pixel igual à cor de luxo da marca, e a
+     interface passava a dizer "atenção" toda vez que quisesse dizer "marca".
+     O #f0d482 é do manual, então quem se move é o derivado: este âmbar mantém
+     a família quente e fica a ΔE 23 do ouro-lux — separação inequívoca. */
+  --ambar-claro: #e5a54b; /* atenção · ESCURO · 9.2:1 sobre preto · cinza 172 */
+  --terra: #6e1c0e; /* crítico · claro · 10.1:1 · óxido, não vermelho digital · cinza 44 */
+  --terra-claro: #f6bea9; /* crítico · ESCURO · 12.0:1 sobre preto · cinza 200 */
 
   /* Famílias com papéis fixos. As @font-face moram em src/fonts.css. */
   --font-titulo: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
@@ -70,14 +109,17 @@
   --corte-sm: 10px;
 
   /* ─── Camada 2 · Aliases semânticos (contrato com as 20 páginas) ────────── */
-  --accent: var(--ouro-dark); /* usado como color: em várias páginas → tom escuro */
+  /* --accent é color: de todo link e de todo botão contornado, então precisa
+     aguentar QUALQUER superfície clara em que a página o coloque — não só o
+     branco-papel. Por isso aponta para --ouro-texto e não para --ouro-dark. */
+  --accent: var(--ouro-texto);
   --accent-hover: var(--ouro);
-  --accent-press: #6d520f;
+  --accent-press: var(--ouro-press);
   --green: var(--verde);
   --amber: var(--ambar);
   --red: var(--terra);
   --purple: var(--tinta); /* fora da paleta do manual: cai para tinta neutra */
-  --teal: var(--ouro-dark);
+  --teal: var(--ouro-texto); /* idem: as páginas usavam ciano como cor de texto */
 
   --text: var(--tinta);
   --ink: var(--tinta); /* Decisions.tsx pede var(--ink); antes não existia */
@@ -89,7 +131,8 @@
   --panel-2: var(--branco2);
   --hover: rgba(201, 162, 39, 0.08); /* lavagem dourada, não cinza */
   --border: var(--linha-clara);
-  --border-strong: rgba(13, 11, 8, 0.24);
+  --border-strong: var(--linha-clara-forte);
+  --border-campo: var(--linha-campo-clara);
   --border-ouro: var(--linha);
   --ring: rgba(201, 162, 39, 0.34);
 
@@ -163,7 +206,7 @@ b {
 }
 
 :focus-visible {
-  outline: 2px solid var(--ouro-dark);
+  outline: 2px solid var(--ouro-texto);
   outline-offset: 2px;
 }
 
@@ -212,7 +255,7 @@ b {
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--ouro-dark);
+  color: var(--ouro-texto);
   margin: 0 0 12px;
 }
 .eyebrow::before {
@@ -306,12 +349,11 @@ b {
   display: none;
 }
 .traffic .r {
-  display: inline-block;
-  width: 13px;
-  height: 13px;
-  border: 1.3px solid var(--ouro);
-  border-radius: 50% 0 50% 0;
-  background: transparent;
+  /* O símbolo da marca já é desenhado em SVG ao lado do nome "NovaÓtica", logo
+     abaixo. Manter este aqui deixava DOIS símbolos empilhados no topo da
+     sidebar, e o de cima lia como resíduo do semáforo que ele substituiu.
+     O bloco continua ocupando o espaço de respiro do topo da janela. */
+  display: none;
 }
 .traffic .y,
 .traffic .g {
@@ -327,7 +369,7 @@ b {
   color: var(--text);
 }
 .brand span {
-  color: var(--ouro-dark);
+  color: var(--ouro-texto);
 }
 
 .nav-link {
@@ -363,6 +405,10 @@ b {
 }
 .titlebar {
   height: 44px;
+  /* Sem gap, o nome da tela encosta no rótulo do seletor ao lado e sai
+     "DASHBOARDRECORTE". O justify-content: space-between só separa os EXTREMOS;
+     os itens vizinhos dentro do mesmo grupo continuam colados. */
+  gap: 18px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -541,13 +587,12 @@ b {
   font-variant-numeric: tabular-nums;
   color: var(--tinta);
 }
-.stat .hint {
-  font-family: var(--font-mono);
-  color: var(--muted);
-  font-size: 9.5px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  line-height: 1.65;
+/* Não existe mais um `.stat .hint` em mono: ele tinha especificidade maior que
+   .hint e reimpunha o carimbo justamente onde o StatCard escreve frase
+   ("Solicitações e aprovações a resolver", "capital a comprar + a liberar").
+   O indicador que quiser carimbo usa .carimbo, que vale em qualquer contexto. */
+.stat .hint,
+.stat .carimbo {
   margin-top: 6px;
 }
 
@@ -579,7 +624,7 @@ input:not([type='checkbox']):not([type='radio']):not([type='range']),
 select,
 textarea {
   background: var(--branco);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-campo);
   color: var(--text);
   padding: 8px 11px;
   border-radius: 0;
@@ -591,18 +636,21 @@ textarea {
 input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
 select:focus,
 textarea:focus {
-  border-color: var(--ouro-dark);
+  border-color: var(--ouro-texto);
   box-shadow: 0 0 0 3px var(--ring);
 }
+/* Placeholder é TEXTO e conta para o 1.4.3 — a 70% o --tinta-suave compunha
+   para #8A8371 e caía a 3.36:1. A 92% mede 5.5:1 e continua lendo como
+   provisório, que é o papel dele. */
 input::placeholder,
 textarea::placeholder {
-  color: rgba(92, 84, 62, 0.7);
+  color: rgba(92, 84, 62, 0.92);
 }
 /* Controles nativos herdam o ouro em vez do azul do sistema. */
 input[type='checkbox'],
 input[type='radio'],
 input[type='range'] {
-  accent-color: var(--ouro-dark);
+  accent-color: var(--ouro-texto);
 }
 /* Data e número são dados: leem melhor em mono e alinham em coluna. */
 input[type='date'],
@@ -623,7 +671,7 @@ input[type='number'] {
   align-items: center;
   gap: 8px;
   background: var(--branco);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-campo);
   color: var(--text);
   padding: 8px 11px;
   border-radius: 0;
@@ -634,13 +682,13 @@ input[type='number'] {
   transition: border-color 0.12s, box-shadow 0.12s;
 }
 .mselect-btn:focus-visible {
-  border-color: var(--ouro-dark);
+  border-color: var(--ouro-texto);
   box-shadow: 0 0 0 3px var(--ring);
   outline: none;
 }
 .mselect-btn.active {
-  border-color: var(--ouro-dark);
-  color: var(--ouro-dark);
+  border-color: var(--ouro-texto);
+  color: var(--ouro-texto);
   font-weight: 600;
 }
 .mselect-label {
@@ -695,7 +743,7 @@ input[type='number'] {
   flex: none;
   width: 16px;
   height: 16px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-campo);
   border-radius: 0;
   display: inline-flex;
   align-items: center;
@@ -705,8 +753,8 @@ input[type='number'] {
   background: transparent;
 }
 .mselect-opt.checked .mselect-check {
-  background: var(--ouro-dark);
-  border-color: var(--ouro-dark);
+  background: var(--ouro-texto);
+  border-color: var(--ouro-texto);
 }
 .mselect-empty {
   color: var(--muted);
@@ -720,7 +768,7 @@ input[type='number'] {
 .mselect-actions button {
   background: none;
   border: none;
-  color: var(--ouro-dark);
+  color: var(--ouro-texto);
   font-size: 13px;
   font-family: var(--font-corpo);
   padding: 6px 9px;
@@ -742,7 +790,7 @@ input[type='number'] {
    telas com vários botões continuariam dentro da regra dos 5% de ouro. */
 .btn {
   background: transparent;
-  color: var(--ouro-dark);
+  color: var(--ouro-texto);
   border: 1px solid var(--ouro);
   padding: 8px 16px;
   border-radius: var(--corte) 0 var(--corte) 0;
@@ -769,6 +817,10 @@ input[type='number'] {
   border-color: var(--ouro);
   color: var(--preto);
 }
+/* Única aparição de --ouro-lux fora do tema escuro, e é proposital: aqui ele é
+   SUPERFÍCIE, não texto. Como texto sobre claro daria 1.30:1 e sumiria; como
+   fundo com --preto em cima dá 13.52:1. É a distinção que separa "cor de fundo
+   claro" de "cor de tema escuro" — quem copiar esta regra para um color: quebra. */
 .btn.solid:hover {
   background: var(--ouro-lux);
   border-color: var(--ouro-lux);
@@ -801,30 +853,26 @@ input[type='number'] {
   border-color: var(--terra);
   color: var(--branco);
 }
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-/* Desabilitado não pode "acender" no hover — cada variante volta ao repouso. */
-.btn:disabled:hover {
-  background: transparent;
-  border-color: var(--ouro);
-  color: var(--ouro-dark);
-}
-.btn.solid:disabled:hover {
-  background: var(--ouro);
-  border-color: var(--ouro);
-  color: var(--preto);
-}
-.btn.ghost:disabled:hover {
-  background: transparent;
-  border-color: var(--border-strong);
-  color: var(--tinta);
-}
+/* Desabilitado por COR NEUTRA, não por opacity. O `opacity: .5` compunha o
+   rótulo com o fundo e levava o botão contornado a 1.97:1 — o operador via que
+   o botão estava apagado mas não conseguia LER o que estava indisponível, e
+   neste console há vários botões que só liberam sob condição. Trocado por tom
+   neutro (--muted: 6.7:1 no claro, 7.7:1 no escuro), que mantém o rótulo
+   legível e comunica a indisponibilidade por cor neutra + cursor + o
+   aria-disabled que o JSX já deve escrever. Todas as variantes convergem para o
+   mesmo repouso: desabilitado nunca é dourado, senão parece acionável. */
+.btn:disabled,
+.btn:disabled:hover,
+.btn.solid:disabled,
+.btn.solid:disabled:hover,
+.btn.ghost:disabled,
+.btn.ghost:disabled:hover,
+.btn.danger:disabled,
 .btn.danger:disabled:hover {
   background: transparent;
-  border-color: var(--terra);
-  color: var(--terra);
+  border-color: var(--border-strong);
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 /* Controle segmentado: chips retos dentro de uma moldura de 1px. O item ativo
@@ -909,36 +957,47 @@ td.num {
 /* ─── Badges ────────────────────────────────────────────────────────────── */
 
 /* Chip: reto, com filete. Mono caixa alta 0.18em, como manda o manual.
-   Os três estados operacionais (ruptura · excesso · saudável) se distinguem
-   por tom E por rótulo escrito — nunca só por cor. */
+   TRÊS canais carregam o estado, e nenhum deles é a cor sozinha:
+     1. o rótulo escrito, que o JSX sempre passa ("Ruptura", "saudável"…);
+     2. a espessura do filete esquerdo — 3px crítico, 2px atenção, 1px saudável.
+        É a mesma linguagem do .banner, sobrevive ao cinza e, ao contrário do
+        fundo, IMPRIME (borda imprime, background não);
+     3. a luminância do tom, hoje bem separada entre os três.
+   O peso da fonte NÃO entra: a JetBrains Mono deste projeto é variável de 400 a
+   500 (ver src/fonts.css), então "negrito no crítico" viraria negrito sintético
+   e não daria diferença confiável. Por isso o filete faz esse trabalho. */
 .badge {
   display: inline-block;
   padding: 3px 8px;
   border-radius: 0;
   border: 1px solid transparent;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  /* 10.5px é a medida que o manual já usa em .eyebrow e no rótulo da titlebar;
+     9.5px em caixa alta com 0.18em era pequeno demais para carregar estado. */
+  font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   line-height: 1.6;
 }
-/* saudável */
+/* saudável — filete fino: é o estado que não pede ação */
 .badge.green {
-  background: rgba(62, 94, 50, 0.12);
-  border-color: rgba(62, 94, 50, 0.4);
+  background: rgba(72, 100, 65, 0.12);
+  border-color: rgba(72, 100, 65, 0.42);
   color: var(--verde);
 }
-/* atenção */
+/* atenção — filete médio */
 .badge.amber {
-  background: rgba(201, 162, 39, 0.16);
-  border-color: rgba(201, 162, 39, 0.55);
+  background: rgba(113, 67, 10, 0.13);
+  border-color: rgba(113, 67, 10, 0.45);
+  border-left-width: 2px;
   color: var(--ambar);
 }
-/* crítico */
+/* crítico — filete grosso: o chip mais pesado da família, também no cinza */
 .badge.red {
-  background: rgba(142, 47, 30, 0.11);
-  border-color: rgba(142, 47, 30, 0.4);
+  background: rgba(110, 28, 14, 0.11);
+  border-color: rgba(110, 28, 14, 0.42);
+  border-left-width: 3px;
   color: var(--terra);
 }
 /* informativo — neutro preenchido, sem cor de estado */
@@ -976,30 +1035,58 @@ td.num {
   background: var(--panel);
   font-size: 13.5px;
 }
+/* O filete esquerdo do banner é INDICADOR DE ESTADO, então precisa de 3:1 e
+   precisa ser a cor do estado. Estava em --ouro puro, que dá 2.17:1 sobre o
+   branco-papel: uma régua de 3px que ninguém enxerga, dizendo "atenção" com a
+   cor da marca. Passa a usar --ambar, o mesmo tom do .badge.amber. */
 .banner.warn {
-  background: rgba(201, 162, 39, 0.1);
-  border-color: rgba(201, 162, 39, 0.34);
-  border-left-color: var(--ouro);
+  background: rgba(113, 67, 10, 0.09);
+  border-color: rgba(113, 67, 10, 0.3);
+  border-left-color: var(--ambar);
 }
 .banner.ok {
-  background: rgba(62, 94, 50, 0.09);
-  border-color: rgba(62, 94, 50, 0.3);
+  background: rgba(72, 100, 65, 0.09);
+  border-color: rgba(72, 100, 65, 0.3);
   border-left-color: var(--verde);
 }
-/* Marcador quadrado: a geometria do sistema não tem cantos redondos fora da
-   forma da marca. Sempre acompanhado de texto. */
+
+/* Marcador de estado. A geometria do sistema não tem cantos redondos fora da
+   forma da marca — então os três estados se separam por FORMA dentro do mesmo
+   vocabulário reto, e não por tom:
+
+     crítico   quadrado CHEIO      ■   peso máximo
+     atenção   quadrado VAZADO     □   mesma silhueta, sem preenchimento
+     saudável  TRAÇO horizontal    ▬   nem sequer é um quadrado
+
+   Forma é o único canal que atravessa deuteranopia, protanopia, impressão em
+   preto-e-branco e monitor descalibrado sem perder nada. O texto ao lado
+   continua obrigatório — o ponto reforça, não substitui. */
 .dot {
   width: 8px;
   height: 8px;
   border-radius: 0;
   display: inline-block;
   vertical-align: middle;
+  border: 1.5px solid transparent;
+  background: transparent;
 }
-.dot.green {
-  background: var(--verde);
+/* Cheio. Também é o que um `.dot` sem classe de estado e com background inline
+   renderiza, que é como Planning.tsx desenha "Parado (sem giro)". */
+.dot.red {
+  background: var(--terra);
+  border-color: var(--terra);
 }
+/* Vazado: mesma silhueta do crítico, sem miolo. */
 .dot.amber {
-  background: var(--ouro);
+  background: transparent;
+  border-color: var(--ambar);
+}
+/* Traço: a forma mais leve, para o estado que não pede ação. */
+.dot.green {
+  width: 11px;
+  height: 3px;
+  border: 0;
+  background: var(--verde);
 }
 
 /* ─── Modal ─────────────────────────────────────────────────────────────── */
@@ -1227,7 +1314,9 @@ td.num {
   border: 1px solid transparent;
   background: transparent;
   box-shadow: none;
-  font-size: 19px;
+  /* O `font-size: 19px` que morava aqui era da era dos emojis no dock. O botão
+     agora recebe <Icon>, que dimensiona por width/height do SVG, então a regra
+     não tinha efeito nenhum sobre o desenho. */
   line-height: 1;
   cursor: pointer;
   display: grid;
@@ -1277,7 +1366,7 @@ td.num {
   background: var(--hover);
 }
 .action-card:focus-visible {
-  outline: 2px solid var(--ouro-dark);
+  outline: 2px solid var(--ouro-texto);
   outline-offset: 2px;
 }
 .action-card .action-count {
@@ -1293,11 +1382,35 @@ td.num {
   font-size: 13.5px;
   margin-top: 2px;
 }
-/* .hint aparece dentro de card de ação e de indicador: sempre carimbo em mono. */
+/* .hint é FRASE, não carimbo — e é por isso que ela mudou de família.
+   O manual proíbe JetBrains Mono em texto corrido, mas .hint estava em mono
+   caixa alta com 0.18em de entreletras enquanto as telas escrevem coisas como
+   "Sem marca" = grade do CDS sem fornecedor (o backfill preenche) (63
+   caracteres, Reports.tsx) ou "Faturamento, ticket médio e formas de pagamento"
+   (47, Dashboard.tsx). Caixa alta espaçada nesse comprimento não se lê: some o
+   contorno da palavra, que é o que o olho usa para reconhecer forma. Frase volta
+   para a Inter, em corpo que se lê.
+   O carimbo continua existindo — virou .carimbo, abaixo — para rótulo curto.
+   O de-para de qual ocorrência vira qual está no relatório da Onda 2. */
 .hint {
+  font-family: var(--font-corpo);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.5;
+  margin-top: 5px;
+}
+
+/* O carimbo do manual: mono, caixa alta, 0.18em. Só para rótulo CURTO — nome de
+   fuso, sigla, unidade, um valor. Regra prática: se não couber em ~24
+   caracteres, é frase e vai de .hint. */
+.carimbo {
   font-family: var(--font-mono);
   color: var(--muted);
   font-size: 9.5px;
+  font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   line-height: 1.65;
@@ -1315,14 +1428,17 @@ td.num {
 .action-card.green .action-count {
   color: var(--verde);
 }
+/* Os filetes de 3px destes cartões INDICAM o estado, então valem 3:1 e valem a
+   cor do estado. Estavam os dois em --ouro puro (2.17:1 sobre o branco-papel):
+   invisíveis, e ainda por cima iguais entre si em dois estados diferentes. */
 .action-card.blue {
-  border-left-color: var(--ouro);
+  border-left-color: var(--ouro-texto);
 }
 .action-card.blue .action-count {
-  color: var(--ouro-dark);
+  color: var(--ouro-texto);
 }
 .action-card.amber {
-  border-left-color: var(--ouro);
+  border-left-color: var(--ambar);
 }
 .action-card.amber .action-count {
   color: var(--ambar);
@@ -1355,7 +1471,7 @@ td.num {
 }
 .demo-seal strong {
   font-weight: 500;
-  color: var(--ouro-dark);
+  color: var(--ouro-texto);
 }
 .demo-seal-dot {
   width: 7px;
@@ -1413,8 +1529,20 @@ td.num {
   --panel: var(--carvao);
   --panel-2: var(--grafite);
   --hover: rgba(201, 162, 39, 0.12);
-  --border: var(--linha2);
-  --border-strong: rgba(246, 242, 233, 0.22);
+  /* Carvão contra preto dá 1.07:1 e grafite contra carvão 1.10:1 — no escuro as
+     três superfícies do manual são praticamente a mesma. Quem tinha que
+     separá-las era o filete, e --linha2 dava 1.24:1. Com --linha2-forte vai a
+     1.84/1.92/1.96 sobre preto/carvão/grafite: ~50% mais separação, e a tela de
+     BI, que é a mais densa do produto, volta a ter blocos legíveis. Continua
+     abaixo de 3:1, o que é aceitável enquanto o filete for ESTRUTURA; borda que
+     indique ESTADO usa --ouro (7.59:1 sobre carvão). */
+  --border: var(--linha2-forte);
+  /* --border-strong sobe junto: se ele ficasse igual a --border, o botão
+     fantasma e o chip inerte teriam exatamente o mesmo filete do separador de
+     tabela, e a hierarquia de dois níveis que o tema claro tem (.13 / .24)
+     desapareceria justo no tema mais difícil de ler. */
+  --border-strong: var(--linha-campo-escura);
+  --border-campo: var(--linha-campo-escura);
   --ring: rgba(201, 162, 39, 0.42);
 
   --shadow-window: 0 20px 50px rgba(0, 0, 0, 0.55);
@@ -1474,11 +1602,12 @@ td.num {
 [data-tema='escuro'] .mselect-btn {
   background: var(--grafite);
   color: var(--text);
-  border-color: var(--border-strong);
+  border-color: var(--border-campo);
 }
+/* Mesmo motivo do claro: a 45% compunha para #6E695F e dava 3.60:1. */
 [data-tema='escuro'] input::placeholder,
 [data-tema='escuro'] textarea::placeholder {
-  color: rgba(228, 220, 201, 0.45);
+  color: rgba(228, 220, 201, 0.62);
 }
 [data-tema='escuro'] input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
 [data-tema='escuro'] select:focus,
@@ -1558,18 +1687,20 @@ td.num {
   color: var(--branco);
 }
 [data-tema='escuro'] .badge.green {
-  background: rgba(168, 204, 133, 0.14);
-  border-color: rgba(168, 204, 133, 0.4);
+  background: rgba(125, 159, 98, 0.16);
+  border-color: rgba(125, 159, 98, 0.42);
   color: var(--verde-claro);
 }
+/* Era fundo e borda em --ouro e texto em --ouro-lux: o chip de "atenção" estava
+   vestido inteiro com a cor da marca. Agora usa o próprio âmbar do estado. */
 [data-tema='escuro'] .badge.amber {
-  background: rgba(201, 162, 39, 0.18);
-  border-color: rgba(201, 162, 39, 0.5);
-  color: var(--ouro-lux);
+  background: rgba(229, 165, 75, 0.16);
+  border-color: rgba(229, 165, 75, 0.45);
+  color: var(--ambar-claro);
 }
 [data-tema='escuro'] .badge.red {
-  background: rgba(227, 144, 116, 0.14);
-  border-color: rgba(227, 144, 116, 0.4);
+  background: rgba(246, 190, 169, 0.14);
+  border-color: rgba(246, 190, 169, 0.42);
   color: var(--terra-claro);
 }
 [data-tema='escuro'] .badge.blue {
@@ -1583,17 +1714,26 @@ td.num {
   color: var(--muted);
 }
 [data-tema='escuro'] .banner.warn {
-  background: rgba(201, 162, 39, 0.12);
-  border-color: rgba(201, 162, 39, 0.36);
-  border-left-color: var(--ouro);
+  background: rgba(229, 165, 75, 0.12);
+  border-color: rgba(229, 165, 75, 0.34);
+  border-left-color: var(--ambar-claro);
 }
 [data-tema='escuro'] .banner.ok {
-  background: rgba(168, 204, 133, 0.1);
-  border-color: rgba(168, 204, 133, 0.3);
+  background: rgba(125, 159, 98, 0.12);
+  border-color: rgba(125, 159, 98, 0.32);
   border-left-color: var(--verde-claro);
 }
+/* No escuro só muda o TOM de cada marcador — a forma de cada estado é a mesma
+   dos dois temas, senão o usuário teria que reaprender o vocabulário ao trocar. */
 [data-tema='escuro'] .dot.green {
   background: var(--verde-claro);
+}
+[data-tema='escuro'] .dot.amber {
+  border-color: var(--ambar-claro);
+}
+[data-tema='escuro'] .dot.red {
+  background: var(--terra-claro);
+  border-color: var(--terra-claro);
 }
 [data-tema='escuro'] .tile:hover {
   background: var(--grafite);
@@ -1652,6 +1792,20 @@ td.num {
     border: 1px solid #ccc !important;
     box-shadow: none !important;
   }
+  /* Navegador NÃO imprime background por padrão. Sem isto, o preenchimento do
+     chip e do marcador some na folha e o estado operacional fica dependendo só
+     da cor do texto — que numa impressora P&B vira cinza. Reports.tsx imprime,
+     então isto não é hipótese. Com o fundo preservado, os três canais chegam ao
+     papel: rótulo escrito, filete esquerdo com espessura crescente e a
+     luminância separada dos tons. */
+  .badge,
+  .dot,
+  .banner {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* O `body { color: #000 }` acima não alcança o chip (ele declara a própria
+     cor), e é bom que não alcance: é a luminância do estado que o distingue. */
   body {
     background: #fff !important;
     color: #000 !important;
