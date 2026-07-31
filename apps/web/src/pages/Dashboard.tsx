@@ -9,7 +9,14 @@ import {
   getPurchaseOrders,
   formatBRL,
 } from '../api/client';
-import { StatCard, PageHeader, Loading, CoverageBadge, fmtMonths } from '../components/ui';
+import {
+  StatCard,
+  PageHeader,
+  AberturaDeSecao,
+  Codigo,
+  Loading,
+  CoverageBadge,
+} from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
 import { useScope } from '../lib/scope';
 
@@ -63,7 +70,25 @@ export function Dashboard() {
 
   return (
     <>
+      {/* ONDA 5 · ESTA TELA É A IMPLEMENTAÇÃO DE REFERÊNCIA DO DE-PARA.
+          O cliente disse, sobre o console: "ficou mais confusa as informações.
+          Essa fonte pra infos não é legal também e acho que temos que demarcar
+          melhor as informações principais."
+
+          Duas respostas, e as duas moram no sistema (styles.css + ui.tsx), não
+          aqui — esta tela só as CONVOCA, e é assim que as outras 19 devem fazer:
+
+          1. dosagem da mono: rótulo descritivo saiu de mono caixa alta e voltou
+             para Inter (`.label`); a mono ficou com etiqueta curta (`.eyebrow`,
+             `.carimbo`), carimbo de unidade (`.unidade`), identificador
+             (`.codigo`) e cabeçalho de coluna;
+          2. hierarquia: os nove cartões tinham UMA assinatura visual. Agora têm
+             três níveis — `nivel={1}` no indicador que a tela existe para
+             mostrar, o padrão no apoio, `nivel={3}` no contexto — e cada seção
+             abre com a régua dourada do manual (<AberturaDeSecao>), que até
+             aqui não estava sendo usada nesta tela. */}
       <PageHeader
+        eyebrow="Operação"
         title="Dashboard"
         subtitle="Visão de estoque da rede em tempo real (base sincronizada + movimentações do dia)."
       />
@@ -113,35 +138,77 @@ export function Dashboard() {
         <Loading />
       ) : summary.data ? (
         <>
+          {/* NÍVEL 1 — os dois indicadores que respondem "como está o estoque da
+              rede AGORA?", que é a pergunta que faz esta tela existir. Dois é o
+              teto: com três, a tela volta a não ter principal.
+              O `largo` (duas colunas) vai para a COBERTURA e não para as
+              unidades, por medida e não por gosto: a explicação da cobertura tem
+              76 caracteres e, numa coluna de 265px, quebrava em três linhas —
+              três linhas que empurravam a tabela para fora do primeiro quadro.
+              Na coluna dupla ela cabe em duas, e a área extra fica no indicador
+              que mais precisa dela. */}
           <div className="grid grid-4">
-            <StatCard label="Lojas" value={summary.data.stores} />
-            <StatCard label="Produtos" value={summary.data.products} />
-            <StatCard label="Unidades em estoque" value={summary.data.stockUnits.toLocaleString('pt-BR')} />
             <StatCard
+              nivel={1}
+              label="Unidades em estoque"
+              value={summary.data.stockUnits.toLocaleString('pt-BR')}
+              unidade="un."
+              hint="Saldo da rede, ao vivo."
+            />
+            <StatCard
+              nivel={1}
+              className="largo"
               // O endpoint escopa gestor de loja à própria loja — o rótulo
               // precisa dizer a verdade sobre o recorte exibido.
               label={isAdmin ? 'Cobertura da rede' : 'Cobertura da loja'}
-              value={networkCoverage === null ? '—' : fmtMonths(Math.round(networkCoverage * 10) / 10)}
+              value={
+                networkCoverage === null
+                  ? '—'
+                  : (Math.round(networkCoverage * 10) / 10).toLocaleString('pt-BR', {
+                      maximumFractionDigits: 1,
+                    })
+              }
+              unidade={networkCoverage === null ? undefined : 'meses'}
               hint={
                 cov.length > 1
                   ? `${totalStock.toLocaleString('pt-BR')} un. ÷ ${totalMonthly.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un./mês — pesa o estoque parado das lojas do fim da lista`
                   : 'Estoque ÷ média mensal de unidades vendidas'
               }
             />
-          </div>
-
-          <div className="grid grid-3" style={{ marginTop: 16 }}>
+            {/* NÍVEL 2 — apoio: não é o retrato do estoque, é a fila de trabalho
+                que sai dele. Assinatura de cartão padrão. */}
             <StatCard
               label="Transferências pendentes"
               value={summary.data.pendingMovements}
               hint="Solicitações e aprovações a resolver"
             />
+          </div>
+
+          {/* NÍVEL 3 — contexto. Sem moldura e sem fundo, só o filete de cima:
+              recua sem sumir. E ocupa MENOS altura que o cartão padrão que estas
+              quatro informações tinham antes — a hierarquia devolveu linha à
+              tela em vez de cobrar por ela. */}
+          <div className="grid grid-4" style={{ marginTop: 10 }}>
+            <StatCard nivel={3} label="Lojas na rede" value={summary.data.stores} />
+            {/* toLocaleString: o catálogo saía "21683" enquanto o estoque logo
+                acima saía "40.563" — dois formatos de milhar na mesma tela. */}
             <StatCard
+              nivel={3}
+              label="Produtos no catálogo"
+              value={summary.data.products.toLocaleString('pt-BR')}
+            />
+            <StatCard
+              nivel={3}
               label="Última sincronização"
+              // Carimbo de data/hora é IDENTIFICADOR, não quantidade: não se lê
+              // como magnitude, se compara com outro carimbo. É um dos quatro
+              // lugares onde a mono fica — em caixa normal e sem entreletras.
               value={
-                summary.data.lastSync
-                  ? new Date(summary.data.lastSync.startedAt).toLocaleString('pt-BR')
-                  : '—'
+                summary.data.lastSync ? (
+                  <Codigo>{new Date(summary.data.lastSync.startedAt).toLocaleString('pt-BR')}</Codigo>
+                ) : (
+                  '—'
+                )
               }
               hint={
                 summary.data.lastSync
@@ -153,6 +220,7 @@ export function Dashboard() {
               }
             />
             <StatCard
+              nivel={3}
               label="Financeiro"
               value={<Link to="/admin/bi" style={{ color: 'var(--accent)', fontSize: 20 }}>Ver no BI →</Link>}
               hint="Faturamento, ticket médio e formas de pagamento"
@@ -161,11 +229,12 @@ export function Dashboard() {
 
           {/* Feedback 02/05 (Galbe): painel inicial focado em ESTOQUE — o
               financeiro mora no BI; aqui entram cobertura e remanejamento. */}
-          <div className="card" style={{ marginTop: 16 }}>
-            <h3 className="section-title">Cobertura de estoque por loja</h3>
-            <p className="muted" style={{ marginTop: -4, marginBottom: 10, fontSize: 12.5 }}>
-              Unidades em estoque ÷ média mensal de unidades vendidas = estoque para quantos meses.
-            </p>
+          <AberturaDeSecao
+            eyebrow="Cobertura"
+            titulo="Cobertura de estoque por loja"
+            descricao="Unidades em estoque ÷ média mensal de unidades vendidas = estoque para quantos meses."
+          />
+          <div className="card">
             {coverage.isLoading ? (
               <Loading />
             ) : cov.length > 0 ? (
@@ -210,11 +279,13 @@ export function Dashboard() {
           </div>
 
           {isAdmin && (
-            <div className="card" style={{ marginTop: 16 }}>
-              <h3 className="section-title">Transferências sugeridas entre lojas</h3>
-              <p className="muted" style={{ marginTop: -4, marginBottom: 10, fontSize: 12.5 }}>
-                Produtos parados numa loja com saída em outra — remanejar antes de comprar.
-              </p>
+            <>
+              <AberturaDeSecao
+                eyebrow="Remanejamento"
+                titulo="Transferências sugeridas entre lojas"
+                descricao="Produtos parados numa loja com saída em outra — remanejar antes de comprar."
+              />
+              <div className="card">
               {rebalance.isLoading ? (
                 <Loading />
               ) : transfers.length > 0 ? (
@@ -252,7 +323,8 @@ export function Dashboard() {
               ) : (
                 <div className="empty">Nenhuma transferência sugerida agora — estoque equilibrado entre as lojas.</div>
               )}
-            </div>
+              </div>
+            </>
           )}
         </>
       ) : (

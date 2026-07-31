@@ -71,13 +71,24 @@ const SCOPE_CHIP: Record<Scope, string> = {
 /** useId() devolve ":r3:" — legal como id, mas os dois-pontos quebram seletor CSS. */
 const idLimpo = (bruto: string) => bruto.replace(/[^a-zA-Z0-9]/g, '');
 
-/** Seletor do recorte, para a titlebar do console. */
-export function ScopePicker() {
+/**
+ * Seletor do recorte, para a titlebar do console.
+ *
+ * `className` existe porque a casca precisa marcar ESTE controle na barra
+ * (`.titlebar .scope-picker { flex: none }` — o recorte é o último item que pode
+ * encolher). Sem a prop, a classe escrita no AdminShell não chegava ao DOM e a
+ * regra da Onda 4 não casava com nada: o seletor voltava a ser espremido a 2px
+ * em telas estreitas, e o build parava no tipo.
+ */
+export function ScopePicker({ className }: { className?: string }) {
   const { scope, setScope } = useScope();
   const idRotulo = `recorte-${idLimpo(useId())}`;
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+    <div
+      className={className}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}
+    >
       {/* Antes o controle só tinha aria-label: quem enxerga via três chips sem
           nome e não sabe o que eles recortam. O rótulo agora é visível, em mono
           caixa alta (.label), e é ELE que nomeia o grupo — o nome acessível

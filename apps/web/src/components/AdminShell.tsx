@@ -211,11 +211,50 @@ export function AdminShell() {
       .find((l) => (l.end ? location.pathname === l.to : location.pathname.startsWith(l.to)))?.label ??
     'Painel';
 
+  /**
+   * Rolagem NÃO vaza entre telas.
+   *
+   * Quem rola é `.main`, um contêiner interno, e a navegação por hash do
+   * roteador é same-document: o React troca o conteúdo e o `scrollTop` do nó
+   * fica onde estava. Medido: sair do Estoque a 6.000px e abrir Alertas deixava
+   * o <h1> da tela nova em y = −218px, ou seja, a tela abria já rolada por cima
+   * do próprio título; do dock para Decisões o scrollTop de 9.000px era
+   * preservado inteiro. O navegador faz esse trabalho sozinho quando quem rola é
+   * o documento — como aqui não é, o trabalho é nosso.
+   *
+   * `location.key` e não `pathname`: reabrir a MESMA rota (clicar de novo no
+   * item já ativo, que é o gesto de "volta ao começo") também precisa voltar ao
+   * topo, e o pathname não muda nesse caso.
+   */
+  useEffect(() => {
+    conteudoRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [location.key]);
+
+  /**
+   * Título do documento por rota.
+   *
+   * As 17 rotas compartilhavam "Nova Ótica — Gestão de Estoque". Numa SPA o
+   * leitor de tela usa a troca de <title> para anunciar que o usuário mudou de
+   * tela; sem isso, navegar pelo dock é silêncio absoluto (falha 2.4.2). O nome
+   * da rede vem depois do nome da tela porque é o começo da string que o leitor
+   * anuncia primeiro e que aparece na aba estreita.
+   */
+  useEffect(() => {
+    document.title = `${active} — Nova Ótica`;
+  }, [active]);
+
   return (
     // O escuro cobre a janela inteira do console porque a escolha é do usuário e
     // vale para tudo o que ele está operando. Em claro o atributo NÃO é escrito:
     // ausência de `data-tema` é o estado padrão, e é o que o seletor CSS espera.
     <div className="macos-desktop" data-tema={tema === 'escuro' ? 'escuro' : undefined}>
+      {/* Atalho para o conteúdo (WCAG 2.4.1). Medido: não havia UM skip link em
+          17 rotas, e a casca cobra 20 paradas fixas de Tab (15 links da barra
+          lateral + Sair + os 3 chips de recorte + o tema) antes que o teclado
+          toque o conteúdo — em toda troca de tela. Só aparece ao receber foco. */}
+      <a href="#conteudo" className="skip-link">
+        Ir para o conteúdo
+      </a>
       <div className="macos-window">
         <aside className="sidebar">
           {/* Sobrou UM marcador dos três semáforos do macOS: o CSS transformou o
@@ -276,7 +315,7 @@ export function AdminShell() {
             </span>
             {/* Recorte de produto: uma escolha por sessão, sempre visível.
                 Lente e tratamento saem por padrão (são do laboratório). */}
-            <ScopePicker />
+            <ScopePicker className="scope-picker" />
             <div
               style={{
                 marginLeft: 'auto',
@@ -289,19 +328,34 @@ export function AdminShell() {
               {/* "Dados ao vivo" diz sozinho o que está acontecendo: o quadrado
                   verde é reforço visual, não o portador do significado — parte
                   dos usuários não separa os tons quentes entre si. */}
+              {/* `title` no elemento inteiro: abaixo de 1204px o CSS esconde a
+                  palavra para liberar largura, e sem isso o quadrado verde
+                  ficaria sozinho, sem nome nenhum. */}
               <span
-                className="label"
+                className="label live-status"
+                title="Dados ao vivo"
                 style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}
               >
-                <span className="dot green" aria-hidden="true" /> Dados ao vivo
+                <span className="dot green" aria-hidden="true" />
+                <span className="live-status-text">Dados ao vivo</span>
               </span>
               {/* O rótulo nomeia a AÇÃO ("Tema escuro" = passar para o escuro), e
                   é texto visível: serve de nome acessível e de indicação de
-                  estado sem depender de cor nenhuma. */}
+                  estado sem depender de cor nenhuma.
+                  ONDA 4 · o botão não expunha ESTADO: sem aria-pressed e sem
+                  role=switch, o rótulo sozinho é ambíguo — "Tema escuro" pode
+                  ser lido como o estado atual ou como o destino, e ao acionar o
+                  usuário recebia silêncio. Com aria-pressed o leitor de tela
+                  anuncia "não pressionado → pressionado" na própria ativação,
+                  sem precisar de uma região aria-live que ninguém mais usa.
+                  O `aria-label` é explícito porque abaixo de 960px o CSS esconde
+                  a palavra e sobra só o ícone. */}
               <button
                 type="button"
                 className="btn ghost sm"
                 onClick={alternar}
+                aria-pressed={tema === 'escuro'}
+                aria-label={tema === 'escuro' ? 'Tema escuro ativo' : 'Tema escuro'}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -310,15 +364,22 @@ export function AdminShell() {
                 }}
               >
                 <Icon name="ideia" size={15} />
-                {tema === 'escuro' ? 'Tema claro' : 'Tema escuro'}
+                <span className="rotulo-tema">
+                  {tema === 'escuro' ? 'Tema claro' : 'Tema escuro'}
+                </span>
               </button>
             </div>
           </div>
-          <main className="main" ref={conteudoRef}>
-            <Outlet />
-          </main>
-
-          {/* Ponteiro e foco reabrem o dock. O ponteiro cobre também o toque:
+          {/* O DOCK VEM ANTES DO <main> NO DOM, e é de propósito.
+              Ele é `position:absolute`, então a posição na tela não muda — o que
+              muda é a ordem de tabulação. Medido: com o dock DEPOIS do conteúdo,
+              chegar até ele em /admin/alertas custava 4.376 paradas de Tab
+              (4.356 focáveis no corpo: 2.176 linhas × input + botão), 954 em
+              /admin/decisoes e 100 em /admin/planejamento. Uma navegação global
+              que só o mouse alcança não é navegação. Agora ela vem junto da
+              barra de título, como a barra lateral, e quem quer o conteúdo pula
+              pelo skip link do topo.
+              Ponteiro e foco reabrem o dock. O ponteiro cobre também o toque:
               um dedo na faixa recolhida dispara pointerenter antes do
               pointerdown, e como os botões ficam sem pointer-events enquanto
               recolhidos, esse primeiro toque só expande — não navega.
@@ -352,6 +413,23 @@ export function AdminShell() {
               );
             })}
           </div>
+
+          {/* `id` é o alvo do skip link; `tabIndex={-1}` é o que permite ao
+              <main> receber foco programaticamente quando o link é acionado —
+              sem ele o navegador rola até a âncora mas o foco de teclado fica
+              para trás, e o Tab seguinte volta para a barra lateral.
+              `aria-label` nomeia a região: a auditoria não achou nenhuma região
+              nomeada nas 17 rotas. */}
+          <main
+            className="main"
+            id="conteudo"
+            ref={conteudoRef}
+            tabIndex={-1}
+            aria-label={`Conteúdo — ${active}`}
+          >
+            <Outlet />
+          </main>
+
         </section>
       </div>
     </div>
