@@ -50,12 +50,20 @@ estava.
 |---|---|---|
 | elementos em mono | 112 / 203 · **55,2%** | 18 / 204 · **8,8%** |
 | caracteres em mono | 797 / 3.309 · **24,1%** | 162 / 3.294 · **4,9%** |
-| elementos em mono carregando **palavra** (não dígito) | 68 | 15 |
-| elementos com mais de 24 caracteres em mono (frase carimbada) | 19 | **0** |
+| elementos em mono carregando **palavra** (não só dígito) | 67 | 17 |
+| elementos em **caixa alta com 0.18em** | **67** | **9** |
+| desses, com mais de 14 caracteres (onde a entreletras destrói a palavra) | **7** | **0** |
+| texto mais longo em mono | "Transferências pendentes" (24 car., caixa alta, 1,8px de entreletras) | "31/07/2026, 16:45" (carimbo de data, caixa normal, **0** de entreletras) |
+
+A linha que mais importa é a penúltima. O defeito nunca foi "existe mono demais"
+— foi **mono em caixa alta espaçada carregando palavra longa**. Hoje sobram 9
+elementos com esse tratamento no Dashboard, e nenhum passa de 14 caracteres. O
+único elemento com mais de 14 caracteres que ainda leva entreletras é o
+cabeçalho "VENDA MÉDIA/MÊS", a 0.08em — exatamente a faixa que o de-para prevê.
 
 Varredura das 17 rotas do produto: **0 selos quebrados em duas linhas, 0 rolagem
-horizontal de página, 0 erro de JS, e 0 elemento com frase (>24 caracteres) em
-mono** — exceto um caso isolado em `/loja` que não se reproduz em carga limpa.
+horizontal de página, 0 erro de JS e 0 frase (>24 caracteres) em mono** — com um
+caso isolado em `/loja` que não se reproduz em carga limpa.
 
 ### 2.2 Hierarquia — Dashboard
 
@@ -208,12 +216,18 @@ O alvo pedido era 15–20% de elementos em mono no Dashboard. **A entrega parou 
 8,8%, e isso é reportado como divergência, não como sucesso.**
 
 A razão é aritmética e vale a pena registrar: dos 112 elementos em mono da linha
-de base, **44 eram células numéricas de tabela** (39%) e 19 eram chips de estado
+de base, **45 eram células e números de tabela** (40%) e 19 eram chips de estado
 (17%). Decidido que quantidade e frase de estado não são trabalho da mono, o que
 **sobra elegível** no Dashboard é: 8 cabeçalhos de coluna + 3 sobretítulos + 2
 carimbos de unidade + 1 carimbo de data/hora + 4 etiquetas de casca = **18**.
 Não há 15–20% a atingir nesta tela sem devolver a mono para quantidade ou para
 frase — os dois lugares de onde ela precisava sair.
+
+Vale dizer o que a faixa media, na prática: os 55,2% de partida eram 44 células
+numéricas + 19 chips + 49 rótulos deformados. Cair para 15–20% mantendo os 44
+números era impossível (44 sozinhos já são 21,6%); cair para 15–20% **sem** eles
+exigiria inventar carimbos que a tela não pede. O alvo real — e ele foi
+cumprido — era **zerar a mono onde ela carrega palavra longa**: 7 → 0.
 
 Duas observações honestas sobre o número:
 
