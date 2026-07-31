@@ -136,14 +136,12 @@ const desenhos = {
       <path d="M10 21h4" />
     </>
   ),
-  /** Loja online / provador. Óculos: duas lentes, ponte e hastes. */
+  /** Loja online / provador virtual. Óculos: duas lentes trapezoidais e ponte. */
   loja: (
     <>
-      <path d="M3.5 8.5h6.5v6.5H3.5z" />
-      <path d="M14 8.5h6.5v6.5H14z" />
-      <path d="M10 11.5h4" />
-      <path d="M3.5 8.5L1.5 6" />
-      <path d="M20.5 8.5L22.5 6" />
+      <path d="M1.5 7.5h9l-1.5 8H3z" />
+      <path d="M22.5 7.5h-9l1.5 8h6z" />
+      <path d="M10.5 9h3" />
     </>
   ),
   /** Catálogo de produtos. Grade de quatro. */
