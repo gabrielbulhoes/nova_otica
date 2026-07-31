@@ -1,39 +1,110 @@
-/* ─────────────────────────────────────────────────────────────────────────
-   Nova Ótica — Design System macOS (Apple HIG, tema claro "Aqua")
-   Mantém os nomes de classe usados pelas páginas; o visual é 100% macOS.
-   ───────────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Nova Ótica — Design System NANOFLOW
+   Fonte de verdade: /docs/marca/nanoflow-manual.html
+
+   PONTE DE NOMES (por que este arquivo tem duas camadas de variáveis)
+   ───────────────────────────────────────────────────────────────────────────
+   As 20 páginas do console já chamam classes (.card, .btn, .badge…) e
+   variáveis (--accent, --text, --panel…) herdadas do tema macOS anterior.
+   Reescrever as páginas custaria caro e travaria o trabalho em paralelo, então
+   aqui o vocabulário é PRESERVADO e só a implementação muda:
+
+     camada 1 · TOKENS DA MARCA   nomes do manual (--preto, --ouro, --tinta…).
+                                  Só estes carregam valor de marca.
+     camada 2 · ALIASES SEMÂNTICOS  os nomes antigos (--accent, --text…)
+                                  apontam para a camada 1. Nada de valor
+                                  literal aqui — é só tradução.
+
+   Quem for mexer em cor: mexa na camada 1. A camada 2 é contrato com as
+   páginas e não deve ganhar valores próprios.
+
+   REGRAS DO MANUAL QUE ESTE ARQUIVO FAZ CUMPRIR
+   ───────────────────────────────────────────────────────────────────────────
+   · Fundo branco-papel é o padrão. Escuro é ESCOLHA DO USUÁRIO (data-tema).
+   · Fraunces nunca abaixo de 18px · JetBrains Mono nunca em texto corrido.
+   · Rótulo em mono é sempre caixa alta com entreletras 0.18em.
+   · Botão tem corte assimétrico (superior-esquerdo e inferior-direito);
+     campo e chip permanecem retos — é o contraste entre os dois que faz o
+     botão ser lido como ação sem depender de cor.
+   · Ouro puro (#C9A227) é preenchimento, traço, filete e superfície.
+     TEXTO de ênfase sobre claro usa --ouro-dark (#8A6914), que passa contraste.
+   · Hierarquia por filete de 1px, não por sombra difusa.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  /* Cores de sistema (Apple) */
-  --accent: #007aff;
-  --accent-hover: #0a84ff;
-  --accent-press: #0060df;
-  --green: #34c759;
-  --amber: #ff9f0a;
-  --red: #ff3b30;
-  --purple: #af52de;
-  --teal: #5ac8fa;
+  /* ─── Camada 1 · Tokens da marca NANOFLOW ──────────────────────────────── */
+  --preto: #0d0b08;
+  --carvao: #17140f;
+  --grafite: #221d15;
+  --branco: #f6f2e9;
+  --branco2: #e4dcc9;
+  --ouro: #c9a227;
+  --ouro-lux: #f0d482;
+  --ouro-dark: #8a6914;
+  --tinta: #2a2416;
+  --tinta-suave: #5c543e;
+  --linha: rgba(201, 162, 39, 0.32);
+  --linha2: rgba(246, 242, 233, 0.1);
+  --linha-clara: rgba(13, 11, 8, 0.13);
 
-  /* Superfícies */
-  --text: #1d1d1f;
-  --muted: #6e6e73;
-  --window: rgba(255, 255, 255, 0.86);
-  --window-solid: #ffffff;
-  --sidebar: rgba(246, 246, 248, 0.72);
-  --panel: #ffffff;
-  --panel-2: #f5f5f7;
-  --hover: rgba(0, 0, 0, 0.04);
-  --border: rgba(0, 0, 0, 0.1);
-  --border-strong: rgba(0, 0, 0, 0.16);
-  --ring: rgba(0, 122, 255, 0.35);
+  /* Estados operacionais derivados da paleta quente do manual.
+     A paleta NANOFLOW é monocromática quente: importar verde/vermelho de iOS
+     brigaria com ela. Estes três tons são derivações do mesmo eixo terroso e
+     todos passam 4.5:1 sobre o branco-papel, porque servem de TEXTO também
+     (as páginas usam var(--green)/var(--red) em color:). O significado nunca
+     depende só da cor: todo badge carrega rótulo escrito. */
+  --verde: #3e5e32; /* saudável · 6.6:1 sobre branco-papel */
+  --verde-claro: #a8cc85; /* mesmo estado, para fundo preto */
+  --ambar: #7e5111; /* atenção · 6.1:1 — bronze, distinto do ouro da marca */
+  --ambar-claro: #f0d482;
+  --terra: #8e2f1e; /* crítico · 7.3:1 — óxido, não vermelho de alerta digital */
+  --terra-claro: #e39074;
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.12);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.05);
+  /* Famílias com papéis fixos. As @font-face moram em src/fonts.css. */
+  --font-titulo: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --font-corpo: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue',
-    'Inter', 'Segoe UI', Roboto, sans-serif;
+  /* Corte assimétrico do símbolo, em variável para não virar número mágico. */
+  --corte: 16px;
+  --corte-sm: 10px;
+
+  /* ─── Camada 2 · Aliases semânticos (contrato com as 20 páginas) ────────── */
+  --accent: var(--ouro-dark); /* usado como color: em várias páginas → tom escuro */
+  --accent-hover: var(--ouro);
+  --accent-press: #6d520f;
+  --green: var(--verde);
+  --amber: var(--ambar);
+  --red: var(--terra);
+  --purple: var(--tinta); /* fora da paleta do manual: cai para tinta neutra */
+  --teal: var(--ouro-dark);
+
+  --text: var(--tinta);
+  --ink: var(--tinta); /* Decisions.tsx pede var(--ink); antes não existia */
+  --muted: var(--tinta-suave);
+  --window: var(--branco);
+  --window-solid: var(--branco);
+  --sidebar: var(--branco);
+  --panel: var(--branco);
+  --panel-2: var(--branco2);
+  --hover: rgba(201, 162, 39, 0.08); /* lavagem dourada, não cinza */
+  --border: var(--linha-clara);
+  --border-strong: rgba(13, 11, 8, 0.24);
+  --border-ouro: var(--linha);
+  --ring: rgba(201, 162, 39, 0.34);
+
+  /* O manual separa blocos com filete de 1px, não com sombra difusa.
+     Os raios ficam em 0: superfície é papel, não vidro. */
+  --radius: 0px;
+  --radius-sm: 0px;
+  --shadow-window: 0 18px 44px rgba(13, 11, 8, 0.1);
+  --shadow-card: none;
+
+  /* Alias antigo da família de corpo. Fica no contrato porque páginas e
+     componentes podem chamá-lo em style inline; o CSS daqui usa --font-corpo. */
+  --font: var(--font-corpo);
+
+  color-scheme: light;
 }
 
 * {
@@ -47,18 +118,15 @@ body {
 }
 
 body {
-  font-family: var(--font);
+  font-family: var(--font-corpo);
   color: var(--text);
   font-size: 14px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* Wallpaper do "desktop" (aparece atrás das janelas e no launcher) */
-  background:
-    radial-gradient(1200px 820px at 18% 8%, #e8f0ff 0%, transparent 60%),
-    radial-gradient(1100px 760px at 88% 92%, #ffe9f0 0%, transparent 55%),
-    linear-gradient(160deg, #eaf0fb 0%, #f2eefb 55%, #f6f1ee 100%);
-  background-attachment: fixed;
+  /* Branco-papel puro: o wallpaper azul-rosa do tema anterior não existe mais.
+     O manual pede superfície de papel, hierarquia por filete. */
+  background: var(--branco);
 }
 
 a {
@@ -66,13 +134,123 @@ a {
   text-decoration: none;
 }
 
-/* ─── Janela macOS (webdesk) ─────────────────────────────────────────────── */
+/* Títulos crus (h1–h3) também caem na serifa: várias páginas usam <h1>/<h2>
+   direto, sem .page-title. Nenhum desce abaixo de 18px — regra do manual. */
+h1,
+h2,
+h3 {
+  font-family: var(--font-titulo);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+h1 {
+  font-size: 26px;
+  margin: 0 0 4px;
+}
+h2 {
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+h3 {
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+strong,
+b {
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ouro-dark);
+  outline-offset: 2px;
+}
+
+/* ─── Utilitários de marca (para a Onda 3 usar nas páginas) ──────────────── */
+
+/* Régua hierárquica: gradiente dourado ABRE/FECHA seção, filete neutro separa
+   item. A hierarquia tem que ser lida antes do texto. */
+.rule,
+.rule-section {
+  display: block;
+  width: 100%;
+  height: 1px;
+  border: 0;
+  padding: 0;
+}
+.rule {
+  background: var(--border);
+  margin: 14px 0;
+}
+.rule-section {
+  background: linear-gradient(90deg, transparent, var(--ouro), transparent);
+  margin: 20px 0;
+}
+
+/* Malha Nano: pontos de 1px a cada 22px, máscara radial obrigatória (é ela que
+   impede a malha de virar textura chapada) e opacidade ≤20%. Sobrepõe só área
+   de respiro — nunca texto corrido. Precisa de pai com position:relative. */
+.mesh {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: radial-gradient(circle, rgba(201, 162, 39, 0.18) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse at 72% 24%, #000 6%, transparent 62%);
+  mask-image: radial-gradient(ellipse at 72% 24%, #000 6%, transparent 62%);
+}
+
+/* Abertura de seção: filete curto + rótulo em mono. Ouro-dark porque é TEXTO. */
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ouro-dark);
+  margin: 0 0 12px;
+}
+.eyebrow::before {
+  content: '';
+  width: 26px;
+  height: 1px;
+  background: var(--ouro);
+  flex: none;
+}
+
+/* Rótulo de dado. Mono, caixa alta, 0.18em — nunca em texto corrido. */
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* Empilhamento vertical de blocos (usado como raiz de página). */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ─── Janela do webdesk ──────────────────────────────────────────────────── */
 
 .macos-desktop {
   min-height: 100vh;
   padding: 0;
+  background: var(--branco);
 }
 
+/* Deixou de imitar janela de sistema: é uma folha de papel com filete dourado
+   no topo, que funciona como a régua que abre o documento inteiro. */
 .macos-window {
   display: grid;
   grid-template-columns: 244px 1fr;
@@ -83,6 +261,9 @@ a {
   height: 100dvh; /* barra dinâmica de navegadores móveis não corta o rodapé */
   background: var(--window-solid);
   overflow: hidden;
+  /* O filete dourado no topo é a régua que abre o documento inteiro — é o que
+     substitui a barra de título translúcida do tema anterior. */
+  border-top: 2px solid var(--ouro);
 }
 
 @media (min-width: 1120px) {
@@ -92,18 +273,17 @@ a {
   .macos-window {
     height: calc(100vh - 32px);
     height: calc(100dvh - 32px);
-    border-radius: 14px;
+    border-radius: 0;
     box-shadow: var(--shadow-window);
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--linha);
+    border-top: 2px solid var(--ouro);
   }
 }
 
-/* Barra lateral translúcida (vibrancy) */
+/* Barra lateral: papel separado por filete, sem vidro fosco nem vibrancy. */
 .sidebar {
   background: var(--sidebar);
-  backdrop-filter: saturate(180%) blur(24px);
-  -webkit-backdrop-filter: saturate(180%) blur(24px);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--linha);
   display: flex;
   flex-direction: column;
   padding: 10px 12px 14px;
@@ -112,37 +292,42 @@ a {
   overflow-y: auto;
 }
 
-/* Traffic lights */
+/* Os três semáforos do macOS não sobrevivem à marca. Restou UM indicador:
+   o símbolo NANOFLOW (quadrado com os cantos superior-esquerdo e
+   inferior-direito em arco). Os seletores .y e .g continuam existindo para
+   não quebrar o JSX — só não desenham nada. */
 .traffic {
   display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 6px 8px 14px;
+  padding: 8px 8px 14px;
 }
 .traffic i {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: inline-block;
+  display: none;
 }
 .traffic .r {
-  background: #ff5f57;
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 1.3px solid var(--ouro);
+  border-radius: 50% 0 50% 0;
+  background: transparent;
 }
-.traffic .y {
-  background: #febc2e;
-}
+.traffic .y,
 .traffic .g {
-  background: #28c840;
+  display: none;
 }
 
 .brand {
+  font-family: var(--font-corpo);
   font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.2px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   padding: 2px 10px 12px;
   color: var(--text);
 }
 .brand span {
-  color: var(--accent);
+  color: var(--ouro-dark);
 }
 
 .nav-link {
@@ -150,22 +335,25 @@ a {
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border-radius: 7px;
-  color: #3a3a3c;
+  border-radius: 0;
+  border-left: 2px solid transparent;
+  color: var(--tinta);
   font-weight: 500;
   font-size: 13.5px;
-  transition: background 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .nav-link:hover {
   background: var(--hover);
 }
+/* Seleção marcada por filete dourado + fundo de papel 2 — o ouro fica no
+   ponto de decisão, não em área. */
 .nav-link.active {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 122, 255, 0.4);
+  background: var(--branco2);
+  border-left-color: var(--ouro);
+  color: var(--tinta);
+  font-weight: 600;
 }
 
-/* Área principal da janela */
 .window-main {
   display: flex;
   flex-direction: column;
@@ -180,14 +368,17 @@ a {
   align-items: center;
   justify-content: space-between;
   padding: 0 18px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--linha);
+  background: var(--branco);
 }
+/* Nome da tela é rótulo, não título: vai em mono caixa alta. */
 .titlebar .title {
-  font-weight: 600;
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--tinta);
 }
 .main {
   flex: 1 1 auto;
@@ -202,21 +393,27 @@ a {
 /* ─── Tipografia de página ──────────────────────────────────────────────── */
 
 .page-title {
+  font-family: var(--font-titulo);
   font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.18;
   margin: 0 0 4px;
 }
 .page-sub {
   color: var(--muted);
-  margin: 0 0 22px;
+  margin: 0 0 20px;
   font-size: 14px;
+  line-height: 1.55;
+  max-width: 78ch;
 }
+/* 18px é o piso da Fraunces no manual — abaixo disso a serifa não se sustenta. */
 .section-title {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.2px;
-  margin: 0 0 12px;
+  font-family: var(--font-titulo);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0;
+  margin: 0 0 10px;
 }
 .muted {
   color: var(--muted);
@@ -267,7 +464,7 @@ a {
   }
   .sidebar {
     border-right: none;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--linha);
     /* No mobile a navegação vira um cabeçalho que rola com a página (não fixo),
        liberando toda a altura para o conteúdo. */
     flex-direction: row;
@@ -311,8 +508,10 @@ a {
   }
 }
 
-/* ─── Cards ─────────────────────────────────────────────────────────────── */
+/* ─── Cards e indicadores ───────────────────────────────────────────────── */
 
+/* Sem sombra: o card existe pelo filete. Densidade preservada (padding 18px,
+   igual ao tema anterior) — a elegância aqui é precisão, não ar. */
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -320,21 +519,46 @@ a {
   padding: 18px;
   box-shadow: var(--shadow-card);
 }
+
+/* Indicador do manual: número em Fraunces (herói), rótulo em mono caixa alta
+   (serviço). É o par que dá a leitura de dado antes da leitura do texto. */
 .stat .label {
+  font-family: var(--font-mono);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.4;
 }
 .stat .value {
+  font-family: var(--font-titulo);
   font-size: 27px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
-  margin-top: 6px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.1;
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tinta);
 }
 .stat .hint {
+  font-family: var(--font-mono);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.65;
+  margin-top: 6px;
+}
+
+/* Número solto (Histórico). Mesma regra do indicador. */
+.kpi {
+  font-family: var(--font-titulo);
+  font-size: 27px;
+  font-weight: 400;
+  line-height: 1.1;
   margin-top: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Toolbar / controles ───────────────────────────────────────────────── */
@@ -347,25 +571,45 @@ a {
   margin-bottom: 18px;
 }
 
-input,
-select {
-  background: #fff;
+/* Campo é RETO. O contraste com o corte assimétrico do botão é o que faz o
+   botão ser lido como ação sem depender de cor.
+   O :not() existe porque checkbox/radio/range não podem receber padding e
+   borda de campo de texto — no tema anterior recebiam e ficavam deformados. */
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+select,
+textarea {
+  background: var(--branco);
   border: 1px solid var(--border-strong);
   color: var(--text);
   padding: 8px 11px;
-  border-radius: 7px;
+  border-radius: 0;
   font-size: 14px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   outline: none;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
-input:focus,
-select:focus {
-  border-color: var(--accent);
+input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
+select:focus,
+textarea:focus {
+  border-color: var(--ouro-dark);
   box-shadow: 0 0 0 3px var(--ring);
 }
-input::placeholder {
-  color: #a1a1a6;
+input::placeholder,
+textarea::placeholder {
+  color: rgba(92, 84, 62, 0.7);
+}
+/* Controles nativos herdam o ouro em vez do azul do sistema. */
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'] {
+  accent-color: var(--ouro-dark);
+}
+/* Data e número são dados: leem melhor em mono e alinham em coluna. */
+input[type='date'],
+input[type='number'] {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Filtro multi-seleção (MultiSelect) ────────────────────────────────── */
@@ -373,29 +617,30 @@ input::placeholder {
 .mselect {
   position: relative;
 }
+/* Abre um campo, não uma ação: permanece reto. */
 .mselect-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #fff;
+  background: var(--branco);
   border: 1px solid var(--border-strong);
   color: var(--text);
   padding: 8px 11px;
-  border-radius: 7px;
+  border-radius: 0;
   font-size: 14px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   cursor: pointer;
   max-width: 240px;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
 .mselect-btn:focus-visible {
-  border-color: var(--accent);
+  border-color: var(--ouro-dark);
   box-shadow: 0 0 0 3px var(--ring);
   outline: none;
 }
 .mselect-btn.active {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--ouro-dark);
+  color: var(--ouro-dark);
   font-weight: 600;
 }
 .mselect-label {
@@ -414,10 +659,10 @@ input::placeholder {
   left: 0;
   min-width: 240px;
   max-width: 320px;
-  background: var(--window-solid, #fff);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--shadow-card);
+  background: var(--panel);
+  border: 1px solid var(--linha);
+  border-radius: 0;
+  box-shadow: 0 12px 30px rgba(13, 11, 8, 0.12);
   overflow: hidden;
 }
 .mselect-list {
@@ -435,9 +680,9 @@ input::placeholder {
   border: none;
   color: var(--text);
   font-size: 13.5px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   padding: 7px 9px;
-  border-radius: 7px;
+  border-radius: 0;
   cursor: pointer;
 }
 .mselect-opt:hover {
@@ -451,17 +696,17 @@ input::placeholder {
   width: 16px;
   height: 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  color: #fff;
+  color: var(--branco);
   background: transparent;
 }
 .mselect-opt.checked .mselect-check {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--ouro-dark);
+  border-color: var(--ouro-dark);
 }
 .mselect-empty {
   color: var(--muted);
@@ -475,11 +720,11 @@ input::placeholder {
 .mselect-actions button {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--ouro-dark);
   font-size: 13px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   padding: 6px 9px;
-  border-radius: 7px;
+  border-radius: 0;
   cursor: pointer;
   width: 100%;
   text-align: left;
@@ -488,73 +733,138 @@ input::placeholder {
   background: var(--hover);
 }
 
+/* ─── Botões ────────────────────────────────────────────────────────────── */
+
+/* O corte assimétrico do símbolo: superior-esquerdo e inferior-direito em
+   raio 16px, os outros dois a 90°. É a assinatura do sistema.
+   .btn (contornado) é a ação comum; .btn.solid é o primário preenchido, que o
+   manual limita a UMA ocorrência por tela — por isso o padrão não é sólido:
+   telas com vários botões continuariam dentro da regra dos 5% de ouro. */
 .btn {
-  background: var(--accent);
-  color: #fff;
-  border: none;
+  background: transparent;
+  color: var(--ouro-dark);
+  border: 1px solid var(--ouro);
   padding: 8px 16px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--corte) 0 var(--corte) 0;
+  font-family: var(--font-corpo);
   font-weight: 500;
   font-size: 13.5px;
-  font-family: inherit;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  transition: background 0.12s, transform 0.04s;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+  box-shadow: none;
 }
 .btn:hover {
-  background: var(--accent-hover);
+  background: var(--ouro);
+  color: var(--preto);
 }
 .btn:active {
   background: var(--accent-press);
-  transform: translateY(0.5px);
+  border-color: var(--accent-press);
+  color: var(--branco);
 }
+/* Primário: uma ocorrência por tela. */
+.btn.solid {
+  background: var(--ouro);
+  border-color: var(--ouro);
+  color: var(--preto);
+}
+.btn.solid:hover {
+  background: var(--ouro-lux);
+  border-color: var(--ouro-lux);
+  color: var(--preto);
+}
+/* Terciário: sem ouro nenhum, só tinta e filete neutro. */
 .btn.ghost {
-  background: rgba(255, 255, 255, 0.9);
+  background: transparent;
   border: 1px solid var(--border-strong);
-  color: var(--text);
-  box-shadow: none;
+  color: var(--tinta);
 }
 .btn.ghost:hover {
-  background: var(--panel-2);
+  background: var(--hover);
+  border-color: var(--ouro);
+  color: var(--tinta);
 }
+/* O raio cheio de 16px comeria a altura de um botão de 25px: reduz junto. */
 .btn.sm {
-  padding: 5px 11px;
+  padding: 5px 12px;
   font-size: 12.5px;
-  border-radius: 6px;
+  border-radius: var(--corte-sm) 0 var(--corte-sm) 0;
 }
 .btn.danger {
-  background: var(--red);
+  color: var(--terra);
+  border-color: var(--terra);
+  background: transparent;
 }
 .btn.danger:hover {
-  filter: brightness(1.05);
+  background: var(--terra);
+  border-color: var(--terra);
+  color: var(--branco);
 }
 .btn:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
+/* Desabilitado não pode "acender" no hover — cada variante volta ao repouso. */
+.btn:disabled:hover {
+  background: transparent;
+  border-color: var(--ouro);
+  color: var(--ouro-dark);
+}
+.btn.solid:disabled:hover {
+  background: var(--ouro);
+  border-color: var(--ouro);
+  color: var(--preto);
+}
+.btn.ghost:disabled:hover {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--tinta);
+}
+.btn.danger:disabled:hover {
+  background: transparent;
+  border-color: var(--terra);
+  color: var(--terra);
+}
 
-/* Segmented control (macOS) */
+/* Controle segmentado: chips retos dentro de uma moldura de 1px. O item ativo
+   é preenchido com tinta e recebe um filete dourado embaixo — o ouro marca a
+   decisão, não a superfície inteira. */
 .segmented {
   display: inline-flex;
-  background: rgba(120, 120, 128, 0.12);
-  border-radius: 8px;
-  padding: 2px;
-  gap: 2px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
 }
 .segmented button {
   border: none;
+  border-right: 1px solid var(--border);
   background: transparent;
-  color: var(--text);
-  padding: 5px 14px;
-  border-radius: 6px;
-  font-size: 13px;
+  color: var(--tinta-suave);
+  padding: 6px 14px;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   font-weight: 500;
   cursor: pointer;
-  font-family: inherit;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.segmented button:last-child {
+  border-right: none;
+}
+.segmented button:hover {
+  background: var(--hover);
+  color: var(--tinta);
 }
 .segmented button.active {
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  background: var(--tinta);
+  color: var(--branco);
+  box-shadow: inset 0 -2px 0 var(--ouro);
 }
 
 /* ─── Tabelas ───────────────────────────────────────────────────────────── */
@@ -566,16 +876,18 @@ table {
 th,
 td {
   text-align: left;
-  padding: 11px 14px;
+  padding: 11px 14px; /* densidade preservada: o console vive de tabela grande */
   border-bottom: 1px solid var(--border);
   font-size: 13.5px;
 }
+/* Cabeçalho é rótulo: mono, caixa alta, 0.18em. */
 th {
+  font-family: var(--font-mono);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-weight: 600;
+  letter-spacing: 0.18em;
+  font-weight: 500;
 }
 tbody tr:last-child td {
   border-bottom: none;
@@ -583,40 +895,63 @@ tbody tr:last-child td {
 tbody tr:hover {
   background: var(--hover);
 }
+/* Número é dado: mono, tabular, alinhado à direita. */
 td.num,
 th.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+td.num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
 
 /* ─── Badges ────────────────────────────────────────────────────────────── */
 
+/* Chip: reto, com filete. Mono caixa alta 0.18em, como manda o manual.
+   Os três estados operacionais (ruptura · excesso · saudável) se distinguem
+   por tom E por rótulo escrito — nunca só por cor. */
 .badge {
   display: inline-block;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 0;
+  border: 1px solid transparent;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.6;
 }
+/* saudável */
 .badge.green {
-  background: rgba(52, 199, 89, 0.16);
-  color: #248a3d;
+  background: rgba(62, 94, 50, 0.12);
+  border-color: rgba(62, 94, 50, 0.4);
+  color: var(--verde);
 }
+/* atenção */
 .badge.amber {
-  background: rgba(255, 159, 10, 0.16);
-  color: #b25e00;
+  background: rgba(201, 162, 39, 0.16);
+  border-color: rgba(201, 162, 39, 0.55);
+  color: var(--ambar);
 }
+/* crítico */
 .badge.red {
-  background: rgba(255, 59, 48, 0.14);
-  color: #c9271f;
+  background: rgba(142, 47, 30, 0.11);
+  border-color: rgba(142, 47, 30, 0.4);
+  color: var(--terra);
 }
+/* informativo — neutro preenchido, sem cor de estado */
 .badge.blue {
-  background: rgba(0, 122, 255, 0.14);
-  color: #0060df;
+  background: var(--branco2);
+  border-color: var(--border-strong);
+  color: var(--tinta);
 }
+/* inerte — só contorno, o mais apagado da família */
 .badge.gray {
-  background: rgba(120, 120, 128, 0.16);
-  color: #6e6e73;
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--muted);
 }
 
 /* ─── Estados / banners ─────────────────────────────────────────────────── */
@@ -625,36 +960,46 @@ th.num {
   color: var(--muted);
   padding: 30px;
   text-align: center;
+  font-size: 13.5px;
 }
+/* Banner é bloco de aviso: reto, com filete dourado à esquerda quando exige
+   atenção. */
 .banner {
-  border-radius: 10px;
+  border-radius: 0;
   padding: 12px 16px;
   margin-bottom: 18px;
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
   display: flex;
   gap: 10px;
   align-items: center;
-  background: #fff;
+  background: var(--panel);
+  font-size: 13.5px;
 }
 .banner.warn {
-  background: rgba(255, 159, 10, 0.1);
-  border-color: rgba(255, 159, 10, 0.35);
+  background: rgba(201, 162, 39, 0.1);
+  border-color: rgba(201, 162, 39, 0.34);
+  border-left-color: var(--ouro);
 }
 .banner.ok {
-  background: rgba(52, 199, 89, 0.1);
-  border-color: rgba(52, 199, 89, 0.35);
+  background: rgba(62, 94, 50, 0.09);
+  border-color: rgba(62, 94, 50, 0.3);
+  border-left-color: var(--verde);
 }
+/* Marcador quadrado: a geometria do sistema não tem cantos redondos fora da
+   forma da marca. Sempre acompanhado de texto. */
 .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
   display: inline-block;
+  vertical-align: middle;
 }
 .dot.green {
-  background: var(--green);
+  background: var(--verde);
 }
 .dot.amber {
-  background: var(--amber);
+  background: var(--ouro);
 }
 
 /* ─── Modal ─────────────────────────────────────────────────────────────── */
@@ -662,8 +1007,7 @@ th.num {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(3px);
+  background: rgba(13, 11, 8, 0.42);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -674,7 +1018,9 @@ th.num {
   width: 460px;
   max-width: 92vw;
   box-shadow: var(--shadow-window);
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--linha);
+  border-top: 2px solid var(--ouro);
+  background: var(--panel);
 }
 .field {
   display: flex;
@@ -682,13 +1028,19 @@ th.num {
   gap: 6px;
   margin-bottom: 12px;
 }
+/* Rótulo de campo em mono caixa alta; tinta-suave em vez de ouro porque é
+   texto pequeno sobre claro. */
 .field label {
-  font-size: 12.5px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   color: var(--muted);
   font-weight: 500;
 }
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
 }
 
@@ -699,22 +1051,30 @@ th.num {
   display: grid;
   place-items: center;
   padding: 24px;
+  position: relative;
+  /* Halo dourado do hero do manual — gradiente de luz, não wallpaper colorido. */
+  background: radial-gradient(ellipse at 50% 22%, rgba(201, 162, 39, 0.14), transparent 62%),
+    var(--branco);
 }
 .launcher-inner {
   width: 720px;
   max-width: 94vw;
   text-align: center;
+  position: relative;
+  z-index: 1;
 }
 .launcher h1 {
+  font-family: var(--font-titulo);
   font-size: 40px;
-  font-weight: 700;
-  letter-spacing: -1px;
+  font-weight: 400;
+  letter-spacing: 0;
   margin: 0 0 6px;
 }
 .launcher p {
   color: var(--muted);
   margin: 0 0 28px;
   font-size: 17px;
+  line-height: 1.65;
 }
 .tiles {
   display: grid;
@@ -726,55 +1086,56 @@ th.num {
     grid-template-columns: 1fr;
   }
 }
+/* Sem vidro, sem salto: papel com filete que fica dourado no hover. */
 .tile {
-  background: var(--window);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0;
   padding: 28px 24px;
   text-align: left;
-  box-shadow: var(--shadow-card);
-  transition: transform 0.15s, box-shadow 0.15s;
+  box-shadow: none;
+  transition: border-color 0.16s ease, background 0.16s ease;
   color: var(--text);
 }
 .tile:hover {
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-window);
+  border-color: var(--ouro);
+  background: rgba(201, 162, 39, 0.05);
 }
 .tile .glyph {
   font-size: 30px;
   margin-bottom: 12px;
+  line-height: 1;
 }
 .tile h3 {
+  font-family: var(--font-titulo);
   margin: 0 0 6px;
   font-size: 19px;
-  letter-spacing: -0.3px;
+  font-weight: 400;
+  letter-spacing: 0;
 }
 .tile p {
   font-size: 13.5px;
   margin: 0;
+  line-height: 1.6;
 }
 
-/* ─── StoreShell (loja, estilo Apple Store) ─────────────────────────────── */
+/* ─── StoreShell (loja) ─────────────────────────────────────────────────── */
 
 .store {
   min-height: 100vh;
-  background: #fbfbfd;
+  background: var(--branco);
 }
 .store-nav {
   position: sticky;
   top: 0;
   z-index: 20;
-  height: 48px;
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 22px;
-  background: rgba(251, 251, 253, 0.8);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-bottom: 1px solid var(--border);
+  background: var(--branco);
+  border-bottom: 1px solid var(--linha);
 }
 .store-nav .brand {
   padding: 0;
@@ -786,12 +1147,18 @@ th.num {
   align-items: center;
 }
 .store-nav nav a {
-  color: #333;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--tinta-suave);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   font-weight: 500;
+  padding-bottom: 2px;
+  border-bottom: 1px solid transparent;
 }
 .store-nav nav a:hover {
-  color: #000;
+  color: var(--tinta);
+  border-bottom-color: var(--ouro);
 }
 .store-main {
   max-width: 1080px;
@@ -803,145 +1170,33 @@ th.num {
   padding: 40px 20px 34px;
 }
 .store-hero h1 {
+  font-family: var(--font-titulo);
   font-size: 44px;
-  font-weight: 700;
-  letter-spacing: -1px;
+  font-weight: 400;
+  letter-spacing: 0;
   margin: 0 0 8px;
 }
 .store-hero p {
   font-size: 19px;
   color: var(--muted);
   margin: 0;
+  line-height: 1.6;
 }
 
-/* Scrollbar discreta */
+/* Barra de rolagem discreta, em tinta quente. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.18);
-  border-radius: 8px;
-  border: 2px solid transparent;
+  background: rgba(42, 36, 22, 0.22);
+  border-radius: 0;
+  border: 3px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(42, 36, 22, 0.38);
   background-clip: content-box;
-}
-
-/* ─── Modo escuro (macOS dark) ───────────────────────────────────────────── */
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --accent: #0a84ff;
-    --accent-hover: #409cff;
-    --accent-press: #0060df;
-
-    --text: #f5f5f7;
-    --muted: #98989d;
-    --window: rgba(28, 28, 30, 0.82);
-    --window-solid: #1c1c1e;
-    --sidebar: rgba(40, 40, 42, 0.66);
-    --panel: #2c2c2e;
-    --panel-2: #3a3a3c;
-    --hover: rgba(255, 255, 255, 0.06);
-    --border: rgba(255, 255, 255, 0.1);
-    --border-strong: rgba(255, 255, 255, 0.2);
-    --ring: rgba(10, 132, 255, 0.45);
-
-    --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
-  }
-
-  body {
-    background:
-      radial-gradient(1200px 820px at 18% 8%, #1b2740 0%, transparent 60%),
-      radial-gradient(1100px 760px at 88% 92%, #2a1930 0%, transparent 55%),
-      linear-gradient(160deg, #0e1016 0%, #141118 55%, #16120f 100%);
-  }
-
-  .nav-link {
-    color: #e5e5e7;
-  }
-  .titlebar {
-    background: rgba(28, 28, 30, 0.7);
-  }
-  input,
-  select,
-  .mselect-btn {
-    background: #1c1c1e;
-    color: var(--text);
-  }
-  .mselect-btn.active {
-    color: var(--accent);
-  }
-  input::placeholder {
-    color: #6a6a6e;
-  }
-  .btn.ghost {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text);
-  }
-  .btn.ghost:hover {
-    background: rgba(255, 255, 255, 0.14);
-  }
-  .segmented {
-    background: rgba(120, 120, 128, 0.24);
-  }
-  .segmented button.active {
-    background: #5a5a5e;
-    color: #fff;
-  }
-  .tile,
-  .modal {
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-  .banner {
-    background: var(--panel);
-  }
-  .store {
-    background: #000;
-  }
-  .store-nav {
-    background: rgba(0, 0, 0, 0.72);
-  }
-  .store-nav nav a {
-    color: #d1d1d6;
-  }
-  .store-nav nav a:hover {
-    color: #fff;
-  }
-
-  .badge.green {
-    background: rgba(52, 199, 89, 0.2);
-    color: #63e6a0;
-  }
-  .badge.amber {
-    background: rgba(255, 159, 10, 0.2);
-    color: #ffce70;
-  }
-  .badge.red {
-    background: rgba(255, 69, 58, 0.2);
-    color: #ff8078;
-  }
-  .badge.blue {
-    background: rgba(10, 132, 255, 0.2);
-    color: #6db2ff;
-  }
-  .badge.gray {
-    background: rgba(120, 120, 128, 0.28);
-    color: #b0b0b6;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.18);
-    background-clip: content-box;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.3);
-    background-clip: content-box;
-  }
 }
 
 /* ─── Dock (webdesk) ─────────────────────────────────────────────────────── */
@@ -949,60 +1204,55 @@ th.num {
 .window-main {
   position: relative;
 }
+/* Deixou de ser a doca translúcida do macOS: é uma régua de papel com filete
+   dourado, colada ao rodapé da janela. */
 .dock {
   position: absolute;
   left: 50%;
   bottom: 14px;
   transform: translateX(-50%);
   display: flex;
-  gap: 8px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.5);
-  backdrop-filter: saturate(180%) blur(24px);
-  -webkit-backdrop-filter: saturate(180%) blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  border-radius: 20px;
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.22);
+  gap: 6px;
+  padding: 7px 10px;
+  background: var(--branco);
+  border: 1px solid var(--linha);
+  border-radius: 0;
+  box-shadow: 0 10px 28px rgba(13, 11, 8, 0.12);
   z-index: 30;
 }
 .dock button {
-  width: 46px;
-  height: 46px;
-  border-radius: 13px;
-  border: none;
-  background: rgba(255, 255, 255, 0.65);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
-  font-size: 21px;
+  width: 42px;
+  height: 42px;
+  border-radius: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+  font-size: 19px;
   line-height: 1;
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: transform 0.14s ease;
+  transition: background 0.14s ease, border-color 0.14s ease;
   position: relative;
 }
 .dock button:hover {
-  transform: translateY(-8px) scale(1.14);
+  background: var(--hover);
+  border-color: var(--linha);
+}
+/* Marcador do item ativo: filete dourado, não bolinha. */
+.dock button.active {
+  background: var(--branco2);
 }
 .dock button.active::after {
   content: '';
   position: absolute;
-  bottom: -5px;
+  bottom: -3px;
   left: 50%;
   transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-@media (prefers-color-scheme: dark) {
-  .dock {
-    background: rgba(50, 50, 52, 0.55);
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-  .dock button {
-    background: rgba(90, 90, 94, 0.6);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-  }
+  width: 14px;
+  height: 2px;
+  border-radius: 0;
+  background: var(--ouro);
 }
 @media (max-width: 720px) {
   .dock {
@@ -1020,42 +1270,65 @@ th.num {
   cursor: pointer;
   font: inherit;
   color: inherit;
-  border-left: 4px solid var(--border-strong, var(--border));
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  border-left: 3px solid var(--border-strong);
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 .action-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+  background: var(--hover);
 }
 .action-card:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ouro-dark);
   outline-offset: 2px;
 }
 .action-card .action-count {
+  font-family: var(--font-titulo);
   font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-weight: 400;
+  letter-spacing: 0;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 .action-card .action-label {
   font-weight: 600;
   font-size: 13.5px;
   margin-top: 2px;
 }
-.action-card .hint {
+/* .hint aparece dentro de card de ação e de indicador: sempre carimbo em mono. */
+.hint {
+  font-family: var(--font-mono);
   color: var(--muted);
-  font-size: 11.5px;
-  margin-top: 4px;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.65;
+  margin-top: 5px;
 }
-.action-card.red { border-left-color: var(--red); }
-.action-card.red .action-count { color: var(--red); }
-.action-card.green { border-left-color: var(--green); }
-.action-card.green .action-count { color: var(--green); }
-.action-card.blue { border-left-color: var(--accent); }
-.action-card.blue .action-count { color: var(--accent); }
-.action-card.amber { border-left-color: var(--amber); }
-.action-card.amber .action-count { color: var(--amber); }
-/* ─── Selo de dados fictícios (demonstração) ─────────────────────────────────── */
+.action-card.red {
+  border-left-color: var(--terra);
+}
+.action-card.red .action-count {
+  color: var(--terra);
+}
+.action-card.green {
+  border-left-color: var(--verde);
+}
+.action-card.green .action-count {
+  color: var(--verde);
+}
+.action-card.blue {
+  border-left-color: var(--ouro);
+}
+.action-card.blue .action-count {
+  color: var(--ouro-dark);
+}
+.action-card.amber {
+  border-left-color: var(--ouro);
+}
+.action-card.amber .action-count {
+  color: var(--ambar);
+}
+
+/* ─── Selo de dados fictícios (demonstração) ─────────────────────────────── */
 
 .demo-seal {
   position: fixed;
@@ -1064,39 +1337,40 @@ th.num {
   z-index: 60;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 12px;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
   font-weight: 500;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--tinta);
+  background: var(--branco);
+  border: 1px solid var(--linha);
+  box-shadow: 0 6px 18px rgba(13, 11, 8, 0.1);
   pointer-events: auto;
   cursor: help;
   user-select: none;
 }
 .demo-seal strong {
-  font-weight: 700;
+  font-weight: 500;
+  color: var(--ouro-dark);
 }
 .demo-seal-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--amber);
-  box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.22);
+  width: 7px;
+  height: 7px;
+  border-radius: 0;
+  background: var(--ouro);
   animation: demo-seal-pulse 2.4s ease-in-out infinite;
 }
 @keyframes demo-seal-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-@media (prefers-color-scheme: dark) {
-  .demo-seal {
-    background: rgba(40, 40, 42, 0.72);
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
   }
 }
 @media (max-width: 720px) {
@@ -1104,10 +1378,256 @@ th.num {
     left: 50%;
     transform: translateX(-50%);
     bottom: 10px;
-    font-size: 11px;
+    font-size: 9px;
     padding: 5px 10px;
   }
 }
+
+/* ═══ Modo escuro ═══════════════════════════════════════════════════════════
+   A troca é DECISÃO DO USUÁRIO (ou da tela): nada mais reage a
+   prefers-color-scheme. Ligue com data-tema="escuro" no <html> para o app
+   inteiro, ou no contêiner de um painel de alta densidade (a tela de BI) para
+   escurecer só aquele bloco — os tokens são redeclarados no seletor, então
+   funcionam nos dois escopos.
+   Paleta: preto/carvão/grafite do manual, ouro-lux no lugar do ouro-dark
+   (sobre preto quem precisa de contraste é o tom claro).
+   ═════════════════════════════════════════════════════════════════════════ */
+
+:root[data-tema='escuro'],
+[data-tema='escuro'] {
+  --accent: var(--ouro-lux);
+  --accent-hover: var(--ouro);
+  --accent-press: var(--ouro-dark);
+  --green: var(--verde-claro);
+  --amber: var(--ambar-claro);
+  --red: var(--terra-claro);
+  --purple: var(--branco2);
+  --teal: var(--ouro-lux);
+
+  --text: var(--branco);
+  --ink: var(--branco);
+  --muted: rgba(228, 220, 201, 0.72);
+  --window: var(--preto);
+  --window-solid: var(--preto);
+  --sidebar: var(--carvao);
+  --panel: var(--carvao);
+  --panel-2: var(--grafite);
+  --hover: rgba(201, 162, 39, 0.12);
+  --border: var(--linha2);
+  --border-strong: rgba(246, 242, 233, 0.22);
+  --ring: rgba(201, 162, 39, 0.42);
+
+  --shadow-window: 0 20px 50px rgba(0, 0, 0, 0.55);
+  --shadow-card: none;
+
+  color-scheme: dark;
+}
+
+:root[data-tema='escuro'] body,
+[data-tema='escuro'] {
+  background: var(--preto);
+  color: var(--text);
+}
+
+[data-tema='escuro'] .macos-desktop,
+[data-tema='escuro'] .store,
+[data-tema='escuro'] .launcher {
+  background: var(--preto);
+}
+[data-tema='escuro'] .launcher {
+  background: radial-gradient(ellipse at 50% 22%, rgba(201, 162, 39, 0.16), transparent 62%),
+    var(--preto);
+}
+[data-tema='escuro'] .macos-window,
+[data-tema='escuro'] .window-main,
+[data-tema='escuro'] .titlebar,
+[data-tema='escuro'] .store-nav,
+[data-tema='escuro'] .dock,
+[data-tema='escuro'] .demo-seal {
+  background: var(--preto);
+}
+[data-tema='escuro'] .sidebar,
+[data-tema='escuro'] .card,
+[data-tema='escuro'] .banner,
+[data-tema='escuro'] .modal,
+[data-tema='escuro'] .mselect-pop,
+[data-tema='escuro'] .tile {
+  background: var(--carvao);
+}
+[data-tema='escuro'] .nav-link {
+  color: var(--branco2);
+}
+[data-tema='escuro'] .nav-link.active {
+  background: var(--grafite);
+  color: var(--branco);
+}
+[data-tema='escuro'] .titlebar .title,
+[data-tema='escuro'] .brand {
+  color: var(--branco);
+}
+[data-tema='escuro'] .brand span {
+  color: var(--ouro-lux);
+}
+[data-tema='escuro'] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+[data-tema='escuro'] select,
+[data-tema='escuro'] textarea,
+[data-tema='escuro'] .mselect-btn {
+  background: var(--grafite);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+[data-tema='escuro'] input::placeholder,
+[data-tema='escuro'] textarea::placeholder {
+  color: rgba(228, 220, 201, 0.45);
+}
+[data-tema='escuro'] input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
+[data-tema='escuro'] select:focus,
+[data-tema='escuro'] textarea:focus,
+[data-tema='escuro'] .mselect-btn:focus-visible {
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .mselect-btn.active {
+  color: var(--ouro-lux);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .mselect-opt,
+[data-tema='escuro'] .mselect-actions button {
+  color: var(--text);
+}
+[data-tema='escuro'] .mselect-actions button {
+  color: var(--ouro-lux);
+}
+[data-tema='escuro'] .mselect-check {
+  color: var(--preto);
+}
+[data-tema='escuro'] .mselect-opt.checked .mselect-check {
+  background: var(--ouro);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .btn {
+  color: var(--ouro-lux);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .btn:hover,
+[data-tema='escuro'] .btn.solid {
+  background: var(--ouro);
+  color: var(--preto);
+}
+[data-tema='escuro'] .btn.ghost {
+  color: var(--branco2);
+  border-color: var(--border-strong);
+  background: transparent;
+}
+[data-tema='escuro'] .btn.ghost:hover {
+  background: rgba(246, 242, 233, 0.08);
+  border-color: var(--ouro);
+  color: var(--branco);
+}
+[data-tema='escuro'] .btn.danger {
+  color: var(--terra-claro);
+  border-color: var(--terra-claro);
+}
+[data-tema='escuro'] .btn.danger:hover {
+  background: var(--terra-claro);
+  color: var(--preto);
+}
+[data-tema='escuro'] .segmented button {
+  color: var(--branco2);
+}
+[data-tema='escuro'] .segmented button.active {
+  background: var(--branco2);
+  color: var(--preto);
+  box-shadow: inset 0 -2px 0 var(--ouro-dark);
+}
+[data-tema='escuro'] .traffic .r {
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .eyebrow,
+[data-tema='escuro'] .demo-seal strong {
+  color: var(--ouro-lux);
+}
+[data-tema='escuro'] .demo-seal {
+  color: var(--branco);
+  border-color: var(--linha);
+}
+[data-tema='escuro'] .mesh {
+  background-image: radial-gradient(circle, rgba(201, 162, 39, 0.2) 1px, transparent 1px);
+}
+[data-tema='escuro'] .stat .value,
+[data-tema='escuro'] .kpi {
+  color: var(--branco);
+}
+[data-tema='escuro'] .badge.green {
+  background: rgba(168, 204, 133, 0.14);
+  border-color: rgba(168, 204, 133, 0.4);
+  color: var(--verde-claro);
+}
+[data-tema='escuro'] .badge.amber {
+  background: rgba(201, 162, 39, 0.18);
+  border-color: rgba(201, 162, 39, 0.5);
+  color: var(--ouro-lux);
+}
+[data-tema='escuro'] .badge.red {
+  background: rgba(227, 144, 116, 0.14);
+  border-color: rgba(227, 144, 116, 0.4);
+  color: var(--terra-claro);
+}
+[data-tema='escuro'] .badge.blue {
+  background: var(--grafite);
+  border-color: var(--border-strong);
+  color: var(--branco);
+}
+[data-tema='escuro'] .badge.gray {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--muted);
+}
+[data-tema='escuro'] .banner.warn {
+  background: rgba(201, 162, 39, 0.12);
+  border-color: rgba(201, 162, 39, 0.36);
+  border-left-color: var(--ouro);
+}
+[data-tema='escuro'] .banner.ok {
+  background: rgba(168, 204, 133, 0.1);
+  border-color: rgba(168, 204, 133, 0.3);
+  border-left-color: var(--verde-claro);
+}
+[data-tema='escuro'] .dot.green {
+  background: var(--verde-claro);
+}
+[data-tema='escuro'] .tile:hover {
+  background: var(--grafite);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .store-nav nav a {
+  color: var(--branco2);
+}
+[data-tema='escuro'] .store-nav nav a:hover {
+  color: var(--branco);
+}
+[data-tema='escuro'] .dock button.active {
+  background: var(--grafite);
+}
+[data-tema='escuro'] .action-card.blue .action-count {
+  color: var(--ouro-lux);
+}
+[data-tema='escuro'] .action-card.amber .action-count {
+  color: var(--ambar-claro);
+}
+[data-tema='escuro'] ::-webkit-scrollbar-thumb {
+  background: rgba(246, 242, 233, 0.2);
+  background-clip: content-box;
+}
+[data-tema='escuro'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(246, 242, 233, 0.34);
+  background-clip: content-box;
+}
+[data-tema='escuro'] :focus-visible {
+  outline-color: var(--ouro);
+}
+
+/* ─── Impressão ─────────────────────────────────────────────────────────── */
+
 @media print {
   /* Impressão / "salvar como PDF": sai tudo que é navegação e controle;
      fica só o conteúdo, em preto no branco. */
@@ -1135,6 +1655,9 @@ th.num {
   body {
     background: #fff !important;
     color: #000 !important;
+  }
+  .macos-window {
+    border: none !important;
   }
   .table {
     font-size: 10pt;
