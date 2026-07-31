@@ -167,7 +167,37 @@ export function superficieDoGrafico(tema?: TemaGrafico, origem?: Element | null)
    As três famílias do manual, com os mesmos papéis que têm na página:
      Fraunces       número-herói (medidor). Nunca abaixo de 18px.
      Inter          nome próprio (loja, produto, categoria) e texto de tooltip.
-     JetBrains Mono rótulo de eixo, legenda, valor, carimbo de unidade.
+     JetBrains Mono VALOR, carimbo de unidade e identificador.
+
+   ONDA 6 · A DOSAGEM DENTRO DO CANVAS.
+   A linha acima dizia "JetBrains Mono: rótulo de eixo, legenda, valor, carimbo
+   de unidade" — e "rótulo de eixo" carregava o defeito inteiro. Medido nesta
+   build, antes da correção: 19 dos 34 slots tipográficos dos oito gráficos
+   estavam em mono (56%), e o que a mono escrevia era, entre outros:
+
+     · eixo de barras   "ÓTICA A GRACIOSA CENT…"   22 caracteres, caixa alta
+     · eixo do heatmap  "CASA AMARELA"             nome de loja, caixa alta
+     · título do arco   "UN. VENDIDAS / ESTOQUE"   22 caracteres, caixa alta
+     · topo do tooltip  "OCULOS DE SOL"            nome de categoria
+
+   Nada disso é dado: é NOME PRÓPRIO. O olho reconhece "Casa Amarela" pelo
+   contorno da palavra, e caixa alta destrói o contorno — some a ascendente do
+   "C", some a descendente, e sobra um retângulo que precisa ser soletrado. Num
+   eixo com dez lojas, soletrar dez vezes é o que o cliente chamou de "ficou
+   mais confusa as informações".
+
+   A regra passa a ser a mesma da página, e está em `papelDoRotulo` logo abaixo:
+   a mono é para o que se COMPARA (valor, escala, quantidade) ou se ETIQUETA
+   (carimbo de até 14 caracteres: "R$", "UN.", "%", "SEG"); a Inter é para o que
+   se LÊ (nome de loja, de categoria, de produto, frase de tooltip). O eixo de
+   VALOR continua inteiramente em mono — ali a largura fixa é função, porque é o
+   que alinha "1.111" com "9.999" na mesma coluna.
+
+   LIMITAÇÃO CONHECIDA E DELIBERADA (segue valendo): o manual pede entreletras
+   0.18em em carimbo mono, e o renderizador canvas do ECharts não expõe
+   letter-spacing. O registro é sustentado pela família + caixa alta — que é
+   exatamente por isso que a caixa alta tem que ficar restrita ao que é carimbo
+   de verdade, e não emprestada a nome próprio.
 
    LIMITAÇÃO CONHECIDA E DELIBERADA: o manual pede entreletras 0.18em em
    rótulo mono, e o renderizador canvas do ECharts não expõe letter-spacing
@@ -179,6 +209,74 @@ export function superficieDoGrafico(tema?: TemaGrafico, origem?: Element | null)
 const FONTE_TITULO = "'Fraunces', 'Iowan Old Style', Georgia, serif";
 const FONTE_CORPO = "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 const FONTE_MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+/**
+ * Acima de quantos caracteres um texto deixa de ser carimbo.
+ *
+ * É o MESMO número da página (`.carimbo`, no styles.css), e não uma escolha
+ * nova: um rótulo é carimbo enquanto o olho o pega inteiro de uma vez. "R$",
+ * "UN.", "SEG", "AMÉRICA/RECIFE" cabem; "Unidades em estoque" e "Casa Amarela
+ * · Sábado" não cabem, e em caixa alta espaçada eles viram uma fita que precisa
+ * ser lida caractere a caractere.
+ */
+const LIMITE_CARIMBO = 14;
+
+/** Data (dd/mm ou dd/mm/aaaa) e afins: identificador, não nome nem carimbo. */
+const PARECE_DATA = /^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/;
+
+type PapelDeRotulo = 'carimbo' | 'identificador' | 'nome';
+
+/**
+ * Decide o papel tipográfico de um rótulo pelo QUE ELE É, contando os
+ * caracteres — que é a regra de ouro desta onda e a única que sobrevive a dados
+ * reais. O eixo não sabe de antemão se vai receber "SOL" ou "Ótica A Graciosa
+ * Boa Viagem"; o catálogo da rede tem os dois, e a decisão precisa acontecer no
+ * momento em que o texto existe.
+ */
+function papelDoRotulo(texto: string): PapelDeRotulo {
+  const t = String(texto ?? '').trim();
+  if (PARECE_DATA.test(t)) return 'identificador';
+  return t.length <= LIMITE_CARIMBO ? 'carimbo' : 'nome';
+}
+
+/*
+   POR QUE A CONTAGEM DE CARACTERES NÃO BASTA SOZINHA, e por que existe o
+   parâmetro `papel` nas funções abaixo.
+
+   "Casa Amarela" tem 12 caracteres e a contagem a classificaria como carimbo —
+   mas é NOME DE LOJA, e caixa alta em nome próprio é erro de português antes de
+   ser erro de tipografia (é o mesmo defeito que a vitrine já corrigia ao
+   traduzir 'ARMACAO' para 'Armação' na tela do consumidor). A rede tem lojas
+   curtas ("Centro", "Boa Viagem") e longas ("Ótica A Graciosa Boa Viagem") no
+   mesmo eixo: pela contagem, o eixo sairia com metade em caixa alta.
+
+   Então a regra de ouro (conte os caracteres) vale para quem NÃO SABE o que
+   está recebendo, e quem SABE declara. Um eixo de dimensão do BI — loja,
+   categoria, produto — é sempre nome próprio, independentemente do tamanho, e
+   passa `papel: 'nome'`. O eixo do heatmap semanal e o nome do arco do medidor
+   não sabem, e ficam na contagem.
+*/
+
+/**
+ * Traduz o papel em estilo de texto do ECharts. Os três casos:
+ *
+ *   carimbo        mono CAIXA ALTA — a assinatura da marca, dosada.
+ *   identificador  mono caixa normal — SKU, código, data. Largura fixa é
+ *                  função aqui: é o que faz "31/07" e "01/08" alinharem.
+ *   nome           Inter caixa normal — nome próprio e frase. O que se LÊ.
+ *
+ * `escala` é o corpo do carimbo; o nome sai 1px maior porque a Inter tem altura
+ * de x menor que a JetBrains Mono no mesmo corpo, e sem isso o eixo em Inter
+ * pareceria ter encolhido.
+ */
+function estiloDeRotulo(papel: PapelDeRotulo, escala: number) {
+  if (papel === 'nome') return { fontFamily: FONTE_CORPO, fontSize: escala + 1, fontWeight: 500 as const };
+  return { fontFamily: FONTE_MONO, fontSize: escala, fontWeight: 500 as const };
+}
+
+/** Aplica a caixa que o papel pede — e SÓ o carimbo vira caixa alta. */
+const textoNoPapel = (papel: PapelDeRotulo, texto: string) =>
+  papel === 'carimbo' ? texto.toUpperCase() : texto;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 3 · NÚMEROS EM pt-BR
@@ -297,29 +395,72 @@ const linhaTooltip = (p: PaletaDeTema, nome: string, valor: string, cor?: string
   `<b style="margin-left:auto;font-family:${FONTE_MONO};color:${p.tinta}">${valor}</b>` +
   `</div>`;
 
-/** Cabeçalho do tooltip em mono caixa alta — é rótulo, não texto corrido. */
-const tituloTooltip = (p: PaletaDeTema, texto: string) =>
-  `<div style="font-family:${FONTE_MONO};font-size:10px;text-transform:uppercase;color:${p.tintaSuave}">${texto}</div>`;
+/**
+ * Cabeçalho do tooltip.
+ *
+ * Era mono caixa alta SEMPRE — e o que passa por aqui é, na maioria das vezes,
+ * nome próprio: "OCULOS DE SOL", "Ótica A Graciosa Centro", "ARMACAO → Casa
+ * Amarela", "Casa Amarela · Sábado". Agora o papel é decidido pelo texto: o
+ * carimbo curto continua carimbado, a data sai em mono caixa normal (é
+ * identificador, e comparar "31/07" com "01/08" é o que o operador faz), e o
+ * nome sai em Inter 12/600 — que é o mesmo tratamento do `.label` da página, e
+ * portanto o tooltip passa a falar a mesma língua da tela atrás dele.
+ */
+const tituloTooltip = (p: PaletaDeTema, texto: string, papelDeclarado?: PapelDeRotulo) => {
+  const papel = papelDeclarado ?? papelDoRotulo(texto);
+  const e = estiloDeRotulo(papel, 10);
+  const caixa = papel === 'carimbo' ? 'text-transform:uppercase;letter-spacing:0.18em;' : '';
+  // Aqui, ao contrário do canvas, o tooltip é HTML de verdade: o letter-spacing
+  // do manual É aplicável, e o carimbo sai completo pela primeira vez.
+  return (
+    `<div style="font-family:${e.fontFamily};font-size:${e.fontSize}px;` +
+    `font-weight:${papel === 'nome' ? 600 : 500};${caixa}color:${p.tintaSuave}">${texto}</div>`
+  );
+};
 
-/** Eixo de categoria: rótulo em mono caixa alta, sem marca de escala. */
+/**
+ * Eixo de categoria, sem marca de escala.
+ *
+ * O QUE MUDOU NA ONDA 6, e é a correção de maior alcance do arquivo: o rótulo
+ * NÃO é mais mono caixa alta por decreto. Ele é classificado item a item por
+ * `papelDoRotulo`, e o eixo inteiro adota o papel da MAIOR exigência presente —
+ * se qualquer rótulo da série for nome próprio (acima de 14 caracteres), o eixo
+ * todo vai para Inter caixa normal. Um eixo com metade em mono caixa alta e
+ * metade em Inter seria pior que qualquer um dos dois puros: a diferença de
+ * família passaria a parecer diferença de SIGNIFICADO ("estas três lojas são de
+ * outro tipo"), que é justamente o que o canal tipográfico não pode dizer aqui.
+ *
+ * Assim "Seg · Ter · Qua" e "ARMACAO · LENTE · SOL" continuam carimbados — são
+ * etiquetas curtas, é a mono no lugar dela —, enquanto "Ótica A Graciosa Boa
+ * Viagem" volta a ter contorno de palavra.
+ */
 function eixoCategoria(
   p: PaletaDeTema,
   data: string[],
-  cfg: { rotate?: number; limite?: number; inverse?: boolean } = {},
+  cfg: { rotate?: number; limite?: number; inverse?: boolean; papel?: PapelDeRotulo } = {},
 ) {
   const limite = cfg.limite ?? 18;
+  // Sem declaração do chamador, o papel do EIXO é o do rótulo mais exigente:
+  // basta um nome próprio para o eixo inteiro sair de mono. A classificação usa
+  // o rótulo CRU, não o cortado — um nome truncado em 14 continua sendo nome.
+  const papel: PapelDeRotulo =
+    cfg.papel ??
+    (data.some((v) => papelDoRotulo(String(v)) === 'nome')
+      ? 'nome'
+      : data.some((v) => papelDoRotulo(String(v)) === 'identificador')
+        ? 'identificador'
+        : 'carimbo');
   return {
     type: 'category' as const,
     data,
     inverse: cfg.inverse,
     axisLabel: {
       color: p.tintaSuave,
-      fontFamily: FONTE_MONO,
-      fontSize: 10,
+      ...estiloDeRotulo(papel, 10),
       interval: 0,
       rotate: cfg.rotate ?? 0,
       hideOverlap: true,
-      formatter: (v: string) => encurtar(String(v).toUpperCase(), limite),
+      formatter: (v: string) => textoNoPapel(papel, encurtar(String(v), limite)),
     },
     axisLine: { lineStyle: { color: p.filete } },
     axisTick: { show: false },
@@ -403,6 +544,7 @@ export function gaugeOption(
 ): EChartsOption {
   const p = paleta(opcoes);
   const cor = corDaSerie(p, color, p.categorica[0]);
+  const papelDoNomeDoArco = papelDoRotulo(name);
   return {
     tooltip: {
       ...caixaTooltip(p),
@@ -442,13 +584,19 @@ export function gaugeOption(
           fontSize: 30,
           offsetCenter: [0, '6%'],
         },
+        /*
+           O nome sob o arco. Era `name.toUpperCase()` em mono, e recebia coisas
+           como "un. vendidas / estoque" (22 caracteres) e "% abaixo do mínimo"
+           (18) — frase inteira em caixa alta monoespaçada, sob um número em
+           Fraunces de 30px. Agora quem decide é o papel: "%" e "CONVERSÃO"
+           seguem carimbados, a frase volta para Inter.
+        */
         title: {
           color: p.tintaSuave,
-          fontFamily: FONTE_MONO,
-          fontSize: 9,
+          ...estiloDeRotulo(papelDoNomeDoArco, 9),
           offsetCenter: [0, '74%'],
         },
-        data: [{ value: round(value), name: name.toUpperCase() }],
+        data: [{ value: round(value), name: textoNoPapel(papelDoNomeDoArco, name) }],
       },
     ],
   } as EChartsOption;
@@ -490,10 +638,12 @@ export function timeSeriesOption(points: TimeseriesPoint[], opcoes?: OpcoesGrafi
     grid: { left: 8, right: 78, top: 26, bottom: 28, containLabel: true },
     xAxis: {
       ...eixoCategoria(p, datas, { limite: 12 }),
+      // Data é IDENTIFICADOR: mono, mas caixa normal e sem entreletras. É o
+      // único papel em que a largura fixa trabalha de fato — "31/07" e "01/08"
+      // ocupam a mesma medida e o eixo fica com passo regular.
       axisLabel: {
         color: p.tintaSuave,
-        fontFamily: FONTE_MONO,
-        fontSize: 10,
+        ...estiloDeRotulo('identificador', 10),
         hideOverlap: true,
         formatter: (v: string) => diaMes(v),
       },
@@ -574,7 +724,7 @@ function barraOrdenada(
         const d = emOrdemDeLeitura[dataIndex];
         if (!d) return '';
         return (
-          tituloTooltip(p, d.nome) +
+          tituloTooltip(p, d.nome, 'nome') +
           linhaTooltip(p, 'Valor', formatarValor(d.valor, unidade), d.cor) +
           linhaTooltip(p, 'Participação', `${fmtPercent.format((d.valor / totalGeral) * 100)}%`)
         );
@@ -589,7 +739,9 @@ function barraOrdenada(
       ...eixoCategoria(
         p,
         emOrdemDeLeitura.map((d) => d.nome),
-        { limite: 22 },
+        // Dimensão do BI: loja, categoria, produto. É sempre nome próprio —
+        // "Centro" (6) e "Ótica A Graciosa Boa Viagem" (27) no mesmo eixo.
+        { limite: 22, papel: 'nome' },
       ),
       axisLine: { show: false },
     },
@@ -649,14 +801,16 @@ export function barOption(
       formatter: (par: unknown) => {
         const { dataIndex } = par as { dataIndex: number };
         const r = ordenadas[dataIndex];
-        return r ? tituloTooltip(p, r.label) + linhaTooltip(p, 'Valor', formatarValor(r.total, unidade), cor) : '';
+        return r ? tituloTooltip(p, r.label, 'nome') + linhaTooltip(p, 'Valor', formatarValor(r.total, unidade), cor) : '';
       },
     },
     grid: { left: 8, right: 16, top: 30, bottom: 8, containLabel: true },
     xAxis: eixoCategoria(
       p,
       ordenadas.map((r) => r.label),
-      { limite: 14 },
+      // Mesma dimensão da barra ordenada acima: a função troca de layout
+      // conforme a contagem de linhas, e a tipografia não pode trocar junto.
+      { limite: 14, papel: 'nome' },
     ),
     yAxis: eixoValor(p, unidade),
     series: [
@@ -727,7 +881,7 @@ export function pieOption(rows: LinhaDimensao[], opcoes?: OpcoesGrafico): EChart
           color: string;
         };
         return (
-          tituloTooltip(p, name) +
+          tituloTooltip(p, name, 'nome') +
           linhaTooltip(p, 'Valor', formatarValor(value, unidade), color) +
           linhaTooltip(p, 'Participação', `${fmtPercent.format(percent)}%`)
         );
@@ -822,11 +976,11 @@ export function sankeyOption(flow: SalesFlow, opcoes?: OpcoesGrafico): EChartsOp
         };
         if (d.dataType === 'edge' && d.data?.source) {
           return (
-            tituloTooltip(p, `${d.data.source} → ${d.data.target}`) +
+            tituloTooltip(p, `${d.data.source} → ${d.data.target}`, 'nome') +
             linhaTooltip(p, 'Fluxo', formatarValor(d.value, unidade))
           );
         }
-        return tituloTooltip(p, d.name) + linhaTooltip(p, 'Total', formatarValor(d.value, unidade));
+        return tituloTooltip(p, d.name, 'nome') + linhaTooltip(p, 'Total', formatarValor(d.value, unidade));
       },
     },
     series: [
@@ -879,14 +1033,18 @@ export function heatmapOption(data: HeatmapData, opcoes?: OpcoesGrafico): EChart
         const { value } = par as { value: [number, number, number] };
         const [x, y, v] = value;
         return (
-          tituloTooltip(p, `${data.yLabels[y] ?? ''} · ${data.xLabels[x] ?? ''}`) +
+          tituloTooltip(p, `${data.yLabels[y] ?? ''} · ${data.xLabels[x] ?? ''}`, 'nome') +
           linhaTooltip(p, 'Receita', formatarValor(v, unidade))
         );
       },
     },
     grid: { left: 8, right: 16, top: 10, bottom: 54, containLabel: true },
+    // O eixo X são os dias da semana ("Seg", "Ter"): etiqueta de 3 letras, o
+    // carimbo em mono caixa alta no lugar exato dele — e a contagem acerta
+    // sozinha. O eixo Y são NOMES DE LOJA, e aí a contagem erraria: "Casa
+    // Amarela" tem 12 caracteres e sairia carimbada em caixa alta. Declarado.
     xAxis: eixoCategoria(p, data.xLabels, { limite: 10 }),
-    yAxis: { ...eixoCategoria(p, data.yLabels, { limite: 20 }), splitArea: { show: false } },
+    yAxis: { ...eixoCategoria(p, data.yLabels, { limite: 20, papel: 'nome' }), splitArea: { show: false } },
     visualMap: {
       min: 0,
       max,

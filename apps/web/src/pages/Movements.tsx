@@ -18,6 +18,8 @@ import {
   Selo,
   Botao,
   BotaoPrimario,
+  Codigo,
+  AberturaDeSecao,
 } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
@@ -78,18 +80,27 @@ function SugestoesDeTransferencia({ onCriada }: { onCriada: () => void }) {
   if (plano.isLoading) return <Loading />;
 
   return (
-    <div className="card" style={{ padding: 0, marginBottom: 18 }}>
-      <div style={{ padding: '14px 16px 10px' }}>
-        <div className="section-title" style={{ marginBottom: 2 }}>
-          Transferências sugeridas pelo motor
-        </div>
-        <div className="muted" style={{ fontSize: 12.5 }}>
-          {rows.length > 0
+    <>
+      {/* ONDA 6 · o título e a explicação saem de DENTRO do card e viram uma
+          abertura de seção de verdade. Esta tela empilha dois blocos — o que o
+          motor SUGERE e o que já foi REGISTRADO — e eles chegavam ao olho como
+          dois retângulos iguais, um debaixo do outro, sem régua nem sobretítulo.
+          Era o bloco de título mais fraco de uma tela cuja confusão o cliente
+          apontou por nome. A régua dourada + "REMANEJAMENTO" em mono + o título
+          em Fraunces dizem, antes de qualquer dado, que ali começa outro
+          assunto. */}
+      <AberturaDeSecao
+        eyebrow="Remanejamento"
+        titulo="Transferências sugeridas pelo motor"
+        descricao={
+          rows.length > 0
             ? `${rows.length} ${rows.length > 1 ? 'sugestões' : 'sugestão'} — de onde está parado para onde vende, somando ${
                 plano.data?.summary?.units ?? 0
               } unidades.`
-            : 'Nenhuma sugestão no recorte atual. Troque o recorte no topo ou confira o Planejamento.'}
-        </div>
+            : 'Nenhuma sugestão no recorte atual. Troque o recorte no topo ou confira o Planejamento.'
+        }
+      />
+      <div className="card" style={{ padding: 0, marginBottom: 18 }}>
         {/* role="alert": a falha acontece longe do olho (o botão fica na última
             coluna da linha), então o leitor de tela precisa anunciá-la sozinho.
             O ícone entra porque `--red` sozinho não é sinal para quem não separa
@@ -103,16 +114,15 @@ function SugestoesDeTransferencia({ onCriada }: { onCriada: () => void }) {
               alignItems: 'center',
               fontSize: 12,
               color: 'var(--red)',
-              marginTop: 6,
+              padding: '12px 16px 0',
             }}
           >
             <Icon name="atencao" size={14} />
             <span>{erro}</span>
           </div>
         )}
-      </div>
 
-      {rows.length > 0 && (
+        {rows.length > 0 && (
         <table>
           <thead>
             <tr>
@@ -129,9 +139,26 @@ function SugestoesDeTransferencia({ onCriada }: { onCriada: () => void }) {
               const feita = criadas.has(k);
               return (
                 <tr key={k}>
+                  {/* ONDA 6 · A SEGUNDA LINHA ERA UM TRAVESSÃO.
+                      Medido nesta build: 24 das 30 linhas traziam, sob a
+                      descrição, uma segunda linha em `.muted` contendo só "—".
+                      A fonte devolve o travessão como marca ausente, e o JSX só
+                      testava `r.brand &&` — string não-vazia, logo verdadeira.
+                      O custo não é estético: são 24 linhas de tabela com três
+                      linhas de altura em vez de duas, para carregar zero
+                      informação. E quando a marca EXISTE ela quase sempre já
+                      está no fim da descrição ("... OCULOS RAY BAN"), então
+                      repeti-la abaixo também não informa. Só sai a marca que
+                      acrescenta alguma coisa. */}
                   <td>
                     <div>{r.description}</div>
-                    {r.brand && <div className="muted" style={{ fontSize: 11.5 }}>{r.brand}</div>}
+                    {r.brand &&
+                      !/^[—–-]+$/.test(r.brand.trim()) &&
+                      !r.description.toUpperCase().includes(r.brand.trim().toUpperCase()) && (
+                        <div className="muted" style={{ fontSize: 11.5 }}>
+                          {r.brand}
+                        </div>
+                      )}
                   </td>
                   {/* Seta como pontuação de rota ("Centro → Shopping"), dentro da
                       frase. Não é ícone e não vira <Icon>: aqui ela é lida como
@@ -152,13 +179,27 @@ function SugestoesDeTransferencia({ onCriada }: { onCriada: () => void }) {
                         solicitada
                       </Selo>
                     ) : (
+                      /* ONDA 6 · "Criar movimentação" QUEBRAVA EM DUAS LINHAS.
+                         Medido nesta build: 30 de 30 botões desta coluna saíam
+                         com 42px de altura contra os ~25px de um botão inteiro
+                         — "Criar / movimentação" partido no meio, em toda
+                         linha. É o mesmo defeito que o "EM / ESTOQUE" do
+                         Estoque, e pela mesma razão: rótulo longo demais para a
+                         largura que a coluna pode dar. A correção certa não é
+                         alargar a coluna (o espaço vem das colunas de texto,
+                         que são as que já quebram) e sim encurtar o rótulo até
+                         o verbo. "Transferir" é o que o botão faz — a sugestão
+                         é sempre uma transferência entre lojas —, cabe em uma
+                         linha e diz mais que "Criar". A frase inteira continua
+                         disponível no `title`. */
                       <Botao
                         pequeno
                         icone="transferencias"
                         disabled={criar.isPending}
+                        title="Criar a movimentação de transferência desta sugestão."
                         onClick={() => criar.mutate(r)}
                       >
-                        Criar movimentação
+                        Transferir
                       </Botao>
                     )}
                   </td>
@@ -168,12 +209,14 @@ function SugestoesDeTransferencia({ onCriada }: { onCriada: () => void }) {
           </tbody>
         </table>
       )}
-      {rows.length > 30 && (
-        <div className="muted" style={{ padding: '10px 16px', fontSize: 12 }}>
-          Mostrando as 30 de maior impacto, de {rows.length}. O conjunto completo está em Decisões.
-        </div>
-      )}
-    </div>
+        {rows.length > 30 && (
+          // Frase de rodapé do bloco: `.hint`, Inter 12/400.
+          <div className="hint" style={{ padding: '10px 16px' }}>
+            Mostrando as 30 de maior impacto, de {rows.length}. O conjunto completo está em Decisões.
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -228,6 +271,16 @@ export function Movements() {
 
       <SugestoesDeTransferencia onCriada={invalidate} />
 
+      {/* O segundo assunto da tela ganha abertura própria: o de cima é o que o
+          motor PROPÕE, este é o que já foi REGISTRADO. Sem a régua e o
+          sobretítulo, o filtro de status aparecia solto no meio da página, sem
+          dizer o que ele filtra. */}
+      <AberturaDeSecao
+        eyebrow="Registro"
+        titulo="Movimentações registradas"
+        descricao="Tudo o que já entrou na fila: solicitado, aprovado, confirmado, recusado ou reconciliado."
+      />
+
       <div className="toolbar">
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="">Todos os status</option>
@@ -260,7 +313,14 @@ export function Movements() {
             <tbody>
               {movements.data.rows.map((m) => (
                 <tr key={m.id}>
-                  <td>{new Date(m.createdAt).toLocaleString('pt-BR')}</td>
+                  {/* Carimbo de data/hora é identificador — é por ele que o
+                      gestor casa a movimentação com o que a loja relatou no
+                      telefone. Mono caixa normal, entreletras zero, tabular:
+                      é a única coluna desta tabela em que os caracteres
+                      precisam alinhar de linha para linha. */}
+                  <td>
+                    <Codigo>{new Date(m.createdAt).toLocaleString('pt-BR')}</Codigo>
+                  </td>
                   <td>{movementTypeLabel(m.type)}</td>
                   <td>{m.product.description}</td>
                   <td>{m.fromStore?.name ?? '—'}</td>

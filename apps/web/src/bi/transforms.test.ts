@@ -129,4 +129,91 @@ describe('transforms do BI', () => {
     // escape para ninguém "consertar" de volta olhando duas strings idênticas.
     expect(formatarValorCurto(1500, 'unidades')).toBe('1,5\u00A0mil');
   });
+
+  /*
+     ONDA 6 · A DOSAGEM DA MONOESPAÇADA DENTRO DO CANVAS.
+
+     Estes testes existem porque a regra é fácil de reverter sem querer: basta
+     alguém "padronizar" um eixo de volta para mono caixa alta, achando que
+     assim fica mais parecido com o manual. O que o manual pede é a mono no
+     PAPEL dela — valor, escala, carimbo de unidade, identificador —, e o que a
+     tornava ruído era emprestá-la a nome próprio.
+
+     Medido antes da correção: 19 de 34 slots tipográficos dos oito gráficos em
+     mono (56%), com "ÓTICA A GRACIOSA CENT…", "CASA AMARELA" e "UN. VENDIDAS /
+     ESTOQUE" entre os rótulos afetados.
+  */
+  const rotuloDoEixo = (opt: any, eixo: 'xAxis' | 'yAxis') => {
+    const a = opt[eixo];
+    return { fonte: a.axisLabel.fontFamily as string, escreve: (v: string) => String(a.axisLabel.formatter(v)) };
+  };
+
+  it('nome de loja no eixo sai em Inter e em caixa normal', () => {
+    // Duas lojas reais da rede: uma longa e uma CURTA. A curta é o caso que a
+    // contagem de caracteres sozinha erraria ("Casa Amarela" tem 12), e é por
+    // isso que a dimensão declara `papel: 'nome'` em vez de deixar contar.
+    const opt = barOption(
+      [
+        { label: 'Ótica A Graciosa Boa Viagem', total: 98700 },
+        { label: 'Casa Amarela', total: 41100 },
+      ],
+      undefined,
+      { tema: 'claro', unidade: 'moeda' },
+    );
+    const eixo = rotuloDoEixo(opt as any, 'yAxis');
+    expect(eixo.fonte).toContain('Inter');
+    expect(eixo.escreve('Casa Amarela')).toBe('Casa Amarela');
+    expect(eixo.escreve('Ótica A Graciosa Boa Viagem')).not.toMatch(/GRACIOSA/);
+  });
+
+  it('nome de loja no heatmap também, e o dia da semana continua carimbado', () => {
+    const opt: any = heatmapOption(
+      {
+        xLabels: ['Seg', 'Ter'],
+        yLabels: ['Casa Amarela', 'Centro'],
+        cells: [[0, 0, 10]] as [number, number, number][],
+      },
+      { tema: 'claro' },
+    );
+    // Eixo Y: nome próprio → Inter, caixa preservada.
+    expect(rotuloDoEixo(opt, 'yAxis').fonte).toContain('Inter');
+    expect(rotuloDoEixo(opt, 'yAxis').escreve('Casa Amarela')).toBe('Casa Amarela');
+    // Eixo X: etiqueta de 3 letras → mono caixa alta. A mono no lugar dela.
+    expect(rotuloDoEixo(opt, 'xAxis').fonte).toContain('JetBrains');
+    expect(rotuloDoEixo(opt, 'xAxis').escreve('Seg')).toBe('SEG');
+  });
+
+  it('o eixo de VALOR permanece inteiramente em mono', () => {
+    // Aqui a largura fixa é função: é o que alinha "1.111" com "9.999" na
+    // mesma coluna. Nada nesta onda toca no eixo de valor.
+    const opt: any = barOption([{ label: 'SOL', total: 12 }], undefined, { tema: 'claro', unidade: 'moeda' });
+    expect(opt.yAxis.axisLabel.fontFamily).toContain('JetBrains');
+    expect(opt.yAxis.name).toBe('R$'); // carimbo de unidade — o uso exato
+    expect(opt.yAxis.nameTextStyle.fontFamily).toContain('JetBrains');
+  });
+
+  it('o nome do arco do medidor segue o tamanho: carimbo curto em mono, frase em Inter', () => {
+    const curto: any = gaugeOption(12, 100, '% em falta', undefined, '%', { tema: 'claro' });
+    expect(curto.series[0].title.fontFamily).toContain('JetBrains');
+    expect(curto.series[0].data[0].name).toBe('% EM FALTA');
+
+    const frase: any = gaugeOption(1.3, 2, 'un. vendidas / estoque', undefined, '', { tema: 'claro' });
+    expect(frase.series[0].title.fontFamily).toContain('Inter');
+    // 22 caracteres: caixa alta aqui era o defeito, e não pode voltar.
+    expect(frase.series[0].data[0].name).toBe('un. vendidas / estoque');
+  });
+
+  it('o topo do tooltip não carimba nome próprio', () => {
+    const opt: any = pieOption(
+      [
+        { label: 'OCULOS DE SOL', total: 60 },
+        { label: 'ARMACAO', total: 40 },
+      ],
+      { tema: 'claro', unidade: 'moeda' },
+    );
+    const html = String(opt.tooltip.formatter({ name: 'OCULOS DE SOL', value: 60, percent: 60, color: '#000' }));
+    // Nome próprio → Inter, sem text-transform e sem entreletras de carimbo.
+    expect(html).toContain('Inter');
+    expect(html.split('</div>')[0]).not.toContain('uppercase');
+  });
 });

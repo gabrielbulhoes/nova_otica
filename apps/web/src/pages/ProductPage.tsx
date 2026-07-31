@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addToCart, getCart, getProduct, formatBRL } from '../api/client';
-import { PageHeader, Loading } from '../components/ui';
+import { PageHeader, Loading, Codigo } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { VirtualTryOn } from '../ar/VirtualTryOn';
 import { useTemaDaVitrine } from '../hooks/useTemaDaVitrine';
@@ -161,7 +161,15 @@ export function ProductPage() {
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
-            <Ficha rotulo="Código">{p.externalId}</Ficha>
+            {/* O código do ERP é IDENTIFICADOR, e é o lugar em que a mono é
+                função e não decoração: o cliente compara "RB4446L" com
+                "RB4446I" caractere a caractere ao telefone com a loja, e é a
+                largura fixa que faz a diferença saltar. Caixa normal e
+                entreletras zero, ao contrário do carimbo — caixa alta e
+                espaçamento atrapalhariam justamente essa comparação. */}
+            <Ficha rotulo="Código">
+              <Codigo>{p.externalId}</Codigo>
+            </Ficha>
             {/* Filete neutro separa item dentro da seção (o dourado é reservado
                 para abrir/fechar seção — a régua tem que ser lida antes do texto). */}
             <hr className="rule" />
@@ -247,7 +255,8 @@ export function ProductPage() {
   );
 }
 
-/** Linha da ficha técnica: rótulo em mono à esquerda, valor em Inter à direita. */
+/** Linha da ficha técnica: rótulo em Inter 12/600 à esquerda (`.label`), valor à
+ *  direita — em Inter, ou em `.codigo` quando for identificador. */
 function Ficha({ rotulo, children }: { rotulo: string; children: ReactNode }) {
   return (
     <div className="row-between" style={{ gap: 16, alignItems: 'baseline' }}>

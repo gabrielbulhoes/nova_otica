@@ -9,7 +9,7 @@ import {
   type AdminUser,
   type Role,
 } from '../api/client';
-import { PageHeader, Loading, Selo, Botao, BotaoPrimario } from '../components/ui';
+import { PageHeader, Loading, Selo, Botao, BotaoPrimario, Codigo } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 
@@ -184,8 +184,16 @@ function UserRow({
           </Selo>
         )}
       </td>
+      {/* A data/hora vai em <Codigo> (mono, tabular, entreletras zero): é o dado
+          que o administrador varre de cima a baixo procurando quem não entra há
+          semanas, e essa varredura só funciona com os dígitos alinhados. Já o
+          "nunca" NÃO é identificador — é palavra, e fica em Inter. Trocar a
+          família por célula, e não por coluna, é o que mantém a regra honesta:
+          mono para o que se compara, Inter para o que se lê.
+          O e-mail, ao lado, continua em Inter de propósito: tem 20 a 35
+          caracteres, é lido inteiro e nunca conferido caractere a caractere. */}
       <td className="muted">
-        {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('pt-BR') : 'nunca'}
+        {user.lastLoginAt ? <Codigo>{new Date(user.lastLoginAt).toLocaleString('pt-BR')}</Codigo> : 'nunca'}
       </td>
       <td className="right">
         <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4, alignItems: 'stretch' }}>

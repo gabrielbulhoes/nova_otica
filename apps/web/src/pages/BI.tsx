@@ -11,7 +11,7 @@ import {
   getStores,
   formatBRL,
 } from '../api/client';
-import { PageHeader, StatCard, Loading } from '../components/ui';
+import { PageHeader, StatCard, Loading, AberturaDeSecao } from '../components/ui';
 import { EChart } from '../components/EChart';
 import { Icon } from '../brand/Icon';
 import {
@@ -154,12 +154,46 @@ export function BI() {
         <Loading />
       ) : (
         <>
-          {/* KPIs numéricos */}
+          {/*
+             OS QUATRO INDICADORES TINHAM UMA ASSINATURA SÓ.
+             Mesmo fundo, mesmo filete, mesmo corpo de número: nada dizia qual
+             deles a tela existe para mostrar, e o olho tratava os quatro como
+             uma fileira de gavetas. Numa tela de BI a resposta é óbvia e nunca
+             estava escrita — a pergunta que traz o dono da rede aqui é "quanto
+             a rede faturou". Esse é o nível 1; os outros três se distribuem
+             entre apoio e contexto.
+
+             A hierarquia NÃO custa altura: o que o faturamento ganha em corpo
+             de número e respiro, a linha de contexto devolve ocupando 102px
+             contra os 181px de um cartão de apoio.
+          */}
           <div className="grid grid-4">
-            <StatCard label="Faturamento" value={formatBRL(indicadores.revenue)} hint={`${indicadores.salesCount} vendas`} />
+            <StatCard
+              nivel={1}
+              className="largo"
+              label="Faturamento"
+              value={formatBRL(indicadores.revenue)}
+              hint={`${indicadores.salesCount} ${indicadores.salesCount === 1 ? 'venda' : 'vendas'} no período`}
+            />
             <StatCard label="Ticket médio" value={formatBRL(indicadores.avgTicket)} />
-            <StatCard label="Unidades em estoque" value={indicadores.stockUnits.toLocaleString('pt-BR')} hint={`${indicadores.unitsSold} vendidas no período`} />
-            <StatCard label="Transferências pendentes" value={indicadores.pendingTransfers} />
+            {/* `unidade`, e não " un." colado no texto do valor: assim o carimbo
+                é mono e o número continua em Fraunces tabular. */}
+            <StatCard
+              label="Unidades em estoque"
+              value={indicadores.stockUnits.toLocaleString('pt-BR')}
+              unidade="un."
+            />
+          </div>
+
+          {/* Contexto: pertence ao bloco acima e é lido depois dele, não junto. */}
+          <div className="grid grid-4">
+            <StatCard nivel={3} label="Transferências pendentes" value={indicadores.pendingTransfers} />
+            <StatCard
+              nivel={3}
+              label="Unidades vendidas no período"
+              value={indicadores.unitsSold.toLocaleString('pt-BR')}
+              unidade="un."
+            />
           </div>
 
           {/*
@@ -169,7 +203,12 @@ export function BI() {
              mono sob o arco. Em `filter: grayscale(1)` os três continuam
              separáveis pelo texto — a cor só reforça.
           */}
-          <div className="grid grid-3" style={{ marginTop: 16 }}>
+          <AberturaDeSecao
+            eyebrow="Operação"
+            titulo="Saúde do estoque"
+            descricao="Os três medidores respondem, nesta ordem: o que falta, o que está prestes a faltar e o quanto a grade gira."
+          />
+          <div className="grid grid-3">
             <div className="card">
               <h3 className="section-title">Taxa de itens em falta</h3>
               <EChart
@@ -198,19 +237,18 @@ export function BI() {
           </div>
 
           {/* Timeline */}
-          <div className="card" style={{ marginTop: 16 }}>
-            {/*
-               O <EChart> desenha o botão de PNG flutuando no canto superior
-               DIREITO da área do gráfico. Com o CSV também à direita, os dois
-               ficavam empilhados um sob o outro, colados na margem do card, e o
-               de baixo cobria o topo da série. O CSV volta para junto do título
-               — que é onde está o dado que ele exporta — e a coluna da direita
-               fica só do PNG, igual a todos os outros cards da tela.
-            */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-              <h3 className="section-title" style={{ margin: 0 }}>
-                Faturamento diário
-              </h3>
+          {/*
+             O TÍTULO DA SEÇÃO E O TÍTULO DO CARD ERAM A MESMA FRASE DITA DUAS
+             VEZES. Com a abertura assumindo o nome do bloco, o <h3> interno sai
+             e o botão de CSV sobe para a faixa de ações da própria abertura —
+             que é onde o manual põe a ação de uma seção. A coluna da direita do
+             gráfico continua livre para o botão de PNG do <EChart>.
+          */}
+          <AberturaDeSecao
+            eyebrow="Faturamento"
+            titulo="Faturamento diário"
+            descricao="Vendas do ERP; o último ponto reflete a sincronização das 06h."
+            acoes={
               <button
                 className="btn ghost sm"
                 onClick={exportTimeseries}
@@ -220,7 +258,9 @@ export function BI() {
                 <Icon name="exportar" size={15} />
                 CSV
               </button>
-            </div>
+            }
+          />
+          <div className="card">
             {serie && (
               <EChart
                 option={(tema) => timeSeriesOption(serie.points, { tema, unidade: 'moeda' })}
@@ -231,7 +271,12 @@ export function BI() {
           </div>
 
           {/* Colunas + Pizza */}
-          <div className="grid grid-2" style={{ marginTop: 16 }}>
+          <AberturaDeSecao
+            eyebrow="Composição"
+            titulo="De onde vem o faturamento"
+            descricao="Quem vendeu (loja) e como o cliente pagou."
+          />
+          <div className="grid grid-2">
             <div className="card">
               <h3 className="section-title">Vendas por loja</h3>
               {porLoja && (
@@ -255,7 +300,12 @@ export function BI() {
           </div>
 
           {/* Sankeys: vendas e transferências */}
-          <div className="grid grid-2" style={{ marginTop: 16 }}>
+          <AberturaDeSecao
+            eyebrow="Remanejamento"
+            titulo="O que sai de onde e chega aonde"
+            descricao="À esquerda, dinheiro por categoria; à direita, peça movida entre lojas."
+          />
+          <div className="grid grid-2">
             <div className="card">
               <h3 className="section-title">Fluxo de vendas — Categoria → Loja</h3>
               {fluxoVendas && fluxoVendas.links.length > 0 ? (
@@ -285,7 +335,12 @@ export function BI() {
           </div>
 
           {/* Colunas categoria + Heatmap */}
-          <div className="grid grid-2" style={{ marginTop: 16 }}>
+          <AberturaDeSecao
+            eyebrow="Calendário"
+            titulo="Categoria e dia da semana"
+            descricao="Onde concentrar grade e escala de equipe."
+          />
+          <div className="grid grid-2">
             <div className="card">
               <h3 className="section-title">Vendas por categoria</h3>
               {porCategoria && (
@@ -311,15 +366,22 @@ export function BI() {
           </div>
 
           {/* Funil do provador virtual (AR) — sinergia BI × AR */}
-          <div className="card" style={{ marginTop: 16 }}>
-            <h3 className="section-title">Provador virtual (AR) — provas → conversão</h3>
+          <AberturaDeSecao
+            eyebrow="Provador"
+            titulo="Da prova pela câmera à conversão"
+            descricao="Provas registradas na vitrine e quanto delas virou carrinho ou compra."
+          />
+          <div className="card">
             {ar && ar.total > 0 ? (
               <div className="grid grid-2">
                 <div>
                   <div className="grid grid-3">
-                    <StatCard label="Provas" value={ar.total} />
-                    <StatCard label="Conversões" value={ar.converted} hint="viraram carrinho/compra" />
-                    <StatCard label="Taxa" value={`${ar.conversionRate}%`} />
+                    {/* Nível 3: quem é o herói deste bloco é o medidor logo
+                        abaixo, e não estes três. Como apoio (nível 2) eles
+                        competiam com ele e repetiam a taxa em corpo grande. */}
+                    <StatCard nivel={3} label="Provas" value={ar.total} />
+                    <StatCard nivel={3} label="Conversões" value={ar.converted} hint="viraram carrinho ou compra" />
+                    <StatCard nivel={3} label="Taxa de conversão" value={ar.conversionRate} unidade="%" />
                   </div>
                   <EChart
                     option={(tema) => gaugeOption(ar.conversionRate, 100, 'conversão', COR.saudavel, '%', { tema })}

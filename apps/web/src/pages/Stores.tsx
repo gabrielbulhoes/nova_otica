@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getStores } from '../api/client';
-import { PageHeader, Loading, Selo } from '../components/ui';
+import { PageHeader, Loading, Selo, Codigo } from '../components/ui';
 import { Icon } from '../brand/Icon';
 
 export function Stores() {
@@ -58,7 +58,12 @@ export function Stores() {
             <tbody>
               {linhas.map((s) => (
                 <tr key={s.id}>
-                  <td>{s.externalId}</td>
+                  {/* O código da filial é o que o gestor dita no telefone e
+                      confere contra o sistema da loja: identificador, mono
+                      caixa normal. Ver o comentário longo em Products.tsx. */}
+                  <td>
+                    <Codigo>{s.externalId}</Codigo>
+                  </td>
                   <td>{s.name}</td>
                   <td>{s.city ?? '—'}</td>
                   <td>{s.state ?? '—'}</td>
@@ -95,7 +100,9 @@ export function Stores() {
         )}
       </div>
       {linhas.length > 0 && (
-        <p className="label" style={{ marginTop: 10 }}>
+        // Frase de rodapé, não rótulo de indicador: `.hint` (Inter 12/400) e
+        // não `.label` (Inter 12/600). Ver Products.tsx.
+        <p className="hint" style={{ marginTop: 10 }}>
           {linhas.length} filiais · {ativas} ativas
         </p>
       )}

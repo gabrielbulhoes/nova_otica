@@ -98,7 +98,7 @@ apenas sobre que recorte os dois de cima foram contados.
 Nota: o maior número da tela (2097) é justamente o que menos manda agir. É o
 exemplo mais limpo de por que magnitude não pode comandar hierarquia.
 
-### Relatórios (Curva ABC) → **Receita no recorte** (R$ 427.704,66)
+### Relatórios (Curva ABC) → **Receita no recorte** (R$ 380.000,00)
 
 É o número que ancora a leitura de todos os outros: 172/85/49 só significam
 alguma coisa depois que se sabe sobre que receita foram repartidos — e é
@@ -202,7 +202,7 @@ Comparação lado a lado em `scratchpad/shots/antes-*.png` × `depois-*.png`.
 - **Alertas:** antes, três caixas brancas idênticas com 2097 / 288 / 1809.
   Depois, "288 ITENS · Em falta" ocupa duas colunas, preenchido e com filete;
   2097 virou texto sem moldura.
-- **Relatórios:** antes, quatro caixas iguais. Depois, "R$ 427.704,66" é a única
+- **Relatórios:** antes, quatro caixas iguais. Depois, "R$ 380.000,00" é a única
   preenchida, e as três classes leem-se como o trio comparável que são.
 
 Nas três, aponto o principal em menos de um segundo. Estoque não entra no teste

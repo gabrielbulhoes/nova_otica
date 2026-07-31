@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getSales, getSalesAnalysis, getStores, formatBRL, type AnalysisDimension } from '../api/client';
-import { PageHeader, Loading, ExportCsv } from '../components/ui';
+import { PageHeader, Loading, ExportCsv, Codigo, AberturaDeSecao } from '../components/ui';
 import { Icon } from '../brand/Icon';
 
 /** Rótulos das dimensões da análise (feedback 10: foco em produto/unidades). */
@@ -44,8 +44,10 @@ export function Sales() {
   const max = Math.max(1, ...top.map((r) => r[metric]));
   const fmt = (v: number) =>
     metric === 'units' ? `${v.toLocaleString('pt-BR')} un.` : formatBRL(v);
-  // Forma curta: vai dentro de <th>, que é mono caixa alta com 0.18em de
-  // entreletras — "unidades" por extenso ali já é frase, não rótulo.
+  // Forma curta porque vai DENTRO de um <th>, e cabeçalho de coluna é etiqueta:
+  // mono caixa alta a 0.08em (a entreletras caiu de 0.18em na Onda 5, justamente
+  // porque os cabeçalhos deste console têm 15 a 24 caracteres). "Participação ·
+  // unidades" por extenso já seria frase dentro de um carimbo.
   const metricaLabel = metric === 'units' ? 'un.' : 'R$';
 
   return (
@@ -68,9 +70,12 @@ export function Sales() {
             </option>
           ))}
         </select>
-        {/* "De" e "Até" são rótulo de dado, curtos: mono caixa alta, como manda o
-            manual. E agora são <label for>, ou seja, clicáveis e anunciados —
-            antes eram um <label> solto, sem campo associado a ele. */}
+        {/* "De" e "Até" são RÓTULO DE CAMPO — nomeiam um controle que o operador
+            vai preencher. Pelo de-para da Onda 6 isso é Inter 12/600 em caixa
+            normal (a regra `.label`), não mono caixa alta: rótulo de campo se lê
+            de relance junto do campo, e caixa alta espaçada rouba justamente o
+            contorno da palavra que torna o relance possível. São <label for>,
+            ou seja, clicáveis e anunciados — antes eram um <label> solto. */}
         <label className="label" htmlFor="venda-de">
           De
         </label>
@@ -81,12 +86,26 @@ export function Sales() {
         <input id="venda-ate" type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
       </div>
 
-      {/* Análise por dimensão — venda por PRODUTO antes de valor monetário. */}
+      {/* Análise por dimensão — venda por PRODUTO antes de valor monetário.
+
+          ONDA 6 · esta tela empilhava DOIS blocos de natureza diferente — a
+          análise agregada e o registro de vendas linha a linha — em dois cards
+          de assinatura idêntica, sem uma régua nem um título entre eles. Medido
+          nesta build: zero `.rule-section` e zero `.rule` nas seis telas de
+          operação. Quem chega pelo alto não tem como saber onde um assunto
+          termina e o outro começa; é literalmente a queixa do cliente ("ficou
+          mais confusa as informações"). Cada bloco passa a abrir com
+          <AberturaDeSecao>, que emite régua dourada + sobretítulo em mono +
+          título em Fraunces como uma coisa só. O <h3> que morava DENTRO do card,
+          espremido na mesma linha dos controles segmentados, sai de lá: título
+          de seção não disputa a linha com um filtro. */}
+      <AberturaDeSecao
+        eyebrow="Análise"
+        titulo="Venda por dimensão"
+        descricao="O mesmo período recortado por marca, grupo, SKU, loja ou vendedor — em unidades ou em receita."
+      />
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="toolbar" style={{ marginBottom: 10 }}>
-          <h3 className="section-title" style={{ margin: 0 }}>
-            Venda por…
-          </h3>
           <div className="segmented" role="group" aria-label="Dimensão da análise">
             {DIMENSIONS.map((d) => (
               <button
@@ -202,6 +221,11 @@ export function Sales() {
         )}
       </div>
 
+      <AberturaDeSecao
+        eyebrow="Registro"
+        titulo="Vendas sincronizadas"
+        descricao="As vendas mais recentes do recorte, como vieram da fonte."
+      />
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         {sales.isLoading ? (
           <Loading />
@@ -221,8 +245,16 @@ export function Sales() {
             <tbody>
               {sales.data.rows.map((s) => (
                 <tr key={s.id}>
-                  <td>{new Date(s.saleDate).toLocaleDateString('pt-BR')}</td>
-                  <td>{s.externalId}</td>
+                  {/* Data e número da venda são IDENTIFICADORES: o gestor os
+                      confere contra o cupom e contra o extrato, caractere a
+                      caractere. Mono caixa normal, entreletras zero, tabular —
+                      é a `.codigo`. Ver o comentário longo em Products.tsx. */}
+                  <td>
+                    <Codigo>{new Date(s.saleDate).toLocaleDateString('pt-BR')}</Codigo>
+                  </td>
+                  <td>
+                    <Codigo>{s.externalId}</Codigo>
+                  </td>
                   <td>{s.store?.name ?? '—'}</td>
                   <td>{s.seller?.name ?? '—'}</td>
                   <td>{s.customer?.name ?? '—'}</td>
@@ -243,7 +275,8 @@ export function Sales() {
         )}
       </div>
       {sales.data && (
-        <p className="label" style={{ marginTop: 10 }}>
+        // Frase de rodapé: `.hint`, não `.label`. Ver Products.tsx.
+        <p className="hint" style={{ marginTop: 10 }}>
           {sales.data.rows.length.toLocaleString('pt-BR')} de {sales.data.total.toLocaleString('pt-BR')} vendas
         </p>
       )}

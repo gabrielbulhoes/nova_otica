@@ -144,7 +144,7 @@ Ordenadas por gravidade. `PNG` é relativo a `docs/marca/telas/v4/`.
 | Rota | Nº de elementos cobertos | Pior caso |
 |---|---|---|
 | `/#/admin/decisoes` | 9 | `article.card > p.muted` "Margem estimada — falta…" (10×17px) |
-| `/#/admin/vendas` | 6 | `td.num` "R$ 15.894,96" (245×7px) e "R$ 7.304,21" (245×43px) |
+| `/#/admin/vendas` | 6 | `td.num` "R$ 18.430,00" (245×7px) e "R$ 6.980,00" (245×43px) |
 | `/#/admin` | 5 | `td.num` "176" (159×35px) e badge "11,2 meses·alta" (130×17px) |
 | `/#/admin/relatorios` | 5 | `td > div` "TF3115 6189VS 56 OCULOS TIFFANY" (255×20px) |
 | `/#/admin/estoque` | 4 | `td` "A GRACIOSA NATAL SHOP" (109×45px) |
@@ -243,7 +243,7 @@ Ordenadas por gravidade. `PNG` é relativo a `docs/marca/telas/v4/`.
 - **Rotas**: `/#/admin`, `/#/admin/alertas` · **Ambos os temas**
 - **Medida**: no Dashboard, `PRODUTOS` = **`21683`** ao lado de `UNIDADES EM ESTOQUE` =
   **`40.563`** — dois cards vizinhos, duas regras. Em Alertas: `2176`, `314`, `1862`,
-  todos crus, enquanto a mesma tela escreve `R$ 23.554,83`.
+  todos crus, enquanto a mesma tela escreve `R$ 27.310,00`.
 - **PNG**: `admin-escuro-topo.png`, `alertas-escuro-topo.png`
 
 ### R-23 · Rótulos de eixo truncados nos gráficos do BI
@@ -257,10 +257,10 @@ Ordenadas por gravidade. `PNG` é relativo a `docs/marca/telas/v4/`.
 
 ### R-24 · Ranking em que a maior barra fica por último e em cinza
 - **Rota**: `/#/admin/bi` · **Seletor**: cards "Vendas por loja" e "Formas de pagamento"
-- **Medida**: em "Vendas por loja" a barra do topo é `R$ 207,5 mil` e a última,
-  "OUTROS (14 CATEGORIAS)", é **`R$ 233,5 mil`** — 12,5% maior que a primeira, desenhada
+- **Medida**: em "Vendas por loja" a barra do topo é `R$ 210,0 mil` e a última,
+  "OUTROS (14 CATEGORIAS)", é **`R$ 236,0 mil`** — 12,5% maior que a primeira, desenhada
   em cinza e colocada no fim. O gráfico é ordenado, e a maior barra está fora da ordem.
-  Mesmo padrão em "Formas de pagamento" (`R$ 138,4 mil` de "OUTROS" contra `R$ 28 mil` do
+  Mesmo padrão em "Formas de pagamento" (`R$ 140,0 mil` de "OUTROS" contra `R$ 28 mil` do
   último item nomeado).
 - **PNG**: `bi-escuro-meio900.png`
 

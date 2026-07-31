@@ -260,7 +260,7 @@ paleta não podia ver isto, porque a listra só existe no DOM.
 | 6.48:1 | 4.5 | `admin/transferencias` | `td > span.muted` | "→" | 12.5 / 400 | `#e4dcc9` α0.72 | `#2c2512` |
 | 6.48:1 | 4.5 | `admin/transferencias` | `tr > td.muted` | "Está parado em OTICALLI MIDWAY e v" | 12 / 400 | `#e4dcc9` α0.72 | `#2c2512` |
 | 6.48:1 | 4.5 | `admin/relatorios` | `td > div.muted` | "— · RELOGIO" | 12 / 400 | `#e4dcc9` α0.72 | `#2c2512` |
-| 6.48:1 | 4.5 | `admin/vendas` | `tr > td.num` | "R$ 36.596,65" | 13 / 400 | `#e4dcc9` α0.72 | `#2c2512` |
+| 6.48:1 | 4.5 | `admin/vendas` | `tr > td.num` | "R$ 41.250,00" | 13 / 400 | `#e4dcc9` α0.72 | `#2c2512` |
 | 6.68:1 | 4.5 | `admin/estoque` | `span.badge.red > span` | "Ruptura" | 10.5 / 600 | `#f6bea9` | `#493a27` |
 | 6.68:1 | 4.5 | `admin/alertas` | `span.badge.red > span` | "Ruptura" | 10.5 / 600 | `#f6bea9` | `#493a27` |
 | 7.16:1 | 4.5 | `admin` | `span.badge.amber > span` | "9,4 meses · alta" | 10.5 / 500 | `#f0b429` | `#3a2e13` |

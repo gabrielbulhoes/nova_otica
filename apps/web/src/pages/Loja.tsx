@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addToCart, getArProducts, getCart, getStores, formatBRL, type ArProduct } from '../api/client';
-import { Loading } from '../components/ui';
+import { Loading, Unidade } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { VirtualTryOn } from '../ar/VirtualTryOn';
 import { useTemaDaVitrine } from '../hooks/useTemaDaVitrine';
@@ -86,7 +86,9 @@ const LIMIAR_ULTIMA = 1;
 function disponibilidade(unidades: number) {
   if (unidades <= 0) return { tipo: 'esgotado' as const, rotulo: 'Esgotado' };
   if (unidades <= LIMIAR_ULTIMA) return { tipo: 'ultima' as const, rotulo: 'Última unidade' };
-  return { tipo: 'ok' as const, rotulo: `${unidades} un. na rede` };
+  // O saudável não vira frase pronta: a página monta número + carimbo, para que
+  // o "un." saia em mono (é unidade colada ao número) e o resto em Inter.
+  return { tipo: 'ok' as const, rotulo: `${unidades} un. na rede`, unidades };
 }
 
 export function Loja() {
@@ -168,8 +170,27 @@ export function Loja() {
           {/* <div>, não <p>: `.store-hero p` é (0,1,1) e venceria `.eyebrow`
               (0,1,0), devolvendo o rótulo a 19px em --muted — ou seja, o
               utilitário de marca seria silenciosamente desligado. */}
+          {/*
+             ERA "A Graciosa · Rede de óticas" INTEIRO NO .eyebrow: 27
+             caracteres em mono caixa alta com 0,18em de entreletras — medidos
+             nesta build. Acima de ~14 caracteres esse tratamento deixa de ser
+             carimbo e vira fita: as palavras perdem contorno e a linha é
+             soletrada. E era a ÚNICA infração da vitrine, justo na tela que o
+             cliente elogiou.
+
+             O conserto guarda a assinatura e devolve a leitura: o nome da rede
+             fica carimbado (10 caracteres, dentro do limite) e o descritivo
+             desce para Inter. A marca continua sendo a primeira coisa lida.
+          */}
           <div className="eyebrow" style={{ justifyContent: 'center' }}>
-            A Graciosa · Rede de óticas
+            A Graciosa
+          </div>
+          {/* <div>, e não <p>, pela MESMA razão registrada acima para o
+              .eyebrow: `.store-hero p` é (0,1,1) e venceria `.hint` (0,1,0),
+              devolvendo o descritivo a 19px — do tamanho do subtítulo que vem
+              depois do <h1>, competindo com ele. */}
+          <div className="hint" style={{ margin: '0 0 2px', textAlign: 'center' }}>
+            Rede de óticas
           </div>
           <h1>Loja online</h1>
           <p>Prove os óculos pela câmera e compre em tempo real.</p>
@@ -399,9 +420,13 @@ function CardProduto({
         {produto.description}
       </Link>
 
-      {/* Categoria é dado de ficha, não texto corrido: é o caso exato do rótulo
-          em mono caixa alta do manual. */}
-      <div className="label" style={{ marginTop: 4 }}>
+      {/* Categoria é ETIQUETA, não frase: "Armação" (7) e "Óculos de sol" (13)
+          cabem folgados no limite de 14 caracteres do carimbo. Aqui a densidade
+          é baixa — um por card, contra os 40+ rótulos de uma tela do console —
+          e é exatamente onde a mono paga o que custa: assina a marca na única
+          tela que o consumidor final vê. `.carimbo`, e não `.label`, que desde a
+          onda 5 é Inter. */}
+      <div className="carimbo" style={{ marginTop: 2 }}>
         {nomeCategoria(produto.category)}
       </div>
 
@@ -414,7 +439,13 @@ function CardProduto({
           em rótulo de dado; os dois que pedem cautela viram chip com ícone. */}
       <div style={{ marginBottom: 12, minHeight: 22 }}>
         {estado.tipo === 'ok' ? (
-          <span className="label">{estado.rotulo}</span>
+          // "un." é carimbo de unidade colado ao número (`.unidade`, mono caixa
+          // alta); "na rede" é frase e fica em Inter. Antes a linha inteira ia
+          // em `.label`, o que jogava o carimbo para Inter junto com a frase.
+          <span className="hint">
+            {estado.unidades}
+            <Unidade>un.</Unidade> na rede
+          </span>
         ) : (
           <span className={`badge ${esgotado ? 'gray' : 'amber'}`} style={chipComIcone}>
             <Icon name={esgotado ? 'menos' : 'atencao'} size={13} />

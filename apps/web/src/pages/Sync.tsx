@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSyncStatus, runSync } from '../api/client';
-import { PageHeader, Loading, Selo, BotaoPrimario, type TomDeSelo } from '../components/ui';
+import {
+  PageHeader,
+  Loading,
+  Selo,
+  BotaoPrimario,
+  StatCard,
+  Codigo,
+  AberturaDeSecao,
+  type TomDeSelo,
+} from '../components/ui';
 import { Icon, type IconName } from '../brand/Icon';
 
 /**
@@ -106,40 +115,72 @@ export function Sync() {
         <Loading />
       ) : status.data ? (
         <>
+          {/* ONDA 6 · OS QUATRO CARTÕES TINHAM UMA ASSINATURA SÓ.
+              Medido nesta build, antes: quatro `.card.stat` nesta tela e UMA
+              assinatura visual entre eles (mesmo fundo, mesma borda, mesma
+              sombra, mesmo corpo de número). É a queixa do cliente em miniatura
+              — "temos que demarcar melhor as informações principais" — e aqui
+              ela dói mais que em qualquer outra tela minha, porque esta é a tela
+              em que o gestor decide se pode confiar nos números das outras
+              dezenove. Os quatro fatos não valem o mesmo:
+
+              NÍVEL 1 · a JANELA. É o único que muda de hora em hora e o único
+              que responde "posso sincronizar agora?". Vai de `destaque` e
+              `largo`: filete de 3px em ouro, papel próprio, número em Fraunces
+              40px e duas colunas de largura — que ele precisa, porque o valor é
+              uma faixa de horário ("06:00-07:00") e não um número de 3 dígitos.
+
+              NÍVEL 2 · MODO e AGENDAMENTO. Configuração: verdadeira o dia todo,
+              consultada uma vez por semana. Cartão padrão.
+
+              NÍVEL 3 · EXECUÇÕES REGISTRADAS. É a legenda da tabela que vem
+              logo abaixo — literalmente conta as linhas dela. Vai de `contexto`:
+              sem moldura, só o filete de topo dizendo "isto pertence ao bloco
+              seguinte". E é ele que paga a conta da hierarquia: ocupa 102px
+              contra os 181px dos outros, devolvendo em altura o que o nível 1
+              consome. */}
           <div className="grid grid-4">
-            <div className="card stat">
-              <div className="label">Modo</div>
-              <div className="value" style={{ fontSize: 20 }}>
-                {status.data.mode === 'mock' ? 'Demonstração' : 'Ao vivo'}
-              </div>
-            </div>
-            <div className="card stat">
-              <div className="label">Janela da API</div>
-              <div className="value" style={{ fontSize: 20 }}>
-                {status.data.window}
-              </div>
-              {/* O `.dot` já separa os dois estados por FORMA (traço horizontal
-                  para aberta, quadrado vazado para fechada) e o texto ao lado
-                  diz qual é qual — cor nenhuma carrega a informação sozinha. */}
-              <div className="hint" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span className={`dot ${status.data.windowOpen ? 'green' : 'amber'}`} />
-                <span>{status.data.windowOpen ? 'Aberta agora' : `Fechada (agora ${status.data.now})`}</span>
-              </div>
-            </div>
-            <div className="card stat">
-              <div className="label">Agendamento</div>
-              <div className="value" style={{ fontSize: 20 }}>
-                {status.data.cron}
-              </div>
-              {/* Nome de fuso é rótulo CURTO de dado — é literalmente o exemplo
-                  que o `.carimbo` do styles.css cita. Frase vai de `.hint`;
-                  "America/Sao_Paulo" vai de carimbo. */}
-              <div className="carimbo">{status.data.timezone}</div>
-            </div>
-            <div className="card stat">
-              <div className="label">Execuções registradas</div>
-              <div className="value">{status.data.lastRuns.length}</div>
-            </div>
+            <StatCard
+              nivel={1}
+              className="largo"
+              icon="calendario"
+              label="Janela da API"
+              value={status.data.window}
+              hint={
+                /* O `.dot` separa os dois estados por FORMA (traço horizontal
+                   para aberta, quadrado vazado para fechada) e o texto ao lado
+                   diz qual é qual — cor nenhuma carrega a informação sozinha. */
+                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span className={`dot ${status.data.windowOpen ? 'green' : 'amber'}`} />
+                  <span>
+                    {status.data.windowOpen ? 'Aberta agora' : 'Fechada — agora são '}
+                    {!status.data.windowOpen && <Codigo>{status.data.now}</Codigo>}
+                  </span>
+                </span>
+              }
+            />
+            <StatCard label="Modo" value={status.data.mode === 'mock' ? 'Demonstração' : 'Ao vivo'} />
+            {/* Expressão cron é IDENTIFICADOR puro: "0 6 * * *" só se lê contando
+                as posições, e contar posição em fonte proporcional é o pior caso
+                que existe. Sai do corpo Fraunces do indicador e vai para
+                <Codigo> — mono caixa normal, entreletras zero, tabular.
+                E o FUSO sai do `.carimbo`: medido nesta build,
+                "America/Sao_Paulo" tem 17 caracteres saindo em mono CAIXA ALTA
+                com 0,18em de entreletras. A própria regra do de-para proíbe
+                (carimbo é etiqueta de até ~14 caracteres) e o resultado media
+                mais largo que o valor que ele deveria estar carimbando. Fuso é
+                identificador, não etiqueta: vira <Codigo> dentro de uma frase
+                em Inter, que é o que ele sempre foi. */}
+            <StatCard
+              label="Agendamento"
+              value={<Codigo>{status.data.cron}</Codigo>}
+              hint={<>Fuso <Codigo>{status.data.timezone}</Codigo></>}
+            />
+            <StatCard
+              nivel={3}
+              label="Execuções registradas"
+              value={status.data.lastRuns.length}
+            />
           </div>
 
           {run.data && (
@@ -149,7 +190,12 @@ export function Sync() {
             </div>
           )}
 
-          <div className="card" style={{ marginTop: 16, padding: 0 }}>
+          <AberturaDeSecao
+            eyebrow="Histórico"
+            titulo="Últimas execuções"
+            descricao="Uma linha por entidade e por carga. Se alguma falhou, os números daquela entidade ainda são os da execução anterior."
+          />
+          <div className="card" style={{ padding: 0 }}>
             <table>
               <thead>
                 <tr>
@@ -166,8 +212,16 @@ export function Sync() {
               <tbody>
                 {status.data.lastRuns.map((r) => (
                   <tr key={r.id}>
-                    <td>{new Date(r.startedAt).toLocaleString('pt-BR')}</td>
-                    <td>{r.entity}</td>
+                    {/* Data/hora e nome de entidade são identificadores: um se
+                        varre de cima a baixo procurando a carga da manhã, o
+                        outro é o nome técnico da tabela na fonte. Mono caixa
+                        normal, entreletras zero. */}
+                    <td>
+                      <Codigo>{new Date(r.startedAt).toLocaleString('pt-BR')}</Codigo>
+                    </td>
+                    <td>
+                      <Codigo>{r.entity}</Codigo>
+                    </td>
                     <td>
                       <SituacaoBadge status={r.status} />
                     </td>

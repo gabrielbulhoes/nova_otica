@@ -12,7 +12,7 @@ import {
   formatBRL,
   type OrderView,
 } from '../api/client';
-import { PageHeader, Loading } from '../components/ui';
+import { PageHeader, Loading, Codigo } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useTemaDaVitrine } from '../hooks/useTemaDaVitrine';
 
@@ -61,11 +61,18 @@ export function Cart() {
     const paid = order.status === 'PAID';
     return (
       <>
+        {/* O número do pedido é IDENTIFICADOR — é o que o cliente dita ao
+            balconista. Como título ele saía em Fraunces, que é a fonte do que
+            se LÊ, não do que se COMPARA. O título passa a nomear a tela e o
+            número desce para `.codigo`, em mono caixa normal e tabular. */}
         <PageHeader
           eyebrow="Pedido"
-          title={order.number}
+          title="Pedido registrado"
           subtitle={paid ? 'Pagamento confirmado.' : 'Aguardando pagamento.'}
         />
+        <p style={{ margin: '-2px 0 0' }}>
+          <Codigo>{order.number}</Codigo>
+        </p>
         <hr className="rule-section" />
         <div className="card" style={{ maxWidth: 520 }}>
           <div className="row-between">
@@ -89,8 +96,11 @@ export function Cart() {
           {!paid && order.payment?.qrCode && (
             <div className="card" style={{ marginTop: 12, background: 'var(--panel-2)' }}>
               <div className="label">PIX · código de demonstração</div>
-              {/* Mono aqui é o uso legítimo do manual: isto é código, não frase. */}
-              <code style={{ wordBreak: 'break-all', fontSize: 12 }}>{order.payment.qrCode}</code>
+              {/* Mono aqui é o uso legítimo do manual: isto é código, não frase.
+                  Explicitado com `.codigo` para que o tratamento venha da mesma
+                  regra que atende SKU e número de pedido, e não da folha de
+                  estilo padrão do <code> do navegador. */}
+              <code className="codigo" style={{ wordBreak: 'break-all' }}>{order.payment.qrCode}</code>
             </div>
           )}
           <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -228,9 +238,14 @@ export function Cart() {
                           ação nenhuma — dá para fechar a compra do mesmo jeito.
                           O âmbar fica reservado ao que exige reação, e a
                           tentativa de passar do saldo já tem o banner de erro.
-                          Rótulo curto = mono, conforme o manual.
+                          TIPOGRAFIA (onda 6): isto NÃO é rótulo de dado, é
+                          frase de apoio a um campo — "12 disponíveis" explica o
+                          que o campo aceita. Rótulo nomeia; apoio explica, e
+                          apoio vai de `.hint` (Inter 12/400), não de `.label`
+                          (Inter 12/600), que aqui competia em peso com o próprio
+                          número dentro do campo.
                         */}
-                        <span className="label" style={{ whiteSpace: 'nowrap' }}>
+                        <span className="hint" style={{ whiteSpace: 'nowrap', marginTop: 0 }}>
                           {noLimite ? `Máximo: ${it.available}` : `${it.available} disponíveis`}
                         </span>
                       </div>
