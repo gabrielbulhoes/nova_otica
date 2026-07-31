@@ -263,6 +263,104 @@ const salesByStore = real
 const revenue = real ? real.totals.revenue30d : round2(salesByStore.reduce((a, b) => a + b.total, 0));
 const salesCount = real ? real.totals.salesCount30d : salesByStore.reduce((a, b) => a + b.count, 0);
 
+// ─── Escopo do BI: janela (dias) e loja ──────────────────────────────────────
+//
+// Os filtros do BI precisam valer para TODOS os gráficos. Com o snapshot real,
+// o que dá para escopar honestamente:
+//  - LOJA: o dataset traz recortes por loja (salesByStore, storeStats,
+//    storeCategory, storeBrand, weekdayStore) — o filtro é aplicado de verdade.
+//  - JANELA: a série diária é real, então a fatia de faturamento do período
+//    escolhido sai dela. O snapshot cobre poucos dias; pedir uma janela maior
+//    do que existe devolve o que existe (nunca inventa), e a janela EFETIVA é
+//    devolvida para a tela poder dizer isso ao usuário.
+// Faturamento/vendas são FLUXO (escalam com a janela); estoque é FOTO (só
+// filtra por loja, nunca escala por dias).
+
+/** Dias realmente cobertos pelo dataset dentro da janela pedida. */
+function effectiveWindowDays(days: number): number {
+  return real ? Math.min(days, real.dailySales.length) : days;
+}
+
+/**
+ * Fração do faturamento do snapshot que cai na janela pedida (0–1). Sai da
+ * série diária real; janela ≥ dados disponíveis = 1 (tudo).
+ */
+function windowShare(days: number): number {
+  if (!real) return 1;
+  const all = real.dailySales;
+  const total = all.reduce((a, d) => a + d.total, 0);
+  if (total <= 0 || days >= all.length) return 1;
+  return all.slice(-days).reduce((a, d) => a + d.total, 0) / total;
+}
+
+/** Loja selecionada no filtro (undefined/id inválido = toda a rede). */
+function scopedStore(storeId?: string): Store | null {
+  if (!storeId) return null;
+  return stores.find((s) => s.id === storeId) ?? null;
+}
+
+/** Lojas no escopo do filtro (a selecionada, ou todas as de varejo). */
+const scopedStores = (storeId?: string): Store[] => {
+  const st = scopedStore(storeId);
+  return st ? [st] : stores;
+};
+
+/** Faturamento e nº de vendas no escopo (loja × janela). */
+function scopedSales(days: number, storeId?: string) {
+  const share = windowShare(days);
+  const ids = new Set(scopedStores(storeId).map((s) => s.id));
+  const rows = salesByStore.filter((s) => ids.has(s.storeId));
+  return {
+    revenue: round2(rows.reduce((a, s) => a + s.total, 0) * share),
+    count: Math.round(rows.reduce((a, s) => a + s.count, 0) * share),
+  };
+}
+
+/** Unidades em estoque no escopo (foto: filtra por loja, não escala por dias). */
+function scopedStockUnits(storeId?: string): number {
+  const st = scopedStore(storeId);
+  if (real?.storeStats) {
+    const stats = st
+      ? real.storeStats.filter((x) => x.externalId === st.externalId)
+      : real.storeStats.filter((x) => stores.some((s) => s.externalId === x.externalId));
+    return stats.reduce((a, x) => a + x.stockUnits, 0);
+  }
+  if (!st) return stockUnits;
+  return products.reduce((a, p) => a + (stockQty.get(key(st.id, p.id)) ?? 0), 0);
+}
+
+/** Unidades vendidas no escopo (loja × janela). */
+function scopedSoldUnits(days: number, storeId?: string): number {
+  const share = windowShare(days);
+  const st = scopedStore(storeId);
+  if (real?.storeStats) {
+    const stats = st
+      ? real.storeStats.filter((x) => x.externalId === st.externalId)
+      : real.storeStats.filter((x) => stores.some((s) => s.externalId === x.externalId));
+    return Math.round(stats.reduce((a, x) => a + x.soldUnits, 0) * share);
+  }
+  const scope = scopedStores(storeId);
+  return Math.round(
+    scope.reduce((a, s) => a + products.reduce((b, p) => b + (soldQty.get(key(s.id, p.id)) ?? 0), 0), 0) * share,
+  );
+}
+
+/**
+ * Mix de uma dimensão (categoria/marca) DENTRO de uma loja, em unidades reais
+ * do snapshot. Usado para repartir o faturamento conhecido da loja entre os
+ * rótulos — a repartição vem de dado real por loja, não de chute.
+ */
+function storeMix(source: 'category' | 'brand', externalId: string): Map<string, number> {
+  const src = (source === 'category' ? real?.storeCategory : real?.storeBrand) ?? [];
+  const mix = new Map<string, number>();
+  for (const r of src) {
+    if (r.storeExt !== externalId) continue;
+    const label = r.label === '—' ? 'Sem marca' : r.label;
+    mix.set(label, (mix.get(label) ?? 0) + r.soldUnits);
+  }
+  return mix;
+}
+
 /**
  * Filtro multi-seleção → Set (null = sem filtro). Espelha o parseList da API:
  * array (parâmetro repetido do axios) com valores literais, ou "a,b,c".
@@ -303,8 +401,8 @@ function stockRows(params: Record<string, string | string[] | undefined>) {
   return rows;
 }
 
-function alerts() {
-  const rows = stockRows({}).filter((x) => {
+function alerts(storeId?: string) {
+  const rows = stockRows(storeId ? { storeId } : {}).filter((x) => {
     // Com o dataset real (catálogo amostrado), só alerta posições que EXISTEM
     // na loja: linha de estoque presente ou venda no período. Sem isso, cada
     // produto ausente numa filial viraria "ruptura" fantasma.
@@ -333,34 +431,110 @@ function alerts() {
   };
 }
 
-function timeseries(days: number) {
+function timeseries(days: number, storeId?: string) {
   if (real) {
-    // Série diária REAL (30 dias da sonda), recortada ao período pedido.
-    const points = real.dailySales.slice(-days).map((d) => ({ date: d.date, total: d.total, count: d.count }));
-    return { days, granularity: 'day', points };
+    // Série diária REAL, recortada à janela pedida. A curva é da rede; com uma
+    // loja filtrada, repartimos pela participação real dela no faturamento.
+    const st = scopedStore(storeId);
+    const netTotal = salesByStore.reduce((a, s) => a + s.total, 0) || 1;
+    const storeRow = st ? salesByStore.find((s) => s.storeId === st.id) : null;
+    const f = st ? (storeRow?.total ?? 0) / netTotal : 1;
+    const points = real.dailySales.slice(-days).map((d) => ({
+      date: d.date,
+      total: round2(d.total * f),
+      count: Math.round(d.count * f),
+    }));
+    return { days: effectiveWindowDays(days), requestedDays: days, granularity: 'day', points };
   }
   const points = [];
   const now = new Date();
+  const f = scopedStore(storeId) ? 1 / Math.max(stores.length, 1) : 1;
   for (let i = days - 1; i >= 0; i -= 1) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
-    points.push({ date: d.toISOString().slice(0, 10), total: money(3000, 14000), count: int(2, 9) });
+    points.push({ date: d.toISOString().slice(0, 10), total: round2(money(3000, 14000) * f), count: int(2, 9) });
   }
-  return { days, granularity: 'day', points };
+  return { days, requestedDays: days, granularity: 'day', points };
 }
 
-function byDimension(by: string) {
+function byDimension(by: string, days: number, storeId?: string) {
+  const share = windowShare(days);
+  const st = scopedStore(storeId);
+  const scale = (rows: { key: string; label: string; total: number; count: number }[]) =>
+    rows.map((r) => ({ ...r, total: round2(r.total * share), count: Math.round(r.count * share) }));
+
   let rows: { key: string; label: string; total: number; count: number }[] = [];
-  if (by === 'store') rows = salesByStore.map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }));
-  else if (real) {
+  if (by === 'store') {
+    const ids = new Set(scopedStores(storeId).map((s) => s.id));
+    rows = salesByStore
+      .filter((s) => ids.has(s.storeId))
+      .map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }));
+  } else if (real) {
     const src = by === 'payment' ? real.byPayment : by === 'brand' ? real.byBrand : real.byCategory;
-    rows = src.map((m) => ({ key: m.label, label: m.label, total: m.total, count: m.count }));
-  } else if (by === 'payment') rows = PAG.map((m) => ({ key: m, label: m, total: money(20000, 70000), count: int(10, 40) }));
-  else {
-    const dims = by === 'brand' ? MARCAS : CATEGORIAS;
-    rows = dims.map((m) => ({ key: m, label: m, total: money(15000, 60000), count: int(20, 90) }));
+    if (st && (by === 'category' || by === 'brand')) {
+      // Reparte o faturamento CONHECIDO da loja pelo mix de unidades DELA
+      // (dado real por loja) — o total da loja continua fechando.
+      const mix = storeMix(by === 'brand' ? 'brand' : 'category', st.externalId);
+      const units = [...mix.values()].reduce((a, b) => a + b, 0);
+      const storeRow = salesByStore.find((s) => s.storeId === st.id);
+      const storeTotal = storeRow?.total ?? 0;
+      const storeCount = storeRow?.count ?? 0;
+      rows =
+        units > 0
+          ? [...mix.entries()].map(([label, u]) => ({
+              key: label,
+              label,
+              total: round2((storeTotal * u) / units),
+              count: Math.round((storeCount * u) / units),
+            }))
+          : [];
+    } else if (st) {
+      // Sem recorte por loja na origem (ex.: forma de pagamento): aplica a
+      // participação real da loja no faturamento da rede.
+      const netTotal = salesByStore.reduce((a, s) => a + s.total, 0) || 1;
+      const f = (salesByStore.find((s) => s.storeId === st.id)?.total ?? 0) / netTotal;
+      rows = src.map((m) => ({
+        key: m.label,
+        label: m.label,
+        total: round2(m.total * f),
+        count: Math.round(m.count * f),
+      }));
+    } else {
+      rows = src.map((m) => ({ key: m.label, label: m.label, total: m.total, count: m.count }));
+    }
+  } else {
+    // Sabor fictício: deriva das vendas por loja×produto — assim o filtro de
+    // loja vale aqui também, e o valor é determinístico (não sorteia a cada
+    // chamada, senão o gráfico "pula" a cada refetch).
+    const scope = scopedStores(storeId);
+    const acc = new Map<string, { total: number; count: number }>();
+    if (by === 'payment') {
+      // Não há forma de pagamento por loja no sabor fictício: reparte o
+      // faturamento do escopo por pesos estáveis (hash do rótulo).
+      const totalScope = scope.reduce(
+        (a, s) => a + products.reduce((b, p) => b + (soldQty.get(key(s.id, p.id)) ?? 0) * p.price, 0),
+        0,
+      );
+      const w = PAG.map((m) => 0.5 + hash01(`pag:${m}`));
+      const wsum = w.reduce((a, b) => a + b, 0) || 1;
+      PAG.forEach((m, i) =>
+        acc.set(m, { total: round2((totalScope * w[i]) / wsum), count: Math.round((40 * w[i]) / wsum) }),
+      );
+    } else {
+      for (const s of scope)
+        for (const p of products) {
+          const units = soldQty.get(key(s.id, p.id)) ?? 0;
+          if (units <= 0) continue;
+          const label = by === 'brand' ? p.brand : p.category;
+          const cur = acc.get(label) ?? { total: 0, count: 0 };
+          cur.total = round2(cur.total + units * p.price);
+          cur.count += units;
+          acc.set(label, cur);
+        }
+    }
+    rows = [...acc.entries()].map(([label, v]) => ({ key: label, label, ...v }));
   }
-  return { by, rows: rows.sort((a, b) => b.total - a.total) };
+  return { by, days: effectiveWindowDays(days), rows: scale(rows).sort((a, b) => b.total - a.total) };
 }
 
 const realSalesByProduct = new Map((real?.productSales ?? []).map((x) => [`pr_${x.externalId}`, x]));
@@ -533,60 +707,91 @@ function turnover(days: number) {
   };
 }
 
-function salesFlow() {
+function salesFlow(days: number, storeId?: string) {
   const links: { source: string; target: string; value: number }[] = [];
   const names = new Set<string>();
+  const share = windowShare(days);
+  const st = scopedStore(storeId);
   if (real) {
-    // Alocação proporcional: total real da categoria × participação real da
-    // loja no faturamento (top 6 × top 8 para o sankey respirar).
+    const scope = scopedStores(storeId);
+    const ids = new Set(scope.map((s) => s.id));
+    const tops = [...salesByStore.filter((s) => ids.has(s.storeId))]
+      .sort((a, b) => b.total - a.total)
+      .slice(0, st ? 1 : 8);
+    if (st) {
+      // Loja filtrada: reparte o faturamento dela pelo mix de categorias DELA.
+      const mix = storeMix('category', st.externalId);
+      const units = [...mix.values()].reduce((a, b) => a + b, 0);
+      const storeTotal = (tops[0]?.total ?? 0) * share;
+      if (units > 0)
+        for (const [label, u] of [...mix.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
+          const v = round2((storeTotal * u) / units);
+          if (v <= 0) continue;
+          links.push({ source: label, target: st.name, value: v });
+          names.add(label);
+          names.add(st.name);
+        }
+      return { days: effectiveWindowDays(days), nodes: [...names].map((name) => ({ name })), links };
+    }
+    // Rede: total real da categoria × participação real da loja no faturamento.
     const cats = [...real.byCategory].sort((a, b) => b.total - a.total).slice(0, 6);
-    const tops = [...salesByStore].sort((a, b) => b.total - a.total).slice(0, 8);
     const topTotal = tops.reduce((a, b) => a + b.total, 0) || 1;
     for (const cat of cats)
-      for (const st of tops) {
-        const v = round2((cat.total * st.total) / topTotal);
+      for (const s of tops) {
+        const v = round2((cat.total * s.total * share) / topTotal);
         if (v <= 0) continue;
-        links.push({ source: cat.label, target: st.storeName, value: v });
+        links.push({ source: cat.label, target: s.storeName, value: v });
         names.add(cat.label);
-        names.add(st.storeName);
+        names.add(s.storeName);
       }
-    return { nodes: [...names].map((name) => ({ name })), links };
+    return { days: effectiveWindowDays(days), nodes: [...names].map((name) => ({ name })), links };
   }
   for (const cat of CATEGORIAS)
-    for (const st of stores) {
-      const v = money(2000, 25000);
-      links.push({ source: cat, target: st.name, value: v });
+    for (const s of scopedStores(storeId)) {
+      const v = round2(money(2000, 25000) * share);
+      links.push({ source: cat, target: s.name, value: v });
       names.add(cat);
-      names.add(st.name);
+      names.add(s.name);
     }
+  return { days: effectiveWindowDays(days), nodes: [...names].map((name) => ({ name })), links };
+}
+
+function transferFlow(storeId?: string) {
+  // Fluxo derivado das movimentações da própria demo (estado real da sessão),
+  // filtrado pela loja selecionada — origem OU destino.
+  const st = scopedStore(storeId);
+  const agg = new Map<string, number>();
+  for (const mv of movements) {
+    if (mv.type !== 'TRANSFER') continue;
+    const from = mv.fromStore as { id?: string; name?: string } | null;
+    const to = mv.toStore as { id?: string; name?: string } | null;
+    if (!from?.name || !to?.name) continue;
+    if (st && from.id !== st.id && to.id !== st.id) continue;
+    const k = `Origem: ${from.name}|Destino: ${to.name}`;
+    agg.set(k, (agg.get(k) ?? 0) + (Number(mv.quantity) || 0));
+  }
+  const names = new Set<string>();
+  const links = [...agg.entries()].map(([k, value]) => {
+    const [source, target] = k.split('|');
+    names.add(source);
+    names.add(target);
+    return { source, target, value };
+  });
   return { nodes: [...names].map((name) => ({ name })), links };
 }
 
-function transferFlow() {
-  return {
-    nodes: [
-      { name: `Origem: ${stores[3].name}` },
-      { name: `Destino: ${stores[1].name}` },
-      { name: `Origem: ${stores[0].name}` },
-      { name: `Destino: ${stores[2].name}` },
-    ],
-    links: [
-      { source: `Origem: ${stores[3].name}`, target: `Destino: ${stores[1].name}`, value: 5 },
-      { source: `Origem: ${stores[0].name}`, target: `Destino: ${stores[2].name}`, value: 3 },
-    ],
-  };
-}
-
-function heatmap() {
-  const yLabels = stores.map((s) => s.name);
+function heatmap(days: number, storeId?: string) {
+  const scope = scopedStores(storeId);
+  const yLabels = scope.map((s) => s.name);
+  const share = windowShare(days);
   const cells: [number, number, number][] = [];
   if (real) {
     const byKey = new Map(real.weekdayStore.map((w) => [`${w.storeExt}|${w.weekday}`, w.total]));
-    stores.forEach((s, yi) =>
-      WEEK.forEach((_, wd) => cells.push([wd, yi, Math.round(byKey.get(`${s.externalId}|${wd}`) ?? 0)])),
+    scope.forEach((s, yi) =>
+      WEEK.forEach((_, wd) => cells.push([wd, yi, Math.round((byKey.get(`${s.externalId}|${wd}`) ?? 0) * share)])),
     );
   } else {
-    yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000))])));
+    yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000) * share)])));
   }
   return { xLabels: WEEK, yLabels, cells };
 }
@@ -833,22 +1038,44 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     return { total: rows.length, page: 1, limit: 100, rows };
   }
 
-  // BI
+  // BI — todos os recortes respeitam os filtros de janela (days) e de loja.
+  const biStoreId = one(params.storeId);
   if (url === '/bi/kpis') {
-    const positions = stores.length * products.length;
-    const al = alerts();
+    const scope = scopedStores(biStoreId);
+    const positions = scope.length * products.length;
+    const al = alerts(biStoreId);
+    const sales = scopedSales(days, biStoreId);
+    const stock = scopedStockUnits(biStoreId);
+    const sold = scopedSoldUnits(days, biStoreId);
+    const st = scopedStore(biStoreId);
     return {
-      days, revenue, salesCount, avgTicket: round2(revenue / salesCount), turnover: 0.14,
-      rupturaRate: round2((al.out / positions) * 100), lowStockRate: round2((al.low / positions) * 100),
-      stockUnits, unitsSold: int(400, 700), stockPositions: positions, outOfStock: al.out, lowStock: al.low,
-      pendingTransfers: movements.filter((x) => ['REQUESTED', 'PENDING'].includes(x.status as string)).length,
+      days: effectiveWindowDays(days),
+      requestedDays: days,
+      revenue: sales.revenue,
+      salesCount: sales.count,
+      avgTicket: sales.count > 0 ? round2(sales.revenue / sales.count) : 0,
+      turnover: stock > 0 ? round2(sold / stock) : 0,
+      rupturaRate: positions > 0 ? round2((al.out / positions) * 100) : 0,
+      lowStockRate: positions > 0 ? round2((al.low / positions) * 100) : 0,
+      stockUnits: stock,
+      unitsSold: sold,
+      stockPositions: positions,
+      outOfStock: al.out,
+      lowStock: al.low,
+      pendingTransfers: movements.filter(
+        (x) =>
+          ['REQUESTED', 'PENDING'].includes(x.status as string) &&
+          (!st ||
+            (x.fromStore as { id?: string } | null)?.id === st.id ||
+            (x.toStore as { id?: string } | null)?.id === st.id),
+      ).length,
     };
   }
-  if (url === '/bi/sales-timeseries') return timeseries(days);
-  if (url === '/bi/sales-by-dimension') return byDimension(one(params.by) ?? 'store');
-  if (url === '/bi/sales-flow') return salesFlow();
-  if (url === '/bi/transfer-flow') return transferFlow();
-  if (url === '/bi/heatmap') return heatmap();
+  if (url === '/bi/sales-timeseries') return timeseries(days, biStoreId);
+  if (url === '/bi/sales-by-dimension') return byDimension(one(params.by) ?? 'store', days, biStoreId);
+  if (url === '/bi/sales-flow') return salesFlow(days, biStoreId);
+  if (url === '/bi/transfer-flow') return transferFlow(biStoreId);
+  if (url === '/bi/heatmap') return heatmap(days, biStoreId);
 
   // Relatórios
   if (url === '/reports/abc') return abc(days, one(params.dimension) === 'brand' ? 'brand' : 'product');

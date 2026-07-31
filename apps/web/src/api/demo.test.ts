@@ -266,3 +266,58 @@ describe('demo: lote de geração', () => {
     expect(rows[0].compra + rows[0].remanejamento + rows[0].liquidacao).toBe(rows[0].cardsTotal);
   });
 });
+
+describe('demo: filtros do BI (loja e janela) valem para todos os gráficos', () => {
+  const lojas = get('/stores').rows as { id: string; name: string }[];
+  const umaLoja = lojas[0].id;
+
+  it('KPIs mudam ao filtrar por loja (rede > loja) e o escopo é coerente', () => {
+    const rede = get('/bi/kpis');
+    const loja = get('/bi/kpis', { storeId: umaLoja });
+    expect(loja.stockUnits).toBeLessThan(rede.stockUnits);
+    expect(loja.revenue).toBeLessThanOrEqual(rede.revenue);
+    expect(loja.stockPositions).toBeLessThan(rede.stockPositions);
+    // sem número aleatório: a mesma consulta devolve o mesmo valor
+    expect(get('/bi/kpis', { storeId: umaLoja }).unitsSold).toBe(loja.unitsSold);
+  });
+
+  it('vendas por loja respeitam o filtro (uma linha só)', () => {
+    const rede = get('/bi/sales-by-dimension', { by: 'store' });
+    const loja = get('/bi/sales-by-dimension', { by: 'store', storeId: umaLoja });
+    expect(rede.rows.length).toBe(lojas.length);
+    expect(loja.rows.length).toBe(1);
+    expect(loja.rows[0].key).toBe(umaLoja);
+  });
+
+  it('formas de pagamento e categorias encolhem ao filtrar por loja', () => {
+    for (const by of ['payment', 'category']) {
+      const rede = get('/bi/sales-by-dimension', { by });
+      const loja = get('/bi/sales-by-dimension', { by, storeId: umaLoja });
+      const somaRede = rede.rows.reduce((a: number, r: any) => a + r.total, 0);
+      const somaLoja = loja.rows.reduce((a: number, r: any) => a + r.total, 0);
+      expect(somaLoja, `dimensão ${by} ignorou o filtro de loja`).toBeLessThan(somaRede);
+    }
+  });
+
+  it('série diária, sankey e heatmap respeitam a loja', () => {
+    const tsRede = get('/bi/sales-timeseries');
+    const tsLoja = get('/bi/sales-timeseries', { storeId: umaLoja });
+    const somaRede = tsRede.points.reduce((a: number, p: any) => a + p.total, 0);
+    const somaLoja = tsLoja.points.reduce((a: number, p: any) => a + p.total, 0);
+    expect(somaLoja).toBeLessThan(somaRede);
+
+    const flow = get('/bi/sales-flow', { storeId: umaLoja });
+    for (const l of flow.links as { target: string }[]) expect(l.target).toBe(lojas[0].name);
+
+    const heat = get('/bi/heatmap', { storeId: umaLoja });
+    expect(heat.yLabels).toEqual([lojas[0].name]);
+  });
+
+  it('janela menor não devolve mais dados do que a janela maior', () => {
+    const curto = get('/bi/sales-timeseries', { days: '7' });
+    const longo = get('/bi/sales-timeseries', { days: '180' });
+    expect(curto.points.length).toBeLessThanOrEqual(longo.points.length);
+    // a janela efetiva nunca promete mais do que os dados cobrem
+    expect(longo.days).toBeLessThanOrEqual(longo.requestedDays);
+  });
+});
