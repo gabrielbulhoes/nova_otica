@@ -47,3 +47,14 @@ apps/web/src/api/demo-real-data.json
 
 # Catálogo de marcas (dado comercial real — gerado de PDVs_Grifes)
 apps/api/data/brand-catalog.json
+
+# Evidência visual das auditorias de design: PNG e PDF regeneráveis pelos
+# scripts em docs/marca/auditoria/evidencias/. Os relatórios .md ficam
+# versionados; as ~70 MB de captura, não — o repositório é público e clone
+# não deve carregar prova que qualquer um refaz rodando o script.
+docs/marca/auditoria/evidencias/
+docs/marca/impressao/
+docs/marca/telas/v4/
+
+# Variante de nome usada por um dos auditores (singular).
+docs/marca/auditoria/evidencia/
