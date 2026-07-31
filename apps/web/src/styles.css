@@ -93,9 +93,20 @@
   /* --ambar-claro era #f0d482 — o MESMO hex de --ouro-lux. No tema escuro o
      estado "atenção" ficava pixel a pixel igual à cor de luxo da marca, e a
      interface passava a dizer "atenção" toda vez que quisesse dizer "marca".
-     O #f0d482 é do manual, então quem se move é o derivado: este âmbar mantém
-     a família quente e fica a ΔE 23 do ouro-lux — separação inequívoca. */
-  --ambar-claro: #e5a54b; /* atenção · ESCURO · 9.2:1 sobre preto · cinza 172 */
+     O #f0d482 é do manual e não se move; quem se move é o derivado.
+
+     Por que ESTE hex, e não o primeiro âmbar que já não colidia: separar por
+     hex resolve a colisão literal e não resolve a colisão PERCEBIDA. Medido em
+     ΔE*ab com simulação Viénot–Brettel–Mollon, contra --ouro-lux:
+       tricromata 31.7 · deuteranopia 31.0 · protanopia 27.7
+     (o candidato anterior, #e5a54b, dava 23.2 / 17.5 / 16.7 — abaixo do ΔE ≈ 20
+     que a auditoria adota como separação confiável sem comparação lado a lado,
+     ou seja, ainda encostava no ouro para quem tem deficiência de visão de cor).
+     Contra os outros dois estados, no pior observador: --terra-claro 54.6 e
+     --verde-claro 39.2. E a escada de cinza dos três estados continua de pé —
+     verde 142 · âmbar 182 · terra 204 — que é o que sobrevive ao grayscale(1)
+     e à impressão P&B. */
+  --ambar-claro: #f0b429; /* atenção · ESCURO · 9.85:1 sobre carvão · cinza 182 */
   --terra: #6e1c0e; /* crítico · claro · 10.1:1 · óxido, não vermelho digital · cinza 44 */
   --terra-claro: #f6bea9; /* crítico · ESCURO · 12.0:1 sobre preto · cinza 200 */
 
@@ -1343,6 +1354,60 @@ td.num {
   border-radius: 0;
   background: var(--ouro);
 }
+/* Recolhido na rolagem para baixo (a classe é escrita pelo AdminShell).
+   O dock ENCOLHE, não some: continua uma faixa de papel de ~450px de largura,
+   com o filete dourado e a célula da tela atual marcada, que reabre no hover,
+   no toque e no foco de teclado.
+
+   Por que só a ALTURA cai, e a largura e as colunas ficam paradas: se a faixa
+   também estreitasse, os nove botões trocariam de posição horizontal ao
+   reabrir, e o dedo (ou o cursor) que foi até um ícone acabaria clicando no
+   vizinho. Encolhendo só na vertical, cada botão cresce debaixo do ponteiro
+   sem sair da coluna dele. */
+/* O filete de repouso do dock é o --linha dourado, que compõe para 1.27:1 sobre
+   o branco-papel. Aberto isso basta, porque quem desenha o dock são nove ícones
+   de 42px e a sombra. Recolhido, o que sobra é uma tira de papel sobre papel: no
+   tema claro ela sumiria, e uma faixa que o olho não acha não é "minimizada", é
+   inalcançável. Por isso a borda de cima vira 2px em --accent — 6.04:1 no claro
+   e 13.52:1 no escuro, acima dos 3:1 que a WCAG 1.4.11 pede de um controle. E é
+   --accent de propósito: é a cor de "isto se opera" no produto inteiro. A sombra
+   fica, é ela que descola a faixa da tabela que corre por baixo. */
+.dock.recolhido {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-top: 2px solid var(--accent);
+}
+.dock.recolhido button {
+  height: 12px;
+  /* O primeiro toque na faixa recolhida só REABRE o dock. Sem isto o dedo que
+     encosta para expandir cai direto num botão de 12px de altura e navega para
+     outra tela sem querer. Não tira nada do teclado: pointer-events não afeta
+     foco, e os nove botões continuam na ordem de tabulação — é o foco que
+     reabre o dock, pelo onFocusCapture da casca. */
+  pointer-events: none;
+}
+.dock.recolhido button svg {
+  display: none;
+}
+/* Sem os ícones, o filete dourado é a única coisa que diz em que tela o
+   usuário está — então ele ocupa a coluna inteira em vez de 14px. */
+.dock.recolhido button.active::after {
+  width: 24px;
+}
+
+/* A animação da faixa é declarada em no-preference, e não desligada depois em
+   reduce: assim quem pediu menos movimento recebe a troca DIRETA, sem depender
+   de um override chegar na ordem certa da cascata. A transição de cor do hover
+   continua fora daqui, porque cor não é movimento. */
+@media (prefers-reduced-motion: no-preference) {
+  .dock {
+    transition: padding 0.18s ease;
+  }
+  .dock button {
+    transition: background 0.14s ease, border-color 0.14s ease, height 0.18s ease;
+  }
+}
+
 @media (max-width: 720px) {
   .dock {
     display: none;
@@ -1446,6 +1511,14 @@ td.num {
 
 /* ─── Selo de dados fictícios (demonstração) ─────────────────────────────── */
 
+/* O selo é renderizado FORA da árvore da casca (App.tsx o põe como irmão de
+   <App/>), então nenhum seletor descendente de [data-tema='escuro'] alcançava
+   ele — no console preto o selo continuava um bloco branco, o objeto mais
+   brilhante da tela. A correção é o próprio selo carregar `data-tema`
+   (DemoBadge.tsx decide quando), e para isso ele precisa pintar-se com os
+   ALIASES semânticos, que são o que o bloco escuro redeclara: --window-solid,
+   --text e --accent viram preto/branco/ouro-lux dentro do escopo escuro
+   sozinhos, sem uma segunda cópia da paleta escrita aqui embaixo. */
 .demo-seal {
   position: fixed;
   left: 14px;
@@ -1461,33 +1534,19 @@ td.num {
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--tinta);
-  background: var(--branco);
+  color: var(--text);
+  background: var(--window-solid);
   border: 1px solid var(--linha);
-  box-shadow: 0 6px 18px rgba(13, 11, 8, 0.1);
+  /* Sem sombra difusa: no manual quem separa superfície é o filete de 1px, que
+     esta regra já tem em --linha. (Era um override inline dentro de
+     DemoBadge.tsx, esperando alguém encostar neste arquivo.) */
   pointer-events: auto;
   cursor: help;
   user-select: none;
 }
 .demo-seal strong {
   font-weight: 500;
-  color: var(--ouro-texto);
-}
-.demo-seal-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 0;
-  background: var(--ouro);
-  animation: demo-seal-pulse 2.4s ease-in-out infinite;
-}
-@keyframes demo-seal-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
+  color: var(--accent);
 }
 @media (max-width: 720px) {
   .demo-seal {
@@ -1570,8 +1629,7 @@ td.num {
 [data-tema='escuro'] .window-main,
 [data-tema='escuro'] .titlebar,
 [data-tema='escuro'] .store-nav,
-[data-tema='escuro'] .dock,
-[data-tema='escuro'] .demo-seal {
+[data-tema='escuro'] .dock {
   background: var(--preto);
 }
 [data-tema='escuro'] .sidebar,
@@ -1671,14 +1729,13 @@ td.num {
 [data-tema='escuro'] .traffic .r {
   border-color: var(--ouro);
 }
-[data-tema='escuro'] .eyebrow,
-[data-tema='escuro'] .demo-seal strong {
+[data-tema='escuro'] .eyebrow {
   color: var(--ouro-lux);
 }
-[data-tema='escuro'] .demo-seal {
-  color: var(--branco);
-  border-color: var(--linha);
-}
+/* Aqui moravam duas regras `[data-tema='escuro'] .demo-seal`. Elas nunca
+   pintaram nada: o selo não é descendente da casca, é irmão dela. Agora o selo
+   carrega o próprio `data-tema` e se pinta pelos aliases — ver a regra
+   .demo-seal, acima. */
 [data-tema='escuro'] .mesh {
   background-image: radial-gradient(circle, rgba(201, 162, 39, 0.2) 1px, transparent 1px);
 }
@@ -1694,8 +1751,8 @@ td.num {
 /* Era fundo e borda em --ouro e texto em --ouro-lux: o chip de "atenção" estava
    vestido inteiro com a cor da marca. Agora usa o próprio âmbar do estado. */
 [data-tema='escuro'] .badge.amber {
-  background: rgba(229, 165, 75, 0.16);
-  border-color: rgba(229, 165, 75, 0.45);
+  background: rgba(240, 180, 41, 0.16);
+  border-color: rgba(240, 180, 41, 0.45);
   color: var(--ambar-claro);
 }
 [data-tema='escuro'] .badge.red {
@@ -1714,8 +1771,8 @@ td.num {
   color: var(--muted);
 }
 [data-tema='escuro'] .banner.warn {
-  background: rgba(229, 165, 75, 0.12);
-  border-color: rgba(229, 165, 75, 0.34);
+  background: rgba(240, 180, 41, 0.12);
+  border-color: rgba(240, 180, 41, 0.34);
   border-left-color: var(--ambar-claro);
 }
 [data-tema='escuro'] .banner.ok {

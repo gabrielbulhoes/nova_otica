@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getProducts, getCategories, formatBRL } from '../api/client';
 import { PageHeader, Loading } from '../components/ui';
+import { Icon } from '../brand/Icon';
 import { useScope } from '../lib/scope';
 
 export function Products() {
@@ -18,16 +19,24 @@ export function Products() {
 
   return (
     <>
-      <PageHeader title="Produtos" subtitle="Catálogo sincronizado da fonte (Sellbie)." />
+      {/* Nenhum botão sólido: o catálogo é espelho da fonte (Sellbie). Não se
+          cria nem se edita produto aqui — a tela não tem ação principal, e
+          inventar uma seria mentir sobre o que ela faz. */}
+      <PageHeader
+        eyebrow="Consulta"
+        title="Produtos"
+        subtitle="Catálogo sincronizado da fonte (Sellbie)."
+      />
 
       <div className="toolbar">
         <input
+          aria-label="Buscar por descrição, SKU ou marca"
           placeholder="Buscar por descrição, SKU ou marca…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ minWidth: 260 }}
         />
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+        <select aria-label="Filtrar por categoria" value={category} onChange={(e) => setCategory(e.target.value)}>
           <option value="">Todas as categorias</option>
           {categories.data?.map((c) => (
             <option key={c} value={c}>
@@ -37,7 +46,7 @@ export function Products() {
         </select>
       </div>
 
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         {products.isLoading ? (
           <Loading />
         ) : products.data && products.data.rows.length > 0 ? (
@@ -56,6 +65,11 @@ export function Products() {
             <tbody>
               {products.data.rows.map((p) => (
                 <tr key={p.id}>
+                  {/* Código fica à ESQUERDA de propósito: `.num` é para
+                      grandeza (quantidade, dinheiro), que se compara pelo
+                      alinhamento das casas. Identificador não se soma nem se
+                      compara — alinhá-lo à direita sugeriria uma ordem de
+                      magnitude que ele não tem. */}
                   <td>{p.externalId}</td>
                   <td>{p.description}</td>
                   <td>{p.brand ?? '—'}</td>
@@ -68,12 +82,19 @@ export function Products() {
             </tbody>
           </table>
         ) : (
-          <div className="empty">Nenhum produto encontrado.</div>
+          <div
+            className="empty"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+          >
+            <Icon name="buscar" size={18} />
+            <span>Nenhum produto encontrado. Ajuste a busca ou a categoria.</span>
+          </div>
         )}
       </div>
       {products.data && (
-        <p className="muted" style={{ marginTop: 10 }}>
-          {products.data.rows.length} de {products.data.total} produtos.
+        <p className="label" style={{ marginTop: 10 }}>
+          {products.data.rows.length.toLocaleString('pt-BR')} de{' '}
+          {products.data.total.toLocaleString('pt-BR')} produtos
         </p>
       )}
     </>

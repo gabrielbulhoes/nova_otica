@@ -1,18 +1,33 @@
 import { useQuery } from '@tanstack/react-query';
 import { getStores } from '../api/client';
-import { PageHeader, Loading } from '../components/ui';
+import { PageHeader, Loading, Selo } from '../components/ui';
+import { Icon } from '../brand/Icon';
 
 export function Stores() {
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
 
+  const linhas = stores.data?.rows ?? [];
+  const ativas = linhas.filter((s) => s.active).length;
+
   return (
     <>
-      <PageHeader title="Lojas" subtitle="Filiais da rede sincronizadas da fonte." />
+      {/* Sem botão sólido: a lista de filiais vem da fonte sincronizada. Não se
+          abre nem se fecha loja por aqui, então a tela não tem ação principal. */}
+      <PageHeader
+        eyebrow="Consulta"
+        title="Lojas"
+        subtitle="Filiais da rede sincronizadas da fonte."
+      />
 
       {/* A demo estática carrega uma AMOSTRA do catálogo. Sem este aviso, o
-          "SKUs em estoque" parece um número da rede inteira — e é menor. */}
+          "SKUs em estoque" parece um número da rede inteira — e é menor.
+          Virou .banner (e não card genérico) porque é aviso de metodologia: o
+          filete esquerdo e o ícone de informação o marcam como nota de escopo,
+          não como mais um painel de dados. Neutro de propósito — não é risco
+          operacional, é ressalva de leitura. */}
       {stores.data?.sampled && (
-        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 12.5 }}>
+        <div className="banner" style={{ alignItems: 'flex-start' }}>
+          <Icon name="informacao" size={18} style={{ marginTop: 2, color: 'var(--muted)' }} />
           <span className="muted">
             Nesta demonstração o catálogo vem amostrado
             {stores.data.catalogSampled && stores.data.productCountNetwork
@@ -24,10 +39,10 @@ export function Stores() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         {stores.isLoading ? (
           <Loading />
-        ) : stores.data && stores.data.rows.length > 0 ? (
+        ) : linhas.length > 0 ? (
           <table>
             <thead>
               <tr>
@@ -37,31 +52,53 @@ export function Stores() {
                 <th>UF</th>
                 <th className="num">SKUs em estoque</th>
                 <th className="num">Vendas</th>
-                <th>Status</th>
+                <th>Situação</th>
               </tr>
             </thead>
             <tbody>
-              {stores.data.rows.map((s) => (
+              {linhas.map((s) => (
                 <tr key={s.id}>
                   <td>{s.externalId}</td>
                   <td>{s.name}</td>
                   <td>{s.city ?? '—'}</td>
                   <td>{s.state ?? '—'}</td>
                   <td className="num">{(s._count?.stockItems ?? 0).toLocaleString('pt-BR')}</td>
-                  <td className="num">{s._count?.sales ?? 0}</td>
+                  <td className="num">{(s._count?.sales ?? 0).toLocaleString('pt-BR')}</td>
                   <td>
-                    <span className={`badge ${s.active ? 'green' : 'gray'}`}>
-                      {s.active ? 'Ativa' : 'Inativa'}
-                    </span>
+                    {/* Ativa × Inativa vinham como .badge green × .badge gray: em
+                        escala de cinza, dois chips de contorno claro com palavras
+                        parecidas. O <Selo> acrescenta ícone — o único canal que
+                        atravessa daltonismo, impressão em P&B e monitor de loja
+                        mal calibrado sem perder nada. */}
+                    {s.active ? (
+                      <Selo tom="green" icone="aprovar" title="Filial em operação, sincronizando com a fonte.">
+                        Ativa
+                      </Selo>
+                    ) : (
+                      <Selo tom="gray" icone="limpar" title="Filial fora de operação. Não recebe nem envia estoque.">
+                        Inativa
+                      </Selo>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <div className="empty">Nenhuma loja sincronizada.</div>
+          <div
+            className="empty"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+          >
+            <Icon name="sincronizacao" size={18} />
+            <span>Nenhuma loja sincronizada.</span>
+          </div>
         )}
       </div>
+      {linhas.length > 0 && (
+        <p className="label" style={{ marginTop: 10 }}>
+          {linhas.length} filiais · {ativas} ativas
+        </p>
+      )}
     </>
   );
 }

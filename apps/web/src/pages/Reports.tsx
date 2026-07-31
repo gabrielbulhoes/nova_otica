@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   getAbc,
@@ -11,13 +11,43 @@ import {
   formatBRL,
   type AbcDimension,
 } from '../api/client';
-import { PageHeader, Loading, CoverageBadge, ExportCsv, fmtMonths } from '../components/ui';
+import { PageHeader, Loading, CoverageBadge, ExportCsv, fmtMonths, Selo, Botao } from '../components/ui';
+import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { useScope, type Scope } from '../lib/scope';
 
 type Tab = 'abc' | 'turnover' | 'coverage' | 'transfers' | 'brandmix';
 
 const classColor: Record<string, string> = { A: 'green', B: 'amber', C: 'gray' };
+
+/**
+ * Nota de metodologia: ícone da grade 24 + frase em Inter.
+ *
+ * Substitui o "ℹ︎" que estava escrito como caractere. Glifo tipográfico usado
+ * como ícone muda de desenho e de largura conforme a fonte instalada no sistema
+ * do usuário, e algumas famílias simplesmente não têm o caractere — nessas o
+ * cliente via um retângulo vazio antes da explicação mais importante da tela.
+ */
+function NotaDeEscopo({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className="muted"
+      style={{
+        display: 'flex',
+        gap: 7,
+        alignItems: 'flex-start',
+        fontSize: 11.5,
+        lineHeight: 1.35,
+        marginBottom: 12,
+      }}
+    >
+      {/* marginTop 1: alinha o quadrado do ícone com a primeira linha de texto,
+          que tem 11,5px — sem isso ele flutua acima da altura-x. */}
+      <Icon name="informacao" size={14} style={{ marginTop: 1 }} />
+      <span>{children}</span>
+    </div>
+  );
+}
 
 /**
  * A análise por marca cobre só produto de moda. Sem dizer isso, o total menor
@@ -30,19 +60,56 @@ const classColor: Record<string, string> = { A: 'green', B: 'amber', C: 'gray' }
 function BrandScopeNote({ scope }: { scope: Scope }) {
   if (scope === 'lentes') {
     return (
+      /* `.banner` já é flex com gap 10: o ícone entra como primeiro item e o
+         texto vai num <div> para não quebrar em vários itens de flex. */
       <div className="banner warn" style={{ fontSize: 12.5, lineHeight: 1.4 }}>
-        ⚠︎ O recorte escolhido é <strong>Lentes</strong>, e a análise por marca ainda não cobre
-        lente nem tratamento — são do setor de produção (laboratório) e terão módulo próprio. Por
-        isso esta visão sai vazia: troque o recorte para <strong>Óculos e relógios</strong>.
+        <Icon name="atencao" size={18} />
+        <div>
+          O recorte escolhido é <strong>Lentes</strong>, e a análise por marca ainda não cobre
+          lente nem tratamento — são do setor de produção (laboratório) e terão módulo próprio. Por
+          isso esta visão sai vazia: troque o recorte para <strong>Óculos e relógios</strong>.
+        </div>
       </div>
     );
   }
   return (
-    <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.35, marginBottom: 12 }}>
-      ℹ︎ A análise por marca considera <strong>óculos, armações e relógios</strong>. Lentes e
+    <NotaDeEscopo>
+      A análise por marca considera <strong>óculos, armações e relógios</strong>. Lentes e
       tratamentos ficam de fora — são do setor de produção (laboratório) e terão módulo próprio,
       então o total aqui é menor que o da visão por SKU.
-    </div>
+    </NotaDeEscopo>
+  );
+}
+
+/**
+ * Giro: número + estado escrito, no mesmo formato do CoverageBadge.
+ *
+ * Antes o chip levava só o número e o estado ficava por conta do tom (verde,
+ * âmbar, cinza). Esta é a tela que o cliente IMPRIME, e impressora não tem cor:
+ * em preto e branco 1,20 e 0,85 saíam no mesmo cinza, com o mesmo contorno. As
+ * faixas são as que já estavam no código — o que muda é que agora elas têm nome,
+ * ícone e espessura de filete, três canais que atravessam a folha.
+ */
+function GiroBadge({ giro }: { giro: number }) {
+  const n = giro.toFixed(2);
+  if (giro >= 1)
+    return (
+      <Selo tom="green" icone="aprovar" title="Vendeu ao menos uma vez o estoque no período.">
+        {n} · gira
+      </Selo>
+    );
+  if (giro > 0)
+    return (
+      <Selo tom="amber" icone="tendencia" title="Vendeu menos de uma vez o estoque no período.">
+        {n} · giro baixo
+      </Selo>
+    );
+  return (
+    /* "sem venda" é o mesmo termo que fmtMonths() usa na cobertura: um estado,
+       uma palavra, no produto inteiro. */
+    <Selo tom="gray" icone="estoque" title="Nenhuma venda no período com estoque em casa.">
+      {n} · sem venda
+    </Selo>
   );
 }
 
@@ -105,7 +172,14 @@ export function Reports() {
 
   return (
     <>
+      {/* Sem botão sólido nesta tela, e é de propósito.
+          Relatórios é leitura: escolher recorte, ler a tabela, levar em CSV.
+          Nenhuma dessas ações muda o estoque nem decide nada, então nenhuma
+          merece o ouro preenchido — o `eyebrow` "Consulta" já é o contrato que
+          as outras telas de leitura do console usam (Estoque, Produtos, Lojas,
+          Vendas). O sólido fica onde há decisão: Transferências, Planejamento. */}
       <PageHeader
+        eyebrow="Consulta"
         title="Relatórios"
         subtitle="Curva ABC (SKU ou marca), giro, cobertura de estoque e transferências sugeridas — todos exportáveis em CSV."
       />
@@ -175,15 +249,17 @@ export function Reports() {
           </select>
         )}
         {(storeId || tipo) && (
-          <button
-            className="btn sm ghost"
+          <Botao
+            variante="discreto"
+            pequeno
+            icone="limpar"
             onClick={() => {
               setStoreId('');
               setCategory('');
             }}
           >
             Limpar filtros
-          </button>
+          </Botao>
         )}
         <span style={{ flex: 1 }} />
         {tab === 'abc' && (
@@ -272,11 +348,11 @@ export function Reports() {
       {/* Por SKU o recorte também vale, e o total menor tem que ter explicação
           na tela — não no suporte. */}
       {tab === 'abc' && dimension === 'product' && scope !== 'todos' && abc.data?.periodRevenue != null && (
-        <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.35, marginBottom: 12 }}>
-          ℹ︎ O total abaixo é do recorte <strong>{scope === 'lentes' ? 'Lentes' : 'óculos, armações e relógios'}</strong>
+        <NotaDeEscopo>
+          O total abaixo é do recorte <strong>{scope === 'lentes' ? 'Lentes' : 'óculos, armações e relógios'}</strong>
           {tipo ? <> · <strong>{tipo}</strong></> : null}. A receita da rede no mesmo período foi{' '}
           {formatBRL(abc.data.periodRevenue)} — a diferença é lente, tratamento e demais categorias.
-        </div>
+        </NotaDeEscopo>
       )}
 
       {tab === 'abc' ? (
@@ -326,6 +402,13 @@ export function Reports() {
                 <tbody>
                   {abc.data.rows.slice(0, 100).map((r) => (
                     <tr key={r.key}>
+                      {/* Este continua chip cru, sem <Selo> e sem ícone, e é
+                          decisão: classe ABC não é estado operacional, é
+                          classificação — e a letra A/B/C JÁ é o rótulo escrito.
+                          Em cinza as três se separam pela letra e pela espessura
+                          do filete que o `.badge` dá a cada família. Um ícone
+                          aqui não acrescentaria canal nenhum: acrescentaria
+                          ruído em 100 linhas. */}
                       <td>
                         <span className={`badge ${classColor[r.class]}`}>{r.class}</span>
                       </td>
@@ -379,9 +462,7 @@ export function Reports() {
                     <td className="num">{r.unitsSold}</td>
                     <td className="num">{r.currentStock}</td>
                     <td className="num">
-                      <span className={`badge ${r.turnover >= 1 ? 'green' : r.turnover > 0 ? 'amber' : 'gray'}`}>
-                        {r.turnover.toFixed(2)}
-                      </span>
+                      <GiroBadge giro={r.turnover} />
                     </td>
                     <td className="num">{r.daysOfInventory ?? '—'}</td>
                   </tr>
@@ -429,11 +510,14 @@ export function Reports() {
                 a rede, e onde a tabela por marca ainda é amostra, ela diz. */}
             {coverage.data.sampled && (
               <div className="banner warn" style={{ marginTop: 16, marginBottom: 0, fontSize: 12.5, lineHeight: 1.4 }}>
-                ⚠︎ A <strong>cobertura geral</strong> acima é da rede inteira (
-                {coverage.data.sampled.networkStockUnits.toLocaleString('pt-BR')} un.), a mesma base do
-                Dashboard. As linhas por marca abaixo saem da amostra de catálogo desta demonstração
-                estática ({coverage.data.sampled.stockUnits.toLocaleString('pt-BR')} un.), então elas
-                não somam o total. No sistema em produção as duas leem a mesma base.
+                <Icon name="atencao" size={18} />
+                <div>
+                  A <strong>cobertura geral</strong> acima é da rede inteira (
+                  {coverage.data.sampled.networkStockUnits.toLocaleString('pt-BR')} un.), a mesma base do
+                  Dashboard. As linhas por marca abaixo saem da amostra de catálogo desta demonstração
+                  estática ({coverage.data.sampled.stockUnits.toLocaleString('pt-BR')} un.), então elas
+                  não somam o total. No sistema em produção as duas leem a mesma base.
+                </div>
               </div>
             )}
             <div className="card" style={{ marginTop: 16, padding: 0 }}>
@@ -487,7 +571,10 @@ export function Reports() {
                 <strong style={{ color: 'var(--text)' }}>vendidas</strong> no período e{' '}
                 <span className="muted">em estoque</span> hoje. Estoque alto com venda zero numa
                 bandeira, enquanto a marca vende em outra, ganha o selo{' '}
-                <span className="badge amber">remanejar</span>.
+                <Selo tom="amber" icone="transferencias">
+                  remanejar
+                </Selo>
+                .
               </p>
               {(() => {
                 const sinalizadas = brandMix.data!.rows.filter((r) => r.moveFrom.length > 0);
@@ -560,16 +647,29 @@ export function Reports() {
                         return (
                           <td key={b} className="num">
                             {cell ? (
+                              /* A célula sinalizada carregava só o tom âmbar: em cinza, e
+                                 na folha impressa, ela ficava idêntica às vizinhas. O ícone
+                                 de transferência dá FORMA ao selo — e é o mesmo ícone do
+                                 chip "remanejar" da legenda acima, para que legenda e
+                                 tabela digam a mesma coisa com o mesmo desenho. */
                               <span
                                 className={flagged ? 'badge amber' : undefined}
+                                style={
+                                  flagged
+                                    ? { display: 'inline-flex', alignItems: 'center', gap: 5, verticalAlign: 'middle' }
+                                    : undefined
+                                }
                                 title={
                                   flagged
                                     ? `${cell.unitsSold} vendidas e ${cell.stockUnits} em estoque: parada aqui, mas a marca vende em outra bandeira`
                                     : `${cell.unitsSold} vendidas · ${cell.stockUnits} em estoque`
                                 }
                               >
-                                <strong>{cell.unitsSold}</strong>
-                                <span className="muted"> · {cell.stockUnits.toLocaleString('pt-BR')}</span>
+                                {flagged && <Icon name="transferencias" size={12} />}
+                                <span>
+                                  <strong>{cell.unitsSold}</strong>
+                                  <span className="muted"> · {cell.stockUnits.toLocaleString('pt-BR')}</span>
+                                </span>
                               </span>
                             ) : (
                               <span className="muted">—</span>
@@ -621,6 +721,12 @@ export function Reports() {
               <thead>
                 <tr>
                   <th>Produto</th>
+                  {/* A seta aqui é PONTUAÇÃO, não ícone: ela liga duas palavras
+                      dentro de uma frase ("De → Para", "Centro → Shopping") e é
+                      lida como "para". Trocar por <Icon> quebraria a linha do
+                      texto e obrigaria a alinhar um SVG dentro do nome da loja.
+                      A regra de "zero glifo como ícone" vale para o glifo que
+                      ocupa lugar de botão ou de marcador de estado. */}
                   <th>De → Para</th>
                   <th className="num">Qtd</th>
                   <th>Motivo</th>

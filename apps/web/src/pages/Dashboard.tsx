@@ -13,6 +13,18 @@ import { StatCard, PageHeader, Loading, CoverageBadge, fmtMonths } from '../comp
 import { useAuth } from '../auth/AuthContext';
 import { useScope } from '../lib/scope';
 
+/**
+ * O job de sincronização devolve o enum cru (`SUCCESS`, `PARTIAL`…) e ele estava
+ * chegando em inglês no indicador — na primeira tela depois do login, que é a
+ * que o cliente abre para a equipe dele. O console inteiro fala português.
+ */
+const situacaoDaSincronizacao: Record<string, string> = {
+  SUCCESS: 'Sucesso',
+  RUNNING: 'Em andamento',
+  PARTIAL: 'Parcial',
+  FAILED: 'Falhou',
+};
+
 export function Dashboard() {
   const { isAdmin } = useAuth();
   const { scope } = useScope();
@@ -84,8 +96,12 @@ export function Dashboard() {
       {orders.data && orders.data.summary.items > 0 && (
         <div className="banner warn">
           <span className="dot amber" />
+          {/* Saiu o emoji de carrinho que abria a frase: muda de desenho
+              a cada sistema e some no cinza; e a anatomia do banner já é
+              [marcador de estado] + [frase], igual nos outros dois acima —
+              trocar por um ícone aqui quebraria essa uniformidade. */}
           <div>
-            🛒 <strong>{orders.data.summary.items}</strong> item(ns) no ponto de reposição —{' '}
+            <strong>{orders.data.summary.items}</strong> item(ns) no ponto de reposição —{' '}
             {orders.data.summary.suppliers} pedido(s) de fornecedor somando{' '}
             <strong>{formatBRL(orders.data.summary.total)}</strong>.{' '}
             <Link to="/admin/planejamento" style={{ color: 'var(--accent)' }}>Ver pedidos prontos →</Link>
@@ -129,7 +145,10 @@ export function Dashboard() {
               }
               hint={
                 summary.data.lastSync
-                  ? `${summary.data.lastSync.status} · ${summary.data.lastSync.recordsWritten} registros`
+                  ? `${
+                      situacaoDaSincronizacao[summary.data.lastSync.status] ??
+                      summary.data.lastSync.status
+                    } · ${summary.data.lastSync.recordsWritten} registros`
                   : 'Nunca executada'
               }
             />

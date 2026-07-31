@@ -235,8 +235,30 @@ const onOrderQty = (productId: string) =>
     .filter((r) => r.status === 'SENT')
     .reduce((s, r) => s + r.items.filter((i) => i.productId === productId).reduce((a, i) => a + i.quantity, 0), 0);
 
-// Produtos com provador (AR) — os de Armação / Óculos de Sol
-const arProductIds = products.filter((p) => p.category === 'Armação' || p.category === 'Óculos de Sol').map((p) => p.id);
+// Produtos com provador (AR) — armações e óculos COM saldo na rede.
+//
+// A comparação era `p.category === 'Armação' || p.category === 'Óculos de Sol'`,
+// que são os rótulos do catálogo FICTÍCIO (a constante CATEGORIAS, no topo deste
+// arquivo). Quando a demo passou a carregar o dataset real da rede, a categoria
+// passou a vir crua do ERP — 'ARMACAO' e 'OCULOS', caixa alta e sem acento — e
+// nenhum produto casou: `/ar/products` devolvia zero linha e a vitrine abria
+// vazia dizendo "cadastre assets de AR", como se fosse falta de conteúdo.
+// Comparar rótulo de ERP por igualdade literal é a armadilha; normalizar (sem
+// acento, caixa alta) e testar o PREFIXO atende os dois catálogos de uma vez e
+// mantém 'PORTA OCULOS' (acessório, não é óculos) de fora.
+// \p{Diacritic} em vez da faixa U+0300–U+036F escrita à mão: acento combinante
+// solto no código-fonte é invisível no editor e some em diff mal configurado.
+const semAcento = (s: string) => (s ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toUpperCase();
+const temProvador = (categoria: string) => {
+  const c = semAcento(categoria);
+  return c.startsWith('ARMACAO') || c.startsWith('OCULOS');
+};
+// Saldo > 0 espelha a regra do backend (seed.ts exige `stockItems some quantity
+// gt 0`): sem isso a vitrine ofereceria "Adicionar" em produto que o carrinho
+// recusa com "saldo insuficiente".
+const arProductIds = products
+  .filter((p) => temProvador(p.category) && stores.some((s) => (stockQty.get(key(s.id, p.id)) ?? 0) > 0))
+  .map((p) => p.id);
 
 // Estado mutável (carrinho, pedidos, movimentações, provas)
 let cart: { storeId: string; items: { productId: string; quantity: number }[] } | null = null;

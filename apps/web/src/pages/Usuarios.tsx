@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createUser,
@@ -9,10 +9,39 @@ import {
   type AdminUser,
   type Role,
 } from '../api/client';
-import { PageHeader, Loading } from '../components/ui';
+import { PageHeader, Loading, Selo, Botao, BotaoPrimario } from '../components/ui';
+import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 
 const roleLabel: Record<Role, string> = { ADMIN: 'Rede (ADMIN)', STORE_MANAGER: 'Gestor de loja' };
+
+/**
+ * Falha de gravação: filete de estado à esquerda, ícone e frase em Inter.
+ *
+ * Substitui o `.badge red` que as duas ocorrências usavam. O chip é mono caixa
+ * alta com 0,18em de entreletras — desenho de carimbo curto, não de frase; a
+ * mensagem que o servidor devolve ("Já existe um usuário com este e-mail") saía
+ * ilegível. O vermelho continua, mas agora é o terceiro canal, depois da palavra
+ * e do ícone.
+ */
+function ErroDeGravacao({ children, style }: { children: ReactNode; style?: CSSProperties }) {
+  return (
+    <div
+      role="alert"
+      className="banner"
+      style={{
+        fontSize: 12.5,
+        lineHeight: 1.4,
+        color: 'var(--red)',
+        borderLeftColor: 'var(--red)',
+        ...style,
+      }}
+    >
+      <Icon name="atencao" size={18} />
+      <div>{children}</div>
+    </div>
+  );
+}
 
 export function Usuarios() {
   const { user: me } = useAuth();
@@ -24,12 +53,20 @@ export function Usuarios() {
 
   return (
     <>
-      <div className="row-between">
-        <PageHeader title="Usuários" subtitle="Contas de acesso da rede: papéis, lojas, status e senhas." />
-        <button className="btn" onClick={() => setCreating(true)}>
-          Novo usuário
-        </button>
-      </div>
+      {/* O único sólido da tela. Tudo o mais aqui é edição em linha (papel, loja,
+          ativo/inativo, senha) — ação por item, que fica em discreto para não
+          transformar a tabela numa parede de ouro. Criar uma conta é a ação que
+          a tela existe para oferecer e acontece uma vez só. */}
+      <PageHeader
+        eyebrow="Governança"
+        title="Usuários"
+        subtitle="Contas de acesso da rede: papéis, lojas, status e senhas."
+        actions={
+          <BotaoPrimario icone="mais" onClick={() => setCreating(true)}>
+            Novo usuário
+          </BotaoPrimario>
+        }
+      />
 
       {users.isLoading ? (
         <Loading />
@@ -133,31 +170,49 @@ function UserRow({
           <span className="muted">— rede —</span>
         )}
       </td>
+      {/* Ativo e Inativo já vinham escritos, mas o único reforço era o tom — e
+          a linha inteira ainda escurece por `opacity`, que some na impressão.
+          Com ícone, a conta desligada tem forma própria mesmo em cinza. */}
       <td>
-        <span className={`badge ${user.active ? 'green' : 'gray'}`}>{user.active ? 'Ativo' : 'Inativo'}</span>
+        {user.active ? (
+          <Selo tom="green" icone="aprovar" title="A conta entra no console normalmente.">
+            Ativo
+          </Selo>
+        ) : (
+          <Selo tom="gray" icone="recusar" title="A conta existe, mas não consegue entrar.">
+            Inativo
+          </Selo>
+        )}
       </td>
       <td className="muted">
         {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('pt-BR') : 'nunca'}
       </td>
       <td className="right">
-        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
-          <button
-            className="btn ghost sm"
+        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4, alignItems: 'stretch' }}>
+          <Botao
+            variante="discreto"
+            pequeno
+            icone={user.active ? 'recusar' : 'aprovar'}
             disabled={isSelf || patch.isPending}
             title={isSelf ? 'Você não pode desativar a própria conta' : undefined}
             onClick={() => patch.mutate({ active: !user.active })}
           >
             {user.active ? 'Desativar' : 'Reativar'}
-          </button>
-          <button className="btn ghost sm" disabled={reset.isPending} onClick={askReset}>
-            {reset.isSuccess ? 'Senha ok ✓' : 'Resetar senha'}
-          </button>
+          </Botao>
+          {/* O "✓" era um glifo de texto fazendo papel de ícone: renderiza com
+              largura diferente em cada sistema e não tem o traço de 1,3 da
+              grade. Vira <Icon name="check">, e o rótulo perde o carimbo. */}
+          <Botao
+            variante="discreto"
+            pequeno
+            icone={reset.isSuccess ? 'check' : 'sincronizacao'}
+            disabled={reset.isPending}
+            onClick={askReset}
+          >
+            {reset.isSuccess ? 'Senha ok' : 'Resetar senha'}
+          </Botao>
         </span>
-        {error && (
-          <div className="badge red" style={{ display: 'block', marginTop: 6 }}>
-            {error}
-          </div>
-        )}
+        {error && <ErroDeGravacao style={{ marginTop: 6, marginBottom: 0, textAlign: 'left' }}>{error}</ErroDeGravacao>}
       </td>
     </tr>
   );
@@ -198,7 +253,9 @@ function CreateUserModal({
           save.mutate();
         }}
       >
-        <h3 style={{ marginTop: 0 }}>Novo usuário</h3>
+        <h3 className="section-title" style={{ marginTop: 0 }}>
+          Novo usuário
+        </h3>
         <div className="field">
           <label>Nome</label>
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required minLength={2} autoFocus />
@@ -230,18 +287,16 @@ function CreateUserModal({
             </select>
           </div>
         )}
-        {error && (
-          <div className="badge red" style={{ display: 'block', padding: 10, marginBottom: 12 }}>
-            {error}
-          </div>
-        )}
+        {error && <ErroDeGravacao style={{ marginBottom: 12 }}>{error}</ErroDeGravacao>}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button type="button" className="btn ghost" onClick={onClose}>
+          <Botao variante="discreto" onClick={onClose}>
             Cancelar
-          </button>
-          <button className="btn" type="submit" disabled={save.isPending}>
+          </Botao>
+          {/* O sólido do modal; o da página ("Novo usuário") fica atrás do
+              overlay e inacessível enquanto este diálogo existe. */}
+          <BotaoPrimario icone="check" type="submit" disabled={save.isPending}>
             {save.isPending ? 'Criando…' : 'Criar'}
-          </button>
+          </BotaoPrimario>
         </div>
       </form>
     </div>

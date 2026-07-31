@@ -1,34 +1,104 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { addToCart, getArProducts, getCart, getStores, formatBRL } from '../api/client';
+import { addToCart, getArProducts, getCart, getStores, formatBRL, type ArProduct } from '../api/client';
 import { Loading } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { VirtualTryOn } from '../ar/VirtualTryOn';
+import { useTemaDaVitrine } from '../hooks/useTemaDaVitrine';
 
 /** `.btn` não é flex no CSS; sem isto o ícone empurra a linha de base do rótulo. */
 const botaoComIcone: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 7 };
+/** `.badge` é inline-block; o chip só acomoda ícone + palavra em inline-flex. */
+const chipComIcone: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6 };
 
 /**
  * Retorno da mutação em forma de aviso.
  *
- * Antes era só uma string com "✓" colado no fim e um `.badge blue` para sucesso
- * e erro igualmente. Emoji não é ícone (renderiza diferente em cada sistema e
- * ignora a cor da marca) e um chip neutro para as duas respostas apaga a
- * diferença entre "foi" e "não foi". Agora o tom é dado por classe, ícone E
+ * Antes era só uma string com um visto colado no fim e um `.badge blue` para
+ * sucesso e erro igualmente. Emoji não é ícone (renderiza diferente em cada
+ * sistema e ignora a cor da marca) e um chip neutro para as duas respostas apaga
+ * a diferença entre "foi" e "não foi". Agora o tom é dado por classe, ícone E
  * palavra — a cor sozinha nunca decide, que é a exigência de 1.4.1 e a razão
  * prática de parte dos usuários não separar os tons quentes entre si.
  */
 type Aviso = { texto: string; ok: boolean };
 
+/**
+ * Quantos cards a grade mostra por vez.
+ *
+ * O catálogo real da rede traz 337 modelos com provador e saldo. Despejar os 337
+ * de uma vez não é vitrine, é listagem de ERP: são 85 fileiras da grade de 4 —
+ * altura suficiente para a captura de página inteira do Chromium estourar o
+ * tempo limite ao tentar renderizá-la — e o preço, que é o número-herói do
+ * card, deixa de ser lido porque não há hierarquia possível em 337 repetições.
+ * 24 preenche seis fileiras e cabe em duas rolagens.
+ */
+const PAGINA = 24;
+
+/**
+ * Nome de exibição das categorias do ERP.
+ *
+ * O dataset traz a categoria crua da rede — 'ARMACAO', 'OCULOS' —, que é como o
+ * sistema de origem escreve e como o console interno deve mesmo mostrar. Mas
+ * esta é a única tela que o CONSUMIDOR vê: caixa alta sem acento ali não é
+ * padrão de dado, é erro de português. A tradução é só de rótulo; o valor que
+ * filtra continua sendo o do ERP, então nenhum filtro depende desta tabela.
+ */
+const NOME_CATEGORIA: Record<string, string> = {
+  ARMACAO: 'Armação',
+  OCULOS: 'Óculos de sol',
+  'OCULOS DE SOL': 'Óculos de sol',
+};
+const semAcento = (s: string) => (s ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toUpperCase();
+/** Exportado porque a página de produto mostra a mesma categoria no rótulo de
+ *  abertura: uma tabela só evita que as duas telas divirjam no nome. */
+export const nomeCategoria = (c: string | null) => (c ? NOME_CATEGORIA[semAcento(c)] ?? c : 'Sem categoria');
+
+/**
+ * Onde o saldo deixa de ser dado e vira alerta — calibrado contra o catálogo
+ * real, não escolhido por gosto.
+ *
+ * Com o limiar em 5 unidades, 195 dos 337 modelos (58%) apareciam com o selo
+ * âmbar: a "exceção" era a maioria da grade e o âmbar deixava de significar
+ * qualquer coisa — é o mesmo mecanismo pelo qual o dourado em todo botão faria
+ * o dourado sumir. Em 1 unidade o selo cai para 56 modelos (17%, cerca de um
+ * por fileira de quatro) e volta a ser lido como aviso. O saldo dos demais
+ * continua escrito no card, em número; só não é gritado.
+ */
+const LIMIAR_ULTIMA = 1;
+
+/**
+ * Disponibilidade do modelo na rede, em três estados.
+ *
+ * COR NUNCA SOZINHA: cada estado carrega palavra escrita, e os dois fora do
+ * normal carregam também ícone e o filete do `.badge` — âmbar com a régua
+ * esquerda de 2px para "atenção", cinza só de contorno para o inerte
+ * ("esgotado" não pede reação; ele apenas encerra a compra daquele card). Sob
+ * `filter: grayscale(1)` continua legível qual é qual, porque a diferença está
+ * na palavra e na forma, não no tom.
+ *
+ * O estado saudável NÃO ganha chip: 337 selos verdes seriam ruído e ainda
+ * roubariam a atenção dos poucos que importam. Ele fica num rótulo em mono —
+ * dado de ficha, que é exatamente o que o manual reserva para a JetBrains Mono.
+ */
+function disponibilidade(unidades: number) {
+  if (unidades <= 0) return { tipo: 'esgotado' as const, rotulo: 'Esgotado' };
+  if (unidades <= LIMIAR_ULTIMA) return { tipo: 'ultima' as const, rotulo: 'Última unidade' };
+  return { tipo: 'ok' as const, rotulo: `${unidades} un. na rede` };
+}
+
 export function Loja() {
+  useTemaDaVitrine();
+
   const qc = useQueryClient();
   const [storeId, setStoreId] = useState('');
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
   const [tryOn, setTryOn] = useState<string | null>(null);
   const [msg, setMsg] = useState<Aviso | null>(null);
+  const [visiveis, setVisiveis] = useState(PAGINA);
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
   const products = useQuery({ queryKey: ['ar-products'], queryFn: getArProducts });
@@ -36,15 +106,31 @@ export function Loja() {
 
   const effectiveStore = storeId || stores.data?.rows[0]?.id || '';
 
-  const allRows = products.data?.rows ?? [];
-  const categories = Array.from(new Set(allRows.map((p) => p.category).filter(Boolean))) as string[];
-  const rows = allRows.filter((p) => {
+  const allRows = useMemo(() => products.data?.rows ?? [], [products.data]);
+  const categories = useMemo(
+    () => Array.from(new Set(allRows.map((p) => p.category).filter(Boolean))) as string[],
+    [allRows],
+  );
+  const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const matchSearch =
-      !q || p.description.toLowerCase().includes(q) || (p.brand ?? '').toLowerCase().includes(q);
-    const matchCat = !category || p.category === category;
-    return matchSearch && matchCat;
-  });
+    return allRows.filter((p) => {
+      const matchSearch =
+        !q || p.description.toLowerCase().includes(q) || (p.brand ?? '').toLowerCase().includes(q);
+      const matchCat = !category || p.category === category;
+      return matchSearch && matchCat;
+    });
+  }, [allRows, search, category]);
+
+  // Filtrar tem que devolver a grade ao topo da paginação: sem isto, quem já
+  // clicou em "Mostrar mais" três vezes e depois busca "RAY BAN" continua com a
+  // janela grande aberta sobre um resultado de 12 itens.
+  useEffect(() => setVisiveis(PAGINA), [search, category]);
+
+  const temFiltro = search.trim() !== '' || category !== '';
+  const limparFiltros = () => {
+    setSearch('');
+    setCategory('');
+  };
 
   const add = useMutation({
     mutationFn: (productId: string) => addToCart({ productId, storeId: effectiveStore, quantity: 1 }),
@@ -61,6 +147,7 @@ export function Loja() {
   });
 
   const cartCount = cart.data?.items.reduce((s, i) => s + i.quantity, 0) ?? 0;
+  const nomeLoja = stores.data?.rows.find((s) => s.id === effectiveStore)?.name ?? '';
 
   return (
     <>
@@ -71,8 +158,8 @@ export function Loja() {
         (`.mesh` é inset:0 absoluto) e o conteúdo sobe para z-index 1, senão a
         máscara de pontos passaria por cima do título.
 
-        A malha fica SÓ aqui, uma vez por tela. Repetida nos 20 cards da grade,
-        o dourado somado passaria dos 5% de área que o manual autoriza e viraria
+        A malha fica SÓ aqui, uma vez por tela. Repetida nos cards da grade, o
+        dourado somado passaria dos 5% de área que o manual autoriza e viraria
         textura de fundo — exatamente o ruído que a regra existe para evitar.
       */}
       <section className="store-hero" style={{ position: 'relative' }}>
@@ -98,28 +185,41 @@ export function Loja() {
           placeholder="Buscar óculos ou marca…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          aria-label="Buscar óculos ou marca"
           style={{ minWidth: 220 }}
         />
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+        <select value={category} onChange={(e) => setCategory(e.target.value)} aria-label="Categoria">
           <option value="">Todas as categorias</option>
           {categories.map((c) => (
             <option key={c} value={c}>
-              {c}
+              {nomeCategoria(c)}
             </option>
           ))}
         </select>
-        <select value={effectiveStore} onChange={(e) => setStoreId(e.target.value)}>
+        <select value={effectiveStore} onChange={(e) => setStoreId(e.target.value)} aria-label="Loja de retirada">
           {stores.data?.rows.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}
             </option>
           ))}
         </select>
+        {/* Some quando a busca não devolve nada: ali o mesmo botão já está no
+            estado vazio, onde a pessoa está olhando. Dois botões idênticos na
+            mesma tela não são reforço, são ruído — a mesma regra que tira o
+            "Continuar comprando" do carrinho vazio. */}
+        {temFiltro && rows.length > 0 && (
+          <button className="btn ghost sm" style={botaoComIcone} onClick={limparFiltros}>
+            <Icon name="limpar" size={15} />
+            Limpar filtros
+          </button>
+        )}
+        {/* O aviso entra ANTES do link do carrinho, que carrega marginLeft:auto:
+            assim ele aparece e some sem deslocar o botão de lugar. */}
         {msg && (
           <span
             className={`badge ${msg.ok ? 'green' : 'red'}`}
             role="status"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px' }}
+            style={{ ...chipComIcone, padding: '6px 12px' }}
           >
             <Icon name={msg.ok ? 'check' : 'atencao'} size={14} />
             {msg.texto}
@@ -140,69 +240,71 @@ export function Loja() {
       {products.isLoading ? (
         <Loading />
       ) : rows.length > 0 ? (
-        <div className="grid grid-4">
-          {rows.map((p) => (
-            <div className="card" key={p.productId}>
-              {/*
-                Lugar da foto do produto. O gradiente `#213354→#16213e` e o
-                desenho em `#4f8cff` eram do tema azul anterior, cravados no JSX
-                — cor que não passava por token nenhum e sobreviveu à troca de
-                paleta. A superfície agora é papel secundário e o desenho é o
-                ícone "loja" (óculos) da grade 24 do manual, herdando a cor por
-                currentColor.
-
-                --ouro-dark, não --ouro: ouro puro sobre esta superfície dá
-                1.77:1 e o traço simplesmente não é percebido.
-              */}
-              <div
-                style={{
-                  height: 120,
-                  background: 'var(--panel-2)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--ouro-dark)',
-                  display: 'grid',
-                  placeItems: 'center',
-                  marginBottom: 12,
-                }}
-              >
-                <Icon name="loja" size={64} />
-              </div>
-              <Link to={`/loja/produto/${p.productId}`} style={{ fontWeight: 600, color: 'var(--text)' }}>
-                {p.description}
-              </Link>
-              {/* Marca e categoria são dado de ficha, não texto corrido: é o
-                  caso exato do rótulo em mono caixa alta do manual. */}
-              <div className="label" style={{ marginBottom: 6 }}>
-                {p.brand ?? ''}
-                {p.category ? ` · ${p.category}` : ''}
-              </div>
-              {/* Preço é o número-herói do card — Fraunces com tabular-nums. */}
-              <div className="kpi" style={{ marginBottom: 10 }}>
-                {formatBRL(p.price)}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn ghost sm" style={botaoComIcone} onClick={() => setTryOn(p.productId)}>
-                  <Icon name="loja" size={15} />
-                  Provar
-                </button>
-                <button
-                  className="btn sm"
-                  style={botaoComIcone}
-                  disabled={add.isPending || !effectiveStore}
-                  onClick={() => add.mutate(p.productId)}
-                >
-                  <Icon name="mais" size={15} />
-                  Adicionar
-                </button>
+        <>
+          {/* NÚMERO É HERÓI, RÓTULO É SERVIÇO: a contagem do resultado é o dado
+              da barra, então vem em Fraunces com o rótulo em mono por cima. A
+              frase ao lado é frase — Inter em .muted, nunca o carimbo em mono. */}
+          <div className="row-between" style={{ alignItems: 'flex-end', marginBottom: 14, gap: 16 }}>
+            <div>
+              <div className="label">{temFiltro ? 'Modelos encontrados' : 'Modelos com provador'}</div>
+              <div className="kpi" style={{ fontSize: 22 }}>
+                {rows.length}
               </div>
             </div>
-          ))}
-        </div>
+            <p className="muted" style={{ margin: 0, fontSize: 13, textAlign: 'right' }}>
+              {rows.length > visiveis
+                ? `Mostrando ${visiveis} de ${rows.length}.`
+                : `Mostrando todos os ${rows.length}.`}
+              {nomeLoja ? ` Retirada em ${nomeLoja}.` : ''}
+            </p>
+          </div>
+
+          <div className="grid grid-4">
+            {rows.slice(0, visiveis).map((p) => (
+              <CardProduto
+                key={p.productId}
+                produto={p}
+                podeAdicionar={!!effectiveStore && !add.isPending}
+                onProvar={() => setTryOn(p.productId)}
+                onAdicionar={() => add.mutate(p.productId)}
+              />
+            ))}
+          </div>
+
+          {rows.length > visiveis && (
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 22 }}>
+              <button
+                className="btn"
+                style={botaoComIcone}
+                onClick={() => setVisiveis((v) => v + PAGINA)}
+              >
+                <Icon name="chevron-baixo" size={16} />
+                Mostrar mais {Math.min(PAGINA, rows.length - visiveis)} modelos
+              </button>
+            </div>
+          )}
+        </>
       ) : (
+        /*
+          Dois vazios diferentes, e a diferença importa: um é resultado de filtro
+          (tem saída, e a saída é um botão) e o outro é ausência de catálogo.
+          O texto do segundo dizia "Cadastre assets de AR" — instrução de
+          administrador na única tela que o cliente final abre.
+        */
         <div className="empty">
-          {allRows.length === 0
-            ? 'Nenhum produto com provador disponível. Cadastre assets de AR.'
-            : 'Nenhum produto encontrado com os filtros atuais.'}
+          {temFiltro ? (
+            <>
+              <p style={{ margin: '0 0 14px' }}>Nenhum modelo encontrado com estes filtros.</p>
+              <button className="btn ghost sm" style={{ ...botaoComIcone, margin: '0 auto' }} onClick={limparFiltros}>
+                <Icon name="limpar" size={15} />
+                Limpar filtros
+              </button>
+            </>
+          ) : (
+            <p style={{ margin: 0 }}>
+              Nenhum modelo com provador virtual disponível no momento. Volte em instantes.
+            </p>
+          )}
         </div>
       )}
 
@@ -218,5 +320,127 @@ export function Loja() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * Card da grade.
+ *
+ * Dois botões, nenhum sólido: "Provar" é terciário (fantasma) e "Adicionar" é a
+ * ação comum (contornado). Multiplicado por 24 cards visíveis, um sólido por
+ * card colocaria o dourado em muito além dos 5% de área do manual e o
+ * preenchimento deixaria de significar "decisão".
+ */
+function CardProduto({
+  produto,
+  podeAdicionar,
+  onProvar,
+  onAdicionar,
+}: {
+  produto: ArProduct;
+  podeAdicionar: boolean;
+  onProvar: () => void;
+  onAdicionar: () => void;
+}) {
+  const estado = disponibilidade(produto.available);
+  const esgotado = estado.tipo === 'esgotado';
+
+  return (
+    <article className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+      {/*
+        Lugar da foto do produto. O gradiente `#213354→#16213e` e o desenho em
+        `#4f8cff` eram do tema azul anterior, cravados no JSX — cor que não
+        passava por token nenhum e sobreviveu à troca de paleta. A superfície
+        agora é papel secundário e o desenho é o ícone "loja" (óculos) da grade
+        24 do manual, herdando a cor por currentColor.
+
+        `var(--accent)`, e não um token de ouro cravado: o alias da camada 2 é o
+        único que TROCA de valor com o tema. Fixar --ouro-dark aqui dava 3.74:1
+        no claro e 3.28:1 no escuro — passa raspando o piso de 1.4.11 para
+        elemento não textual e some no papel secundário escuro. Pelo alias são
+        4.94:1 no claro e 11.51:1 no escuro. (Ouro puro é pior ainda: 1.77:1
+        sobre esta superfície, traço que ninguém percebe.)
+      */}
+      <div
+        style={{
+          height: 120,
+          background: 'var(--panel-2)',
+          border: '1px solid var(--border)',
+          color: 'var(--accent)',
+          display: 'grid',
+          placeItems: 'center',
+          marginBottom: 12,
+        }}
+      >
+        <Icon name="loja" size={64} />
+      </div>
+
+      {/*
+        A descrição vem do ERP em caixa alta e com códigos de referência
+        ("RB3548NL 001 54 OCULOS RAY BAN"): comprimento irregular entre 20 e 60
+        caracteres. Sem o grampo de duas linhas a grade de 4 colunas ganha cards
+        de alturas diferentes e o preço — que é o número-herói — para em linhas
+        distintas em cada coluna, que é o que destrói a leitura de uma vitrine.
+      */}
+      <Link
+        to={`/loja/produto/${produto.productId}`}
+        style={{
+          fontWeight: 600,
+          color: 'var(--text)',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          minHeight: '2.9em',
+          lineHeight: 1.45,
+        }}
+        title={produto.description}
+      >
+        {produto.description}
+      </Link>
+
+      {/* Categoria é dado de ficha, não texto corrido: é o caso exato do rótulo
+          em mono caixa alta do manual. */}
+      <div className="label" style={{ marginTop: 4 }}>
+        {nomeCategoria(produto.category)}
+      </div>
+
+      {/* Preço é o número-herói do card — Fraunces com tabular-nums. */}
+      <div className="kpi" style={{ marginBottom: 8 }}>
+        {formatBRL(produto.price)}
+      </div>
+
+      {/* Estado operacional com palavra escrita (regra 1.4.1). O saudável fica
+          em rótulo de dado; os dois que pedem cautela viram chip com ícone. */}
+      <div style={{ marginBottom: 12, minHeight: 22 }}>
+        {estado.tipo === 'ok' ? (
+          <span className="label">{estado.rotulo}</span>
+        ) : (
+          <span className={`badge ${esgotado ? 'gray' : 'amber'}`} style={chipComIcone}>
+            <Icon name={esgotado ? 'menos' : 'atencao'} size={13} />
+            {estado.rotulo}
+          </span>
+        )}
+      </div>
+
+      {/* marginTop:auto encosta a dupla de botões no rodapé do card: com a
+          descrição em 1 ou 2 linhas, é o que mantém a linha de ação alinhada
+          entre as quatro colunas. */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 'auto' }}>
+        <button className="btn ghost sm" style={botaoComIcone} onClick={onProvar}>
+          <Icon name="loja" size={15} />
+          Provar
+        </button>
+        <button
+          className="btn sm"
+          style={botaoComIcone}
+          disabled={!podeAdicionar || esgotado}
+          onClick={onAdicionar}
+        >
+          <Icon name="mais" size={15} />
+          Adicionar
+        </button>
+      </div>
+    </article>
   );
 }

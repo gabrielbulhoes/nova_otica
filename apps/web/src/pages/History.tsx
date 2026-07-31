@@ -7,11 +7,31 @@ import {
   type DecisionOutcome,
   formatBRL,
 } from '../api/client';
-import { ExportCsv } from '../components/ui';
+import {
+  BotaoPrimario,
+  ExportCsv,
+  Loading,
+  PageHeader,
+  Selo,
+  StatCard,
+  type TomDeSelo,
+} from '../components/ui';
+import type { IconName } from '../brand/Icon';
 
-const OUTCOME_META: Record<DecisionOutcome, { label: string; cls: string }> = {
-  APPROVED: { label: 'Aprovado', cls: 'green' },
-  REJECTED: { label: 'Recusado', cls: 'red' },
+/**
+ * Aprovado e recusado NUNCA se separam só pelo verde e pelo vermelho aqui: esta
+ * é a tela que existe para virar PDF, e no papel (ou sob `filter:grayscale(1)`)
+ * os dois tons ficam a uma distância de luminância que não se lê. Cada
+ * ocorrência do par carrega, além do tom, o rótulo escrito e uma forma —
+ * ícone no selo, hachura na barra.
+ */
+const OUTCOME_META: Record<
+  DecisionOutcome,
+  { label: string; tom: TomDeSelo; icone: IconName; forte?: boolean }
+> = {
+  APPROVED: { label: 'Aprovado', tom: 'green', icone: 'aprovar' },
+  // forte: a recusa é a decisão que alguém pode precisar justificar depois.
+  REJECTED: { label: 'Recusado', tom: 'red', icone: 'recusar', forte: true },
 };
 
 const TYPE_LABEL: Record<string, string> = {
@@ -25,11 +45,51 @@ const shortDateTime = (iso: string) =>
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
 
+/* Preenchimento das barras. A recusa é hachurada: forma atravessa o cinza, o
+   daltonismo e a impressora — a cor, sozinha, não atravessa nenhum dos três.
+   `print-color-adjust: exact` porque o navegador não imprime fundo por padrão e,
+   sem isso, "Exportar PDF" entregaria um gráfico em branco. */
+const PREENCHIMENTO = {
+  aprovado: 'var(--green)',
+  recusado: 'repeating-linear-gradient(45deg, var(--red) 0 2px, var(--panel) 2px 4.5px)',
+} as const;
+
+const impressaoFiel = {
+  WebkitPrintColorAdjust: 'exact',
+  printColorAdjust: 'exact',
+} as const;
+
+/** Quadrado da legenda: o mesmo preenchimento que a barra usa, na mesma ordem. */
+function Amostra({ preenchimento }: { preenchimento: string }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: 'inline-block',
+        width: 11,
+        height: 11,
+        background: preenchimento,
+        border: '1px solid var(--border-strong)',
+        verticalAlign: -1,
+        ...impressaoFiel,
+      }}
+    />
+  );
+}
+
 /** Barra de série diária aprovados × recusados (sem dependência de gráfico). */
 function Series({ data }: { data: { date: string; approved: number; rejected: number }[] }) {
   const max = Math.max(1, ...data.map((d) => d.approved + d.rejected));
+  const aprovados = data.reduce((a, d) => a + d.approved, 0);
+  const recusados = data.reduce((a, d) => a + d.rejected, 0);
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 90, marginTop: 10 }}>
+    <div
+      // O leitor de tela não lê barra: sem o resumo, esta caixa é um silêncio de
+      // 90px de altura no meio da página.
+      role="img"
+      aria-label={`Série diária dos últimos ${data.length} dias: ${aprovados} decisões aprovadas e ${recusados} recusadas.`}
+      style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 90, marginTop: 10 }}
+    >
       {data.map((d) => {
         const total = d.approved + d.rejected;
         return (
@@ -39,10 +99,12 @@ function Series({ data }: { data: { date: string; approved: number; rejected: nu
             style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}
           >
             {d.rejected > 0 && (
-              <div style={{ height: `${(d.rejected / max) * 100}%`, background: 'var(--red)', borderRadius: '2px 2px 0 0' }} />
+              // Topo reto: a geometria do sistema só arredonda dentro da forma
+              // da marca — a barra não é a marca.
+              <div style={{ height: `${(d.rejected / max) * 100}%`, background: PREENCHIMENTO.recusado, ...impressaoFiel }} />
             )}
             {d.approved > 0 && (
-              <div style={{ height: `${(d.approved / max) * 100}%`, background: 'var(--green)' }} />
+              <div style={{ height: `${(d.approved / max) * 100}%`, background: PREENCHIMENTO.aprovado, ...impressaoFiel }} />
             )}
             {total === 0 && <div style={{ height: 2, background: 'var(--border)' }} />}
           </div>
@@ -66,53 +128,76 @@ export function History() {
 
   return (
     <div className="stack">
-      <div>
-        <h1>Histórico Geral</h1>
-        <p className="muted">
-          Toda decisão tomada sobre um card fica registrada: quem decidiu, quando, com que
-          justificativa e qual era o impacto naquele momento. Nada é sobrescrito.
-        </p>
-      </div>
+      {/* Era <h1> solto + <p className="muted"> — as outras 15 telas usam
+          <PageHeader>, e o parágrafo solto perdia o teto de 78ch do .page-sub:
+          o subtítulo desta página estava saindo numa linha só de ponta a ponta.
+          Sem `eyebrow`: nenhuma tela do console usa sobretítulo hoje, e
+          estrear um aqui criaria a divergência que este ajuste veio fechar. */}
+      <PageHeader
+        title="Histórico Geral"
+        subtitle="Toda decisão tomada sobre um card fica registrada: quem decidiu, quando, com que justificativa e qual era o impacto naquele momento. Nada é sobrescrito."
+        // window.print() leva a página inteira — indicadores, série, equipe e
+        // trilha. É ação de tela, não da tabela, então mora no cabeçalho. É
+        // também o ÚNICO sólido daqui: o CSV, que exporta só as linhas
+        // filtradas, fica terciário lá embaixo.
+        actions={
+          <BotaoPrimario
+            className="no-print"
+            icone="imprimir"
+            onClick={() => window.print()}
+            title="Abre o diálogo de impressão — escolha 'Salvar como PDF'"
+          >
+            Exportar PDF
+          </BotaoPrimario>
+        }
+      />
 
       {s && (
         <div className="grid grid-4">
-          <div className="card">
-            <div className="muted">Aprovados (30d)</div>
-            <div className="kpi" style={{ color: 'var(--green)' }}>{s.approved}</div>
-            <div className="muted" style={{ fontSize: 11.5 }}>{formatBRL(s.approvedImpact)} em impacto</div>
-          </div>
-          <div className="card">
-            <div className="muted">Recusados (30d)</div>
-            <div className="kpi" style={{ color: 'var(--red)' }}>{s.rejected}</div>
-            <div className="muted" style={{ fontSize: 11.5 }}>{formatBRL(s.rejectedImpact)} em impacto</div>
-          </div>
-          <div className="card">
-            <div className="muted">Tempo até decidir</div>
-            <div className="kpi">{s.avgDaysToDecide != null ? `${s.avgDaysToDecide}d` : '—'}</div>
-            <div className="muted" style={{ fontSize: 11.5 }}>média desde que o card apareceu</div>
-          </div>
-          <div className="card">
-            <div className="muted">SLA de decisão</div>
-            <div className="kpi">{s.slaDays}d</div>
-            <div className="muted" style={{ fontSize: 11.5 }}>além disso o card vira crítico</div>
-          </div>
+          {/* Os quatro indicadores usavam <div className="muted"> como rótulo,
+              em Inter minúsculo, enquanto Dashboard, BI, Alertas e Decisões
+              desenham o mesmo componente conceitual com <StatCard> (rótulo em
+              mono caixa alta, número em Fraunces). Duas aparências para a mesma
+              coisa no mesmo produto. Agora é o componente compartilhado. */}
+          <StatCard
+            label="Aprovados (30d)"
+            icon="aprovar"
+            value={<span style={{ color: 'var(--green)' }}>{s.approved}</span>}
+            hint={`${formatBRL(s.approvedImpact)} em impacto`}
+          />
+          <StatCard
+            label="Recusados (30d)"
+            icon="recusar"
+            value={<span style={{ color: 'var(--red)' }}>{s.rejected}</span>}
+            hint={`${formatBRL(s.rejectedImpact)} em impacto`}
+          />
+          <StatCard
+            label="Tempo até decidir"
+            value={s.avgDaysToDecide != null ? `${s.avgDaysToDecide}d` : '—'}
+            hint="média desde que o card apareceu"
+          />
+          <StatCard
+            label="SLA de decisão"
+            value={`${s.slaDays}d`}
+            hint="além disso o card vira crítico"
+          />
         </div>
       )}
 
       {s && s.series.length > 0 && (
         <div className="card">
-          <h2>Aprovações e recusas — últimos {s.series.length} dias</h2>
-          <div className="muted" style={{ fontSize: 12 }}>
-            <span style={{ color: 'var(--green)' }}>■</span> aprovados ·{' '}
-            <span style={{ color: 'var(--red)' }}>■</span> recusados
-          </div>
+          <h3 className="section-title">Aprovações e recusas — últimos {s.series.length} dias</h3>
+          <p className="muted" style={{ margin: '-4px 0 0', fontSize: 12 }}>
+            <Amostra preenchimento={PREENCHIMENTO.aprovado} /> aprovados ·{' '}
+            <Amostra preenchimento={PREENCHIMENTO.recusado} /> recusados
+          </p>
           <Series data={s.series} />
         </div>
       )}
 
       {s && s.byUser.length > 0 && (
         <div className="card">
-          <h2>Desempenho da equipe</h2>
+          <h3 className="section-title">Desempenho da equipe</h3>
           <p className="muted">Quem está decidindo — e quanto impacto passou pela mão de cada um.</p>
           <table className="table">
             <thead>
@@ -128,6 +213,8 @@ export function History() {
               {s.byUser.map((u) => (
                 <tr key={u.userId}>
                   <td>{u.name}</td>
+                  {/* O tom aqui é reforço: quem diz o que a coluna é, é o
+                      cabeçalho escrito acima dela. */}
                   <td className="num" style={{ color: 'var(--green)' }}>{u.approved}</td>
                   <td className="num" style={{ color: 'var(--red)' }}>{u.rejected}</td>
                   <td className="num">{u.approved + u.rejected}</td>
@@ -141,7 +228,9 @@ export function History() {
 
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <h2 style={{ marginRight: 'auto' }}>Trilha de decisões</h2>
+          <h3 className="section-title" style={{ marginRight: 'auto', marginBottom: 0 }}>
+            Trilha de decisões
+          </h3>
           <div className="segmented">
             {(['ALL', 'APPROVED', 'REJECTED'] as const).map((k) => (
               <button key={k} className={outcomeF === k ? 'active' : ''} onClick={() => setOutcomeF(k)}>
@@ -149,13 +238,6 @@ export function History() {
               </button>
             ))}
           </div>
-          <button
-            className="btn ghost no-print"
-            onClick={() => window.print()}
-            title="Abre o diálogo de impressão — escolha 'Salvar como PDF'"
-          >
-            ⎙ Exportar PDF
-          </button>
           <ExportCsv<DecisionHistoryRow>
             rows={rows}
             filename="decisoes"
@@ -172,11 +254,11 @@ export function History() {
         </div>
 
         {history.isLoading ? (
-          <p className="muted">Carregando…</p>
+          <Loading />
         ) : rows.length === 0 ? (
-          <p className="muted">
+          <div className="empty">
             Nenhuma decisão registrada ainda. Abra <strong>Decisões</strong> e aprove ou recuse um card.
-          </p>
+          </div>
         ) : (
           <table className="table">
             <thead>
@@ -203,7 +285,13 @@ export function History() {
                     <div className="muted" style={{ fontSize: 11 }}>{TYPE_LABEL[r.cardType] ?? r.cardType}</div>
                   </td>
                   <td>
-                    <span className={`badge ${OUTCOME_META[r.outcome].cls}`}>{OUTCOME_META[r.outcome].label}</span>
+                    <Selo
+                      tom={OUTCOME_META[r.outcome].tom}
+                      icone={OUTCOME_META[r.outcome].icone}
+                      forte={OUTCOME_META[r.outcome].forte}
+                    >
+                      {OUTCOME_META[r.outcome].label}
+                    </Selo>
                   </td>
                   <td className="num">{formatBRL(r.impact)}</td>
                   <td>{r.decidedByName}</td>

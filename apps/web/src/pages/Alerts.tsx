@@ -9,10 +9,25 @@ import {
   setMinStock,
   type StockAlert,
 } from '../api/client';
-import { PageHeader, Loading, StatCard } from '../components/ui';
+import { PageHeader, Loading, ErrorState, StatCard, Selo, Botao } from '../components/ui';
+import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { useScope } from '../lib/scope';
 
+/**
+ * Alertas de ruptura — a tela que diz o que está faltando agora.
+ *
+ * SEM BOTÃO PRIMÁRIO SÓLIDO, e por decisão: esta tela é leitura e triagem. As
+ * únicas coisas que ela deixa fazer são ajustar o mínimo de uma linha (utilitário
+ * de linha, nunca a ação da tela) e ir para o plano de transferências — e o manual
+ * é explícito em reservar o contornado para navegação e o sólido para "o que a
+ * tela existe para fazer". Não há uma ação de tela aqui; forçar um ouro
+ * preenchido só para ter um seria mentir sobre a hierarquia.
+ *
+ * O "OK" de cada linha, que era contornado em ouro, virou fantasma: com mais de
+ * uma dezena de linhas visíveis por vez, uma coluna inteira de ouro estourava
+ * sozinha os 5% de área dourada que o manual permite.
+ */
 export function Alerts() {
   const { isAdmin } = useAuth();
   const { scope } = useScope();
@@ -49,6 +64,7 @@ export function Alerts() {
   const transfers = rebalance.data?.rows.slice(0, 8) ?? [];
 
   const lojaEscolhida = stores.data?.rows.find((s) => s.id === storeId)?.name;
+  const filtrando = Boolean(storeId || tipo || level);
 
   return (
     <>
@@ -84,9 +100,11 @@ export function Alerts() {
           <option value="LOW">Somente estoque baixo</option>
         </select>
         <span style={{ flex: 1 }} />
-        {(storeId || tipo || level) && (
-          <button
-            className="btn sm ghost"
+        {filtrando && (
+          <Botao
+            variante="discreto"
+            pequeno
+            icone="limpar"
             onClick={() => {
               setStoreId('');
               setCategory('');
@@ -94,7 +112,7 @@ export function Alerts() {
             }}
           >
             Limpar filtros
-          </button>
+          </Botao>
         )}
       </div>
 
@@ -105,13 +123,17 @@ export function Alerts() {
             value={alerts.data.total}
             hint={[lojaEscolhida ?? 'Toda a rede', tipo || 'todos os tipos'].join(' · ')}
           />
-          <StatCard label="Rupturas (saldo 0)" value={alerts.data.out} />
-          <StatCard label="Estoque baixo" value={alerts.data.low} />
+          {/* Ícone nos dois indicadores de risco: é o segundo canal de leitura
+              antes do número, e é o que separa "ruptura" de "baixo" no cinza. */}
+          <StatCard label="Rupturas (saldo 0)" value={alerts.data.out} icon="atencao" />
+          <StatCard label="Estoque baixo" value={alerts.data.low} icon="prazo" />
         </div>
       )}
 
       <div className="card" style={{ marginTop: 16, padding: 0 }}>
-        {alerts.isLoading ? (
+        {alerts.isError ? (
+          <ErrorState message={alerts.error instanceof Error ? alerts.error.message : undefined} />
+        ) : alerts.isLoading ? (
           <Loading />
         ) : rows.length > 0 ? (
           <table>
@@ -129,9 +151,19 @@ export function Alerts() {
               {rows.map((r) => (
                 <tr key={`${r.storeId}-${r.productId}`}>
                   <td>
-                    <span className={`badge ${r.level === 'OUT' ? 'red' : 'amber'}`}>
-                      {r.level === 'OUT' ? 'Ruptura' : 'Baixo'}
-                    </span>
+                    {/* Três canais no selo: palavra, ícone e peso. O triângulo de
+                        atenção e o mostrador de prazo continuam distintos em
+                        escala de cinza, onde --terra e --ambar têm praticamente
+                        a mesma luminância (1.19:1 entre si). */}
+                    {r.level === 'OUT' ? (
+                      <Selo tom="red" icone="atencao" forte title="Saldo zero: não há o que vender nesta loja.">
+                        Ruptura
+                      </Selo>
+                    ) : (
+                      <Selo tom="amber" icone="prazo" title="Abaixo do estoque mínimo definido para esta loja.">
+                        Baixo
+                      </Selo>
+                    )}
                   </td>
                   <td>{r.description}</td>
                   <td>{r.storeName}</td>
@@ -147,17 +179,26 @@ export function Alerts() {
             </tbody>
           </table>
         ) : (
-          <div className="empty">
-            {storeId || tipo || level
-              ? 'Nenhum alerta com esses filtros.'
-              : 'Nenhum alerta. 🎉'}
+          <div
+            className="empty"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+          >
+            <Icon name={filtrando ? 'filtro' : 'aprovar'} size={18} />
+            <span>
+              {filtrando
+                ? 'Nenhum alerta com esses filtros.'
+                : 'Nenhum alerta — toda a rede está acima do estoque mínimo.'}
+            </span>
           </div>
         )}
       </div>
 
       {isAdmin && rebalance.data && transfers.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
-          <h3 className="section-title">↔︎ Transferências sugeridas — remanejar antes de comprar</h3>
+          <h3 className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="transferencias" size={20} />
+            Transferências sugeridas — remanejar antes de comprar
+          </h3>
           <p className="muted" style={{ marginTop: -4, marginBottom: 10, fontSize: 12.5 }}>
             A rede tem <strong>{rebalance.data.summary.units}</strong> unidades a mover em{' '}
             <strong>{rebalance.data.summary.suggestions}</strong> sugestões (custo zero): produto parado numa loja
@@ -167,6 +208,9 @@ export function Alerts() {
             <thead>
               <tr>
                 <th>Produto</th>
+                {/* A seta aqui é pontuação dentro do rótulo "De → Para", não
+                    ícone: um <Icon> no meio de um cabeçalho de coluna leria como
+                    ação clicável. Mesma razão na célula abaixo. */}
                 <th>De → Para</th>
                 <th className="num">Qtd</th>
                 <th>Motivo</th>
@@ -180,16 +224,25 @@ export function Alerts() {
                     {t.fromStoreName} <span className="muted">→</span> {t.toStoreName}
                   </td>
                   <td className="num">{t.quantity}</td>
-                  <td className="muted" style={{ fontSize: 12.5 }}>{t.reason}</td>
+                  <td className="muted" style={{ fontSize: 12.5 }}>
+                    {t.reason}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p style={{ marginTop: 10, marginBottom: 0 }}>
-            <Link to="/admin/relatorios" style={{ color: 'var(--accent)' }}>
-              Ver o relatório completo de transferências →
-            </Link>
-          </p>
+          <hr className="rule" />
+          {/* Navegação leva contornado, nunca sólido — é a regra do manual. Fica
+              <Link> (e não botão) para preservar abrir em nova aba e o menu do
+              botão direito, que um <button> com onClick joga fora. */}
+          <Link
+            to="/admin/relatorios"
+            className="btn sm"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+          >
+            <Icon name="relatorios" size={15} />
+            Ver o relatório completo de transferências
+          </Link>
         </div>
       )}
     </>
@@ -204,24 +257,31 @@ function MinStockEditor({ alert }: { alert: StockAlert }) {
     mutationFn: (v: number) => setMinStock(alert.productId, v, alert.storeId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['alerts'] }),
   });
+  // Depois de salvar, o campo volta a ficar "sujo" assim que o operador digita:
+  // sem isso o rótulo "Salvo" fica mentindo sobre um valor já alterado.
+  const alterado = value !== String(alert.threshold);
 
   return (
-    <span style={{ display: 'inline-flex', gap: 6 }}>
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
       <input
         type="number"
         min={0}
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        aria-label={`Estoque mínimo de ${alert.description} em ${alert.storeName}`}
         style={{ width: 70, padding: '4px 8px' }}
       />
-      <button
-        className="btn sm"
+      <Botao
+        variante="discreto"
+        pequeno
+        icone="check"
         disabled={save.isPending}
+        aria-disabled={save.isPending}
         title="Define o mínimo desta loja para este produto"
         onClick={() => save.mutate(Number(value))}
       >
-        OK
-      </button>
+        {save.isPending ? 'Salvando…' : save.isSuccess && !alterado ? 'Salvo' : 'Salvar'}
+      </Botao>
     </span>
   );
 }

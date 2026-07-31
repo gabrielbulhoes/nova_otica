@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useLiveInvalidation } from '../hooks/useLiveInvalidation';
@@ -102,6 +103,94 @@ export function useTemaDoConsole() {
   return { tema, alternar };
 }
 
+// ─── Dock que recolhe na rolagem ────────────────────────────────────────────
+
+/** Rolagem mínima que conta como gesto (px). Abaixo disso é tremor de trackpad. */
+const LIMIAR_ROLAGEM = 14;
+/** Dentro desta faixa do topo o dock fica sempre aberto. */
+const ZONA_DE_TOPO = 72;
+
+/**
+ * Recolhe o dock quando o usuário rola PARA BAIXO; devolve ele inteiro quando
+ * rola para cima, quando volta ao topo, e sempre que o dock recebe ponteiro ou
+ * foco. O dock flutua sobre o conteúdo, e a tela mais lida do console é uma
+ * tabela longa — lendo o fim de uma linha, a régua de atalhos vira uma tarja
+ * por cima do dado.
+ *
+ * Três decisões que não são detalhe:
+ *
+ * · O estado é do React e a classe sai do JSX. Escrever `classList` na mão a
+ *   partir do listener criaria um segundo dono do mesmo nó — na primeira
+ *   re-renderização por outra causa (troca de rota, tema, invalidação de
+ *   query) o React repintaria o className e apagaria a classe silenciosamente.
+ *
+ * · O listener é PASSIVO e coalescido em requestAnimationFrame. O evento de
+ *   rolagem chega dezenas de vezes por segundo e ler `scrollTop` força cálculo
+ *   de layout; com um quadro por vez a conta acontece uma vez por pintura.
+ *   Passivo porque este código nunca chama preventDefault, e avisar isso é o
+ *   que mantém a rolagem por toque na thread do compositor.
+ *
+ * · O limiar acumula em vez de descartar: o ponto de referência só anda quando
+ *   o gesto passa de LIMIAR_ROLAGEM. Sem isso, rolagens de 2px em 2px nunca
+ *   passariam do limiar e o dock nunca reagiria; e sem limiar nenhum ele
+ *   piscaria a cada pixel de tremor do trackpad.
+ */
+function useDockDaRolagem(alvoRef: RefObject<HTMLElement>, rota: string) {
+  const [recolhido, setRecolhido] = useState(false);
+  // Enquanto o foco de teclado está DENTRO do dock ele fica travado aberto:
+  // quem navega por Tab não pode ver o alvo encolher debaixo do anel de foco.
+  // Mora em ref, e não em estado, porque quem lê é o listener de rolagem — em
+  // estado, o efeito teria de ser remontado a cada entrada e saída de foco.
+  const focoDentro = useRef(false);
+  const ultimoTopo = useRef(0);
+
+  useEffect(() => {
+    const alvo = alvoRef.current;
+    if (!alvo) return;
+    ultimoTopo.current = alvo.scrollTop;
+    let quadro = 0;
+
+    const avaliar = () => {
+      quadro = 0;
+      const topo = alvo.scrollTop;
+      const delta = topo - ultimoTopo.current;
+      if (Math.abs(delta) < LIMIAR_ROLAGEM) return;
+      ultimoTopo.current = topo;
+      if (focoDentro.current) return;
+      setRecolhido(topo > ZONA_DE_TOPO && delta > 0);
+    };
+
+    const aoRolar = () => {
+      if (quadro) return;
+      quadro = requestAnimationFrame(avaliar);
+    };
+
+    alvo.addEventListener('scroll', aoRolar, { passive: true });
+    return () => {
+      alvo.removeEventListener('scroll', aoRolar);
+      if (quadro) cancelAnimationFrame(quadro);
+    };
+  }, [alvoRef]);
+
+  // Tela nova, dock aberto: o gesto de rolagem da tela anterior não fala pela
+  // seguinte, e o conteúdo pode ter mudado de altura embaixo do mesmo scrollTop.
+  useEffect(() => {
+    setRecolhido(false);
+    ultimoTopo.current = alvoRef.current?.scrollTop ?? 0;
+  }, [rota, alvoRef]);
+
+  const abrir = useCallback(() => setRecolhido(false), []);
+  const aoFocar = useCallback(() => {
+    focoDentro.current = true;
+    setRecolhido(false);
+  }, []);
+  const aoDesfocar = useCallback(() => {
+    focoDentro.current = false;
+  }, []);
+
+  return { recolhido, abrir, aoFocar, aoDesfocar };
+}
+
 /** Console administrativo: janela de papel com barra lateral, titlebar e dock. */
 export function AdminShell() {
   const { user, isAdmin, logout } = useAuth();
@@ -109,6 +198,11 @@ export function AdminShell() {
   const navigate = useNavigate();
   const { tema, alternar } = useTemaDoConsole();
   useLiveInvalidation();
+
+  // Quem rola é .main (a janela tem altura fixa e o conteúdo rola dentro dela),
+  // então é nele que o dock escuta — não em window.
+  const conteudoRef = useRef<HTMLElement>(null);
+  const dock = useDockDaRolagem(conteudoRef, location.pathname);
 
   const visible = links.filter((l) => !l.adminOnly || isAdmin);
   const active =
@@ -220,11 +314,22 @@ export function AdminShell() {
               </button>
             </div>
           </div>
-          <main className="main">
+          <main className="main" ref={conteudoRef}>
             <Outlet />
           </main>
 
-          <div className="dock">
+          {/* Ponteiro e foco reabrem o dock. O ponteiro cobre também o toque:
+              um dedo na faixa recolhida dispara pointerenter antes do
+              pointerdown, e como os botões ficam sem pointer-events enquanto
+              recolhidos, esse primeiro toque só expande — não navega.
+              O foco entra pela captura para ganhar de qualquer handler dos
+              botões: o usuário de teclado tem que ver o alvo antes de agir. */}
+          <div
+            className={dock.recolhido ? 'dock recolhido' : 'dock'}
+            onPointerEnter={dock.abrir}
+            onFocusCapture={dock.aoFocar}
+            onBlurCapture={dock.aoDesfocar}
+          >
             {dockItems.map((d) => {
               const selecionado = d.end
                 ? location.pathname === d.to

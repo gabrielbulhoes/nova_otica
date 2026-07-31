@@ -14,6 +14,7 @@ import {
 } from '../api/client';
 import { PageHeader, Loading } from '../components/ui';
 import { Icon } from '../brand/Icon';
+import { useTemaDaVitrine } from '../hooks/useTemaDaVitrine';
 
 /** `.btn` não é flex no CSS; sem isto o ícone empurra a linha de base do rótulo. */
 const botaoComIcone: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 7 };
@@ -21,6 +22,8 @@ const botaoComIcone: CSSProperties = { display: 'inline-flex', alignItems: 'cent
 const chipComIcone: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6 };
 
 export function Cart() {
+  useTemaDaVitrine();
+
   const qc = useQueryClient();
   const [order, setOrder] = useState<OrderView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +61,11 @@ export function Cart() {
     const paid = order.status === 'PAID';
     return (
       <>
-        <PageHeader title={`Pedido ${order.number}`} subtitle={paid ? 'Pagamento confirmado.' : 'Aguardando pagamento.'} />
+        <PageHeader
+          eyebrow="Pedido"
+          title={order.number}
+          subtitle={paid ? 'Pagamento confirmado.' : 'Aguardando pagamento.'}
+        />
         <hr className="rule-section" />
         <div className="card" style={{ maxWidth: 520 }}>
           <div className="row-between">
@@ -82,6 +89,7 @@ export function Cart() {
           {!paid && order.payment?.qrCode && (
             <div className="card" style={{ marginTop: 12, background: 'var(--panel-2)' }}>
               <div className="label">PIX · código de demonstração</div>
+              {/* Mono aqui é o uso legítimo do manual: isto é código, não frase. */}
               <code style={{ wordBreak: 'break-all', fontSize: 12 }}>{order.payment.qrCode}</code>
             </div>
           )}
@@ -114,15 +122,24 @@ export function Cart() {
   }
 
   const items = cart.data?.items ?? [];
+  const unidades = items.reduce((s, i) => s + i.quantity, 0);
 
   return (
     <>
       <div className="row-between">
-        <PageHeader title="Carrinho" subtitle={cart.data?.storeName ? `Loja: ${cart.data.storeName}` : 'Seu carrinho'} />
-        <Link to="/loja" className="btn ghost" style={botaoComIcone}>
-          <Icon name="seta-esquerda" size={17} />
-          Continuar comprando
-        </Link>
+        <PageHeader
+          title="Carrinho"
+          subtitle={cart.data?.storeName ? `Retirada em ${cart.data.storeName}` : 'Seu carrinho'}
+        />
+        {/* Só aparece com item dentro: no carrinho vazio esta ação e o CTA do
+            estado vazio diriam a mesma coisa duas vezes, e a segunda é o
+            primário da tela. Botão repetido não é reforço, é ruído. */}
+        {items.length > 0 && (
+          <Link to="/loja" className="btn ghost" style={botaoComIcone}>
+            <Icon name="seta-esquerda" size={17} />
+            Continuar comprando
+          </Link>
+        )}
       </div>
 
       <hr className="rule-section" />
@@ -145,13 +162,15 @@ export function Cart() {
         <Loading />
       ) : items.length === 0 ? (
         <div className="empty">
-          Seu carrinho está vazio.{' '}
-          <Link
-            to="/loja"
-            style={{ color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-          >
-            Ir à loja
-            <Icon name="seta-direita" size={15} />
+          <p style={{ margin: '0 0 16px' }}>Seu carrinho está vazio.</p>
+          {/*
+            O ÚNICO `.btn.solid` deste ramo. Uma tela vazia tem exatamente uma
+            ação possível, e é esta — deixá-la como link de texto entregava a
+            única saída no elemento mais fraco da página.
+          */}
+          <Link to="/loja" className="btn solid" style={{ ...botaoComIcone, display: 'inline-flex' }}>
+            <Icon name="loja" size={17} />
+            Ver os óculos
           </Link>
         </div>
       ) : (
@@ -167,39 +186,80 @@ export function Cart() {
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.productId}>
-                  <td>{it.description}</td>
-                  <td className="num">{formatBRL(it.unitPrice)}</td>
-                  <td className="num">
-                    <input
-                      type="number"
-                      min={1}
-                      max={it.available}
-                      value={it.quantity}
-                      onChange={(e) => qty.mutate({ productId: it.productId, quantity: Number(e.target.value) })}
-                      style={{ width: 64, padding: '4px 8px' }}
-                    />
-                  </td>
-                  <td className="num">{formatBRL(it.total)}</td>
-                  <td className="right">
-                    <button className="btn ghost sm" style={botaoComIcone} onClick={() => remove.mutate(it.productId)}>
-                      <Icon name="lixeira" size={15} />
-                      Remover
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {items.map((it) => {
+                const noLimite = it.quantity >= it.available;
+                return (
+                  <tr key={it.productId}>
+                    <td>{it.description}</td>
+                    <td className="num">{formatBRL(it.unitPrice)}</td>
+                    <td className="num">
+                      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                        <input
+                          type="number"
+                          min={1}
+                          max={it.available}
+                          value={it.quantity}
+                          aria-label={`Quantidade de ${it.description}`}
+                          /*
+                            O `onChange` mandava `Number(e.target.value)` direto.
+                            Apagar o campo para digitar outro número produz ''
+                            por um instante, `Number('')` é 0, e o backend trata
+                            quantidade 0 como remoção: a linha sumia do carrinho
+                            no meio da digitação. A guarda mantém o item e deixa
+                            a remoção onde ela está escrita, no botão "Remover".
+                          */
+                          onChange={(e) => {
+                            const q = Number(e.target.value);
+                            if (!Number.isFinite(q) || q < 1) return;
+                            qty.mutate({ productId: it.productId, quantity: Math.min(q, it.available) });
+                          }}
+                          style={{ width: 64, padding: '4px 8px' }}
+                        />
+                        {/*
+                          Teto de saldo dito por ESCRITO, e não por cor: sem
+                          isto o campo recusa o número em silêncio (o `max` do
+                          input e o Math.min acima cortam sem avisar) e o
+                          cliente não sabe por quê.
+
+                          Sem chip âmbar aqui, de propósito. No catálogo real a
+                          maioria das linhas tem 1 unidade na loja, ou seja
+                          quase toda linha do carrinho nasce no teto: um selo de
+                          atenção em todas elas gritaria por algo que não pede
+                          ação nenhuma — dá para fechar a compra do mesmo jeito.
+                          O âmbar fica reservado ao que exige reação, e a
+                          tentativa de passar do saldo já tem o banner de erro.
+                          Rótulo curto = mono, conforme o manual.
+                        */}
+                        <span className="label" style={{ whiteSpace: 'nowrap' }}>
+                          {noLimite ? `Máximo: ${it.available}` : `${it.available} disponíveis`}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="num">{formatBRL(it.total)}</td>
+                    <td className="right">
+                      <button className="btn ghost sm" style={botaoComIcone} onClick={() => remove.mutate(it.productId)}>
+                        <Icon name="lixeira" size={15} />
+                        Remover
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          <div className="row-between" style={{ padding: 16 }}>
+          <div className="row-between" style={{ padding: 16, gap: 16, flexWrap: 'wrap' }}>
             <button className="btn ghost sm" style={botaoComIcone} onClick={() => empty.mutate()}>
               <Icon name="limpar" size={15} />
               Esvaziar
             </button>
             <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
               <div style={{ textAlign: 'right' }}>
-                <div className="label">Total</div>
+                {/* NÚMERO É HERÓI, RÓTULO É SERVIÇO. A contagem de peças fica no
+                    rótulo porque é o serviço; o valor é que precisa ser lido de
+                    longe, e é o que decide o clique ao lado. */}
+                <div className="label">
+                  Total · {unidades} {unidades === 1 ? 'peça' : 'peças'}
+                </div>
                 <div className="kpi">{formatBRL(cart.data?.total ?? 0)}</div>
               </div>
               {/*

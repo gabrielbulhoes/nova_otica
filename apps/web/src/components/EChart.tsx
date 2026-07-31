@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { EChartsOption } from 'echarts';
+import { Icon } from '../brand/Icon';
 import type { TemaGrafico } from '../bi/transforms';
 import { superficieDoGrafico, temaDoGrafico } from '../bi/transforms';
 
@@ -117,16 +118,19 @@ export function EChart({
   };
 
   return (
+    // O botão de exportação RESERVA uma faixa em vez de flutuar sobre o
+    // desenho. Antes ele era position:absolute em cima da área de plotagem e
+    // cobria o rótulo de valor da primeira barra — que é justamente a maior,
+    // porque a barra ordenada ordena decrescente e o rótulo dela cai no canto
+    // superior direito, exatamente onde o botão estava.
     <div ref={caixa} style={{ position: 'relative' }}>
       {exportName && (
-        <button
-          className="btn ghost sm"
-          onClick={exportPng}
-          style={{ position: 'absolute', top: -2, right: 0, zIndex: 1 }}
-          title="Baixar PNG"
-        >
-          ⤓ PNG
-        </button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+          <button className="btn ghost sm" onClick={exportPng} title="Baixar o gráfico em PNG">
+            <Icon name="exportar" size={13} aria-hidden />
+            PNG
+          </button>
+        </div>
       )}
       <ReactECharts
         ref={ref}
