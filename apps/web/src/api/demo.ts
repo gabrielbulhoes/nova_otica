@@ -209,6 +209,16 @@ if (real) {
     soldQty.set(key(st.id, products[2].id), 15);
     stockQty.set(key(st.id, products[2].id), 2);
   }
+  // Estoque morto de armação (products[10] é 'Armação', 10 % 5 === 0): parado
+  // em toda a rede, com uma loja concentrando o saldo. É o que faz a demo
+  // fictícia exercitar o card de LIQUIDAÇÃO e a regra de desconto da rede —
+  // sem ele o caminho só existia no dataset real, que é gitignorado, e a
+  // suíte passava aqui e quebrava no CI.
+  for (const st of stores) {
+    soldQty.set(key(st.id, products[10].id), 0);
+    stockQty.set(key(st.id, products[10].id), 4);
+  }
+  stockQty.set(key(stores[2].id, products[10].id), 40);
 }
 
 // Prazos por fornecedor (marca) editáveis na demo
@@ -936,9 +946,11 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           (a, r) => a + (matchesProductGroup(r.label, g) ? r.stockUnits : 0),
           0,
         )
-      : g === 'todos'
-        ? stockUnits
-        : products.reduce(
+      : // Sem o agregado da rede, soma o catálogo local — e soma do MESMO jeito
+        // em todo recorte. O atalho que 'todos' tinha aqui lia `stockQty`
+        // inteiro, incluindo CD e assistência, que `stores` exclui: os quatro
+        // recortes não fechavam com o total por causa de loja, não de produto.
+        products.reduce(
             (a, p) =>
               a +
               (matchesProductGroup(p.category, g)
@@ -1012,12 +1024,19 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
               if (!s) return [];
               return [{ storeId: s.id, storeName: s.name, stockUnits: st.stockUnits, unitsSold: st.soldUnits }];
             })
-          : stores.map((s) => ({
-              storeId: s.id,
-              storeName: s.name,
-              stockUnits: products.reduce((a, prod) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
-              unitsSold: products.reduce((a, prod) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
-            }));
+          : // Sem agregado da rede, soma o catálogo local — DENTRO DO RECORTE.
+            // O recorte faltava só aqui, e era por isso que a cobertura do
+            // dashboard e a do relatório divergiam no dataset fictício: uma
+            // contava lente e acessório, a outra não.
+            (() => {
+              const noGrupo = products.filter((prod) => matchesProductGroup(prod.category, grupo));
+              return stores.map((s) => ({
+                storeId: s.id,
+                storeName: s.name,
+                stockUnits: noGrupo.reduce((a, prod) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
+                unitsSold: noGrupo.reduce((a, prod) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
+              }));
+            })();
     // A janela é a MEDIDA no dataset, não a pedida: dividir 7 dias de venda
     // por 30 é exatamente o que inflava a cobertura para 60–150 meses.
     const dias = effectiveDays(days);

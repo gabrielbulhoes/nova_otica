@@ -58,3 +58,8 @@ docs/marca/telas/v4/
 
 # Variante de nome usada por um dos auditores (singular).
 docs/marca/auditoria/evidencia/
+
+# Evidência visual das auditorias: renderiza DADOS REAIS da rede (nomes de
+# loja, saldo, faturamento). O repositório é público — os relatórios .md ficam,
+# os prints não.
+docs/marca/auditoria/evidencia-*/

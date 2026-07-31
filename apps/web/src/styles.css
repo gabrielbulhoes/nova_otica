@@ -1919,14 +1919,15 @@ td .codigo {
    para a Inter, em corpo que se lê.
    O carimbo continua existindo — virou .carimbo, abaixo — para rótulo curto.
    O de-para de qual ocorrência vira qual está no relatório da Onda 2. */
-/* ONDA 5 · 12 → 12,5px. A .hint carrega a explicação do indicador ("Estoque ÷
-   média mensal de unidades vendidas") e agora, sem a caixa alta dos rótulos
-   segurando a hierarquia, ela é quem sustenta a leitura secundária do cartão.
-   12px em --muted é o piso do confortável; 12,5 tira do piso sem custar linha. */
+/* A .hint carrega a explicação do indicador e a segunda linha da célula de
+   tabela ("ESPORTIVOS LTDA · entrega em 14d"). Fica em 12px: a Onda 5 tentou
+   12,5 e mediu o preço — na tabela de recomendação de compra do Planejamento,
+   que tem 440 linhas, meio pixel de corpo empurrava a segunda linha da célula
+   para uma terceira. Meio pixel de conforto não paga 440 linhas mais altas. */
 .hint {
   font-family: var(--font-corpo);
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;

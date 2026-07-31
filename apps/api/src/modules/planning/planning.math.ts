@@ -343,7 +343,9 @@ export function grupoDaCategoria(category: string | null | undefined): ProductGr
   if (c.includes('relogio')) return 'relogios';
   if (
     c.includes('oculos') ||
-    c.includes('armacao') ||
+    // 'armac' e não 'armacao': o seed usa "ARMACOES" no plural, que não contém
+    // "armacao" — e por isso a categoria mais central da rede caía em `outros`.
+    c.includes('armac') ||
     c.includes('grau') ||
     c.includes('solar')
   ) {
