@@ -5,6 +5,7 @@ import { asyncHandler, parseDays, toNumber } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
 import { computeStoreCoverage } from '../planning/planning.math.js';
 import { PLANNED_STORE_WHERE } from '../stores/store.scope.js';
+import { parseGroup, productFilterForGroup, categoriesInGroup } from '../products/product.scope.js';
 
 export const dashboardRouter = Router();
 
@@ -83,6 +84,15 @@ dashboardRouter.get(
     since.setDate(since.getDate() - days);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
 
+    // Recorte de produto: lente é estoque em volume e venda sob encomenda, e
+    // por isso empurrava a cobertura de toda loja para dezenas de meses.
+    const grupo = parseGroup(req.query.group);
+    const scopeFilter = await productFilterForGroup(grupo);
+    const cats = await categoriesInGroup(grupo);
+    const categoriasSql = cats
+      ? Prisma.sql`AND si."productId" IN (SELECT id FROM "Product" WHERE category IN (${Prisma.join(cats)}))`
+      : Prisma.empty;
+
     const [stores, stockGrouped, soldRows] = await Promise.all([
       // Só ponto de venda tem cobertura a acompanhar: centro de distribuição,
       // assistência e estoque de compras não vendem, então apareceriam sempre
@@ -93,7 +103,7 @@ dashboardRouter.get(
       }),
       prisma.stockItem.groupBy({
         by: ['storeId'],
-        where: storeId ? { storeId } : {},
+        where: { ...(storeId ? { storeId } : {}), ...scopeFilter },
         _sum: { quantity: true },
       }),
       prisma.$queryRaw<{ storeId: string; units: bigint }[]>(Prisma.sql`
@@ -101,6 +111,7 @@ dashboardRouter.get(
         FROM "SaleItem" si
         JOIN "Sale" s ON s.id = si."saleId"
         WHERE s."saleDate" >= ${since} AND s."storeId" IS NOT NULL
+        ${categoriasSql}
         ${storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty}
         GROUP BY s."storeId"
       `),

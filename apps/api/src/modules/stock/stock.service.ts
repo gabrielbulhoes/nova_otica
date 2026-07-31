@@ -1,5 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { productWhereForGroup, scopeCategories } from '../products/product.scope.js';
+import type { ProductGroup } from '../planning/planning.math.js';
 import { toNumber } from '../../http/helpers.js';
 
 /**
@@ -20,6 +22,8 @@ export interface StockFilter {
   search?: string;
   /** Uma ou mais categorias (multi-seleção do filtro). */
   categories?: string[];
+  /** Recorte de produto do console: 'principal' tira lente e tratamento. */
+  group?: ProductGroup;
   onlyAvailable?: boolean;
   limit: number;
   skip: number;
@@ -85,9 +89,15 @@ export async function listStock(filter: StockFilter): Promise<{ total: number; r
   const where: Prisma.StockItemWhereInput = {};
   if (filter.storeIds?.length) where.storeId = { in: filter.storeIds };
   if (filter.productId) where.productId = filter.productId;
-  if (filter.search || filter.categories?.length) {
+  // Recorte de produto do console: lente e tratamento saem por padrão das
+  // telas de operação (são do laboratório), mas seguem consultáveis.
+  // O filtro de categoria do usuário se COMBINA com o recorte, não o
+  // substitui — do contrário escolher uma categoria traria lente de volta.
+  const scope = await productWhereForGroup(filter.group ?? 'todos');
+  const scoped = scopeCategories(scope, filter.categories);
+  if (scoped || filter.search) {
     where.product = {
-      ...(filter.categories?.length ? { category: { in: filter.categories } } : {}),
+      ...(scoped ?? {}),
       ...(filter.search
         ? {
             OR: [
@@ -142,10 +152,11 @@ export async function listStock(filter: StockFilter): Promise<{ total: number; r
 }
 
 /** Resumo do estoque por produto somando todas as lojas (visão de rede). */
-export async function stockByProduct(search?: string, categories?: string[]) {
+export async function stockByProduct(search?: string, categories?: string[], group?: ProductGroup) {
   const { rows } = await listStock({
     search,
     categories,
+    group,
     limit: 100_000,
     skip: 0,
   });

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { asyncHandler, badRequest, parseDays } from '../../http/helpers.js';
+import { asyncHandler, badRequest, parseDays, parseList } from '../../http/helpers.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import {
   abcCurve,
@@ -10,6 +10,7 @@ import {
   type AbcDimension,
   type AnalysisDimension,
 } from './reports.service.js';
+import { parseGroup } from '../products/product.scope.js';
 
 export const reportsRouter = Router();
 
@@ -23,7 +24,15 @@ reportsRouter.get(
     if (dimension !== 'product' && dimension !== 'brand') {
       throw badRequest('dimension deve ser "product" ou "brand"');
     }
-    res.json(await abcCurve(days, storeId, dimension as AbcDimension));
+    res.json(
+      await abcCurve(
+        days,
+        storeId,
+        dimension as AbcDimension,
+        parseGroup(req.query.group),
+        parseList(req.query.category),
+      ),
+    );
   }),
 );
 
@@ -33,7 +42,7 @@ reportsRouter.get(
   asyncHandler(async (req, res) => {
     const days = parseDays(req.query.days);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await inventoryTurnover(days, storeId));
+    res.json(await inventoryTurnover(days, storeId, parseGroup(req.query.group), parseList(req.query.category)));
   }),
 );
 
@@ -43,7 +52,7 @@ reportsRouter.get(
   asyncHandler(async (req, res) => {
     const days = parseDays(req.query.days);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await coverageByBrand(days, storeId));
+    res.json(await coverageByBrand(days, storeId, parseGroup(req.query.group), parseList(req.query.category)));
   }),
 );
 

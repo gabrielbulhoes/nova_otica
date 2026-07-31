@@ -76,8 +76,15 @@ const totalUnitsNetwork = [...stockByProduct.values()].reduce(
 // Unidades em estoque por loja — rede INTEIRA (antes do corte do catálogo),
 // para a cobertura por loja não subcontar.
 const stockUnitsByStore = new Map(); // lojaExt -> unidades
+// SKUs DISTINTOS com saldo por loja — também da rede inteira. Sem este número
+// a tela de Lojas contava o catálogo amostrado e mostrava o mesmo valor para
+// todas as filiais (feedback do Galbe: "estoque por SKU e loja tá uniforme").
+const skuCountByStore = new Map(); // lojaExt -> SKUs distintos com saldo > 0
 for (const per of stockByProduct.values())
-  for (const [st, qty] of per) stockUnitsByStore.set(st, (stockUnitsByStore.get(st) ?? 0) + qty);
+  for (const [st, qty] of per) {
+    stockUnitsByStore.set(st, (stockUnitsByStore.get(st) ?? 0) + qty);
+    if (qty > 0) skuCountByStore.set(st, (skuCountByStore.get(st) ?? 0) + 1);
+  }
 
 // ─── Vendas (30 dias) — agregados, nada identificável ────────────────────────
 const vendaLoja = new Map(); // "loja-venda" -> lojaExt
@@ -310,10 +317,34 @@ for (const [ext, ps] of productSales) {
   byCategory.set(g, vg);
 }
 
+// Janela de vendas MEDIDA nos dados, não presumida. O dataset anterior se
+// descrevia como "30 dias" e continha 7 — as fixtures saíram com a janela
+// padrão da sonda. Quem consome dividia 7 dias de venda por 30, e toda
+// demanda diária saía 4,3x menor: cobertura de 60 a 150 meses, e produto
+// saudável classificado como parado. O rótulo não é fonte; a data é.
+const diasComVenda = [...daily.keys()].sort();
+const salesWindowDays = diasComVenda.length
+  ? Math.max(1, Math.round(
+      (Date.parse(diasComVenda[diasComVenda.length - 1]) - Date.parse(diasComVenda[0])) / 86_400_000,
+    ) + 1)
+  : 0;
+if (salesWindowDays && salesWindowDays < 28) {
+  console.warn(
+    `\n⚠  A janela de vendas tem ${salesWindowDays} dias (${diasComVenda[0]} a ` +
+    `${diasComVenda[diasComVenda.length - 1]}), não 30.\n` +
+    '   Os números saem corretos — quem consome usa salesWindowDays —, mas a\n' +
+    '   demonstração fica com uma amostra curta. Reextraia com --dias=30.\n',
+  );
+}
+
 const out = {
   label: 'Dados reais da rede · amostra estática',
-  generatedFrom: 'sonda CDS 13/07/2026 (30 dias de vendas; estoque da grade completa)',
+  generatedFrom: `sonda CDS (${salesWindowDays} dias de vendas medidos; estoque da grade completa)`,
   totals: {
+    /** Dias efetivamente cobertos pelas vendas — use ESTE valor como divisor. */
+    salesWindowDays,
+    salesWindowStart: diasComVenda[0] ?? null,
+    salesWindowEnd: diasComVenda[diasComVenda.length - 1] ?? null,
     revenue30d: round2(vendas.reduce((a, v) => a + num(v.valor_pago), 0)),
     salesCount30d: vendas.length,
     stockUnitsNetwork: totalUnitsNetwork,
@@ -335,6 +366,8 @@ const out = {
   storeStats: stores.map((s) => ({
     externalId: s.externalId,
     stockUnits: stockUnitsByStore.get(s.externalId) ?? 0,
+    /** SKUs distintos com saldo — da rede inteira, não do catálogo amostrado. */
+    skuCount: skuCountByStore.get(s.externalId) ?? 0,
     soldUnits: soldUnitsByStore.get(s.externalId) ?? 0,
     soldRevenue: soldRevenueByStore.get(s.externalId) ?? 0,
   })),
@@ -359,4 +392,5 @@ const dest = path.resolve('apps/web/src/api/demo-real-data.json');
 writeFileSync(dest, JSON.stringify(out));
 const kb = Math.round(Buffer.byteLength(JSON.stringify(out)) / 1024);
 console.log(`OK: ${dest} (${kb} KB) — ${out.products.length} produtos amostrados de ${out.totals.productCountNetwork}; ` +
-  `${out.stores.length} lojas; R$ ${out.totals.revenue30d} em ${out.totals.salesCount30d} vendas (30d).`);
+  `${out.stores.length} lojas; R$ ${out.totals.revenue30d} em ${out.totals.salesCount30d} vendas ` +
+  `em ${salesWindowDays} dias.`);

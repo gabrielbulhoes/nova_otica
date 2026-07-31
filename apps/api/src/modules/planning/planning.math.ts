@@ -84,6 +84,143 @@ export function marginPct(unitPrice: number, unitCost: number): number {
   return round2(((unitPrice - unitCost) / unitPrice) * 100);
 }
 
+/**
+ * Desconto sugerido para liquidar — a REGRA DA REDE, dita pelo cliente.
+ *
+ * Galbe, 30/07: "Esse desconto eu vou sugerir um parâmetro, se não vai ficar
+ * meio que na doida e não é legal." E mandou o parâmetro:
+ *
+ *   • promoção vale para peça FORA DE COLEÇÃO do fornecedor;
+ *   • começa em 20% quando o preço cheio é abaixo de R$ 1.000;
+ *   • começa em 30% quando o preço cheio é R$ 1.000 ou mais;
+ *   • sobe 10 pontos percentuais a cada 90 dias.
+ *
+ * A versão anterior calculava o desconto pelo custo de carregar o estoque. A
+ * conta era defensável e a régua era nossa — esta é da rede, que liquida óculos
+ * há mais tempo do que nós. Onde as duas discordam, a da rede vence.
+ *
+ * Duas coisas que a regra não diz e a tela precisa dizer:
+ *  1. "Fora de coleção" é um dado do fornecedor que ainda não temos. O gatilho
+ *     aqui é o card de LIQUIDAÇÃO (estoque sem giro) — está declarado na tela.
+ *  2. O TETO continua sendo o desconto que zera a margem: nenhuma sugestão
+ *     automática manda vender abaixo do custo. Quando o custo de compra não
+ *     veio do ERP (77% do catálogo hoje), o teto é estimado e a tela avisa.
+ */
+export interface DiscountInput {
+  unitPrice: number;
+  unitCost: number;
+  /** Cobertura em dias; null = sem giro nenhum. Mantido para compatibilidade. */
+  coverageDays: number | null;
+  /**
+   * Dias parada. Hoje vem do lote de geração (primeira aparição do card) — a
+   * data de entrada da peça em estoque não vem na grade do ERP que
+   * consumimos. É o que move a peça de degrau na regra dos 90 dias.
+   */
+  stuckDays?: number | null;
+  /** true quando o custo é estimado (o ERP não trouxe o valor de compra). */
+  costEstimated?: boolean;
+  /** Giro da MARCA na rede, em unidades no período — informativo na tela. */
+  brandUnitsSold?: number;
+}
+
+export interface DiscountAdvice {
+  suggestedPct: number;
+  maxPct: number;
+  rationale: string;
+  /** Os parâmetros usados, para a tela poder mostrar de onde saiu o número. */
+  params: {
+    /** Degrau inicial da regra: 20% ou 30%. */
+    basePct: number;
+    /** Faixa de preço que definiu o degrau inicial. */
+    priceBand: 'abaixo de R$ 1.000' | 'R$ 1.000 ou mais';
+    /** Quanto sobe por degrau (p.p.) e de quantos em quantos dias. */
+    stepPct: number;
+    stepDays: number;
+    /** Quantos degraus já subiu pelo tempo parado. */
+    steps: number;
+    stuckDays: number | null;
+    /** Margem bruta (%) — é ela que define o teto. */
+    marginPct: number;
+    /** true quando o teto saiu de um custo estimado, não do valor de compra. */
+    ceilingEstimated: boolean;
+    brandUnitsSold: number | null;
+  };
+}
+
+/** Degrau inicial da regra da rede, pela faixa de preço cheio. */
+export const DISCOUNT_RULE = {
+  priceBreak: 1000,
+  baseBelow: 20,
+  baseFrom: 30,
+  stepPct: 10,
+  stepDays: 90,
+} as const;
+
+export function suggestedDiscount(
+  unitPriceOrInput: number | DiscountInput,
+  unitCost?: number,
+  coverageDays?: number | null,
+  _cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
+): DiscountAdvice {
+  const input: DiscountInput =
+    typeof unitPriceOrInput === 'number'
+      ? { unitPrice: unitPriceOrInput, unitCost: unitCost ?? 0, coverageDays: coverageDays ?? null }
+      : unitPriceOrInput;
+
+  const margem = marginPct(input.unitPrice, input.unitCost);
+  const maxPct = Math.max(0, Math.floor(margem));
+  const ceilingEstimated = input.costEstimated === true;
+  const acimaDaQuebra = input.unitPrice >= DISCOUNT_RULE.priceBreak;
+  const basePct = acimaDaQuebra ? DISCOUNT_RULE.baseFrom : DISCOUNT_RULE.baseBelow;
+  const priceBand: DiscountAdvice['params']['priceBand'] = acimaDaQuebra
+    ? 'R$ 1.000 ou mais'
+    : 'abaixo de R$ 1.000';
+  const parada = input.stuckDays != null && input.stuckDays > 0 ? input.stuckDays : null;
+  const steps = parada ? Math.floor(parada / DISCOUNT_RULE.stepDays) : 0;
+
+  const params: DiscountAdvice['params'] = {
+    basePct,
+    priceBand,
+    stepPct: DISCOUNT_RULE.stepPct,
+    stepDays: DISCOUNT_RULE.stepDays,
+    steps,
+    stuckDays: parada,
+    marginPct: margem,
+    ceilingEstimated,
+    brandUnitsSold: input.brandUnitsSold ?? null,
+  };
+
+  if (maxPct <= 0) {
+    return {
+      suggestedPct: 0,
+      maxPct: 0,
+      rationale: 'Sem margem para desconto — avalie devolução ao fornecedor ou bonificação.',
+      params,
+    };
+  }
+
+  const pelaRegra = basePct + DISCOUNT_RULE.stepPct * steps;
+  const suggestedPct = Math.min(pelaRegra, maxPct);
+  const limitadoPeloTeto = pelaRegra > maxPct;
+
+  const degrau =
+    steps > 0
+      ? ` Parada há ${parada} dias: ${steps} ${steps === 1 ? 'degrau' : 'degraus'} de ${DISCOUNT_RULE.stepPct} p.p. (${DISCOUNT_RULE.stepDays} dias cada), então ${basePct}% + ${DISCOUNT_RULE.stepPct * steps} = ${pelaRegra}%.`
+      : parada
+        ? ` Parada há ${parada} dias — ainda no degrau inicial; sobe ${DISCOUNT_RULE.stepPct} p.p. aos ${DISCOUNT_RULE.stepDays} dias.`
+        : ' Sem histórico de quanto tempo está parada: fica no degrau inicial.';
+  const teto = limitadoPeloTeto
+    ? ` A regra pedia ${pelaRegra}%, mas ${maxPct}% já zera a margem${ceilingEstimated ? ' (margem estimada — falta o valor de compra no ERP)' : ''}.`
+    : '';
+
+  return {
+    suggestedPct,
+    maxPct,
+    rationale: `Regra da rede: preço cheio ${priceBand}, começa em ${basePct}%.${degrau}${teto}`,
+    params,
+  };
+}
+
 /** Margem bruta esperada (R$) de vender uma quantidade. */
 export function expectedMargin(units: number, unitPrice: number, unitCost: number): number {
   if (!(units > 0)) return 0;
@@ -378,6 +515,8 @@ export interface ProductMetricsInput {
   unitCost: number;
   /** Preço de venda unitário (R$). */
   unitPrice: number;
+  /** true quando o custo é ESTIMADO — o ERP não trouxe o valor de compra. */
+  costEstimated?: boolean;
   /** Unidades já pedidas ao fornecedor e ainda não recebidas (a caminho). */
   onOrderQty?: number;
   /** Histórico para previsão; ausente = média simples (unitsSold/days). */
@@ -397,6 +536,8 @@ export interface ProductPlan {
   reorderPoint: number;
   targetStock: number;
   unitCost: number;
+  /** true quando o custo é estimado (falta o valor de compra no ERP). */
+  costEstimated?: boolean;
   /** Capital imobilizado neste item (estoque atual × custo). */
   stockValue: number;
   /** Capital imobilizado acima do alvo de cobertura (excesso/ocioso). */
@@ -419,6 +560,8 @@ export interface ProductPlan {
   carryingCost30d: number;
   /** Quanto custa manter só o EXCESSO por 30 dias (R$) — o desperdício puro. */
   excessCarryingCost30d: number;
+  /** Preço de venda unitário — base do desconto sugerido na liquidação. */
+  unitPrice: number;
   /** Margem bruta unitária em % do preço. */
   marginPct: number;
   /** Margem bruta esperada da compra sugerida (R$). */
@@ -574,6 +717,8 @@ export function analyzeProduct(
     confidence: decisionConfidence(input.unitsSold, days, dailyDemand > 0, forecast?.method ?? null),
     carryingCost30d: carryingCost(stockValue, 30, cfg),
     excessCarryingCost30d: carryingCost(excessValue, 30, cfg),
+    unitPrice: input.unitPrice,
+    costEstimated: input.costEstimated === true,
     marginPct: marginPct(input.unitPrice, input.unitCost),
     expectedMargin: expectedMargin(suggestedQty, input.unitPrice, input.unitCost),
     onOrderQty: onOrder,
@@ -789,6 +934,8 @@ export interface StoreProductInput {
   productId: string;
   description: string;
   brand: string | null;
+  /** Categoria do produto — entra na extração da marca (ver analysisBrand). */
+  category?: string | null;
   /** Unidades vendidas NESTA loja no período. */
   unitsSold: number;
   /** Estoque atual NESTA loja. */
@@ -1343,6 +1490,15 @@ export interface AbcResult {
   days: number;
   dimension: AbcDimension;
   totalRevenue: number;
+  /**
+   * Receita do MESMO período e da mesma loja, sem o recorte de produto.
+   *
+   * Galbe, 30/07: "os números da curva ABC estão muito baixos". Estavam certos
+   * — o recorte de óculos, armação e relógio é 43% da receita da rede, e a tela
+   * não dizia isso em lugar nenhum. Com este número ao lado, "baixo" vira
+   * "recortado", que é diferente.
+   */
+  periodRevenue?: number;
   summary: Record<'A' | 'B' | 'C', { items: number; revenue: number }>;
   rows: AbcRow[];
 }
@@ -1426,6 +1582,24 @@ export interface DecisionCard {
   isNew?: boolean;
   /** Reaparece há mais dias do que o SLA sem ninguém decidir. */
   isOverdue?: boolean;
+  /** Liquidação: desconto sugerido e teto (feedback 05 — "liquidar como?"). */
+  discountPct?: number;
+  discountMaxPct?: number;
+  /**
+   * Liquidação: transferência de escoamento já resolvida (de onde, quantas).
+   * Com `outletStoreId` como destino, é uma movimentação de um clique.
+   */
+  outletFromStoreId?: string;
+  outletFromStoreName?: string;
+  outletQuantity?: number;
+  discountReason?: string;
+  /** De onde saiu o número — o Galbe pediu para entender os parâmetros. */
+  discountParams?: DiscountAdvice['params'];
+  /** Liquidação: loja com maior chance de escoar ("remanejar para onde?"). */
+  outletStoreId?: string;
+  outletStoreName?: string;
+  /** Se o destino veio do giro da própria peça ou do giro da marca. */
+  outletBasis?: 'sku' | 'marca';
 }
 
 export interface DecisionSummary {
@@ -1559,10 +1733,128 @@ function capitalPriority(value: number): DecisionPriority {
  * decidir duas vezes a mesma coisa. Eles saem da lista e entram no contador
  * `summary.decididos` — o board mostra o que falta decidir, não o que já foi.
  */
+/**
+ * Loja com maior chance de escoar um produto parado.
+ *
+ * Feedback 05 do Galbe: "remanejar para onde (qual loja teria maior chance de
+ * escoamento?)". O card de liquidação dizia o que fazer e não onde.
+ *
+ * Critério, nesta ordem: quem MAIS VENDEU a peça no período; empatado, quem
+ * tem MENOS estoque dela (menos risco de repetir o encalhe). Loja sem nenhuma
+ * venda não é destino — mandar para lá só muda o endereço do problema.
+ */
+export interface OutletPosition {
+  storeId: string;
+  storeName: string;
+  unitsSold: number;
+  currentStock: number;
+}
+
+/**
+ * Marca de ANÁLISE de um produto: a grife extraída da descrição e, na falta
+ * dela, o fornecedor. Devolve null quando nenhuma das duas serve.
+ *
+ * Existe porque o campo `brand` do CDS é o FORNECEDOR e vem vazio (ou "—") na
+ * maior parte do catálogo real. Agrupar por ele jogava centenas de produtos
+ * sem fornecedor no MESMO balde: o "giro da marca" de um óculos MIU MIU saía
+ * como 1.120 unidades (o balde inteiro) e o destino de escoamento apontava
+ * sempre para a mesma filial — a loja que mais vende de tudo. O null é
+ * proposital: sem marca conhecida, é melhor não ter reserva por marca do que
+ * ter uma reserva errada.
+ */
+export function analysisBrand(
+  description: string | null,
+  category: string | null,
+  supplier: string | null,
+): string | null {
+  const grife = extractBrand(description, category);
+  if (grife) return grife;
+  const fornecedor = (supplier ?? '').trim();
+  return fornecedor && fornecedor !== '—' ? fornecedor : null;
+}
+
+export function bestOutletStore(
+  positions: OutletPosition[],
+  exceptStoreId?: string,
+  /**
+   * Posições por MARCA, usadas quando a peça não vendeu em lugar nenhum.
+   * É o caso mais comum entre os cards de liquidação — estoque morto — e sem
+   * este recurso a pergunta "para onde?" fica sem resposta justamente nos
+   * cards em que ela é feita. Um óculos MIU MIU que nunca saiu não tem
+   * histórico próprio, mas a rede sabe onde MIU MIU sai.
+   */
+  brandPositions?: OutletPosition[],
+): { storeId: string; storeName: string; unitsSold: number; basis: 'sku' | 'marca' } | null {
+  // Volume absoluto elege sempre a loja maior — foi o que fez seis cards de
+  // marcas diferentes apontarem todos para a mesma filial (feedback 05). A
+  // taxa de escoamento sozinha também não resolve: a loja com melhor taxa
+  // geral ganha em quase toda marca. O sinal certo é RELATIVO — onde esta
+  // marca escoa acima da média da rede.
+  const taxa = (p: OutletPosition) => p.unitsSold / Math.max(1, p.unitsSold + p.currentStock);
+  const escolher = (lista: OutletPosition[]) => {
+    const elegiveis = lista.filter((p) => p.storeId !== exceptStoreId && p.unitsSold > 0);
+    if (elegiveis.length === 0) return undefined;
+    const media = elegiveis.reduce((a, p) => a + taxa(p), 0) / elegiveis.length;
+    // Desvio da loja em relação à média; empate desempata pelo volume.
+    return elegiveis.sort(
+      (a, b) => (taxa(b) - media) - (taxa(a) - media) || b.unitsSold - a.unitsSold,
+    )[0];
+  };
+
+  const porSku = escolher(positions);
+  if (porSku) {
+    return { storeId: porSku.storeId, storeName: porSku.storeName, unitsSold: porSku.unitsSold, basis: 'sku' };
+  }
+  const porMarca = brandPositions ? escolher(brandPositions) : undefined;
+  return porMarca
+    ? { storeId: porMarca.storeId, storeName: porMarca.storeName, unitsSold: porMarca.unitsSold, basis: 'marca' }
+    : null;
+}
+
+/**
+ * Transferência de escoamento derivada do card de liquidação — a "grande
+ * entrega dessa categoria" no feedback 05: o card deixa de dizer só *quanto* de
+ * desconto e *para onde*, e passa a dizer DE ONDE, QUANTAS e com um clique.
+ *
+ * Origem: entre as lojas que têm a peça (menos a de destino), a que MENOS
+ * escoa; empatado, a que tem mais saldo encalhado. Quantidade: fica na origem
+ * o que ela provou escoar no período, o resto sai — pelo menos 1 unidade,
+ * senão não há transferência a propor.
+ */
+export interface OutletTransfer {
+  fromStoreId: string;
+  fromStoreName: string;
+  quantity: number;
+}
+
+export function outletTransfer(
+  positions: OutletPosition[],
+  outletStoreId: string,
+): OutletTransfer | null {
+  const taxa = (p: OutletPosition) => p.unitsSold / Math.max(1, p.unitsSold + p.currentStock);
+  const candidatas = positions.filter((p) => p.storeId !== outletStoreId && p.currentStock > 0);
+  if (candidatas.length === 0) return null;
+  const origem = [...candidatas].sort((a, b) => taxa(a) - taxa(b) || b.currentStock - a.currentStock)[0];
+  return {
+    fromStoreId: origem.storeId,
+    fromStoreName: origem.storeName,
+    quantity: Math.max(1, origem.currentStock - origem.unitsSold),
+  };
+}
+
 export function buildDecisionCards(
   plans: ProductPlan[],
   rebalance: RebalanceSuggestion[],
   decidedIds?: ReadonlySet<string>,
+  /** Posições por loja de cada produto, para escolher o destino de escoamento. */
+  positionsByProduct?: ReadonlyMap<string, OutletPosition[]>,
+  /** Posições por MARCA — reserva para peça sem venda própria. */
+  positionsByBrand?: ReadonlyMap<string, OutletPosition[]>,
+  /**
+   * Dias parados por produto (primeira aparição do card no lote). É o sinal de
+   * TEMPO que faz o desconto variar por peça em vez de sair constante.
+   */
+  stuckDaysByProduct?: ReadonlyMap<string, number>,
 ): DecisionBoard {
   const cards: DecisionCard[] = [];
 
@@ -1585,15 +1877,57 @@ export function buildDecisionCards(
         urgencyDays: p.stockoutInDays,
       });
     } else if (p.recommendation === 'LIQUIDATE') {
+      // "Liquidar" sozinho devolve a decisão para quem não sabia decidir: o
+      // card passa a dizer com quanto de desconto e para qual loja mandar.
+      // A marca que vale aqui é a de ANÁLISE (grife da descrição), não o campo
+      // de fornecedor — ver analysisBrand.
+      const marca = analysisBrand(p.description, p.category, p.brand);
+      const posMarca = marca ? positionsByBrand?.get(marca) : undefined;
+      const giroMarca = posMarca ? posMarca.reduce((a, x) => a + x.unitsSold, 0) : undefined;
+      const desc = suggestedDiscount({
+        unitPrice: p.unitPrice,
+        unitCost: p.unitCost,
+        coverageDays: p.coverageDays,
+        stuckDays: stuckDaysByProduct?.get(p.productId) ?? null,
+        costEstimated: p.costEstimated,
+        brandUnitsSold: giroMarca,
+      });
+      const outlet = positionsByProduct
+        ? bestOutletStore(positionsByProduct.get(p.productId) ?? [], undefined, posMarca)
+        : null;
       cards.push({
         id: cardId('LIQUIDACAO', p.productId),
         type: 'LIQUIDACAO',
         title: 'Reduzir excesso e liberar capital',
+        discountPct: desc.suggestedPct,
+        discountMaxPct: desc.maxPct,
+        discountReason: desc.rationale,
+        discountParams: desc.params,
+        ...(outlet
+          ? {
+              outletStoreId: outlet.storeId,
+              outletStoreName: outlet.storeName,
+              outletBasis: outlet.basis,
+              // De onde sai e quantas: sem isso o destino é informação, não ação.
+              ...(() => {
+                const t = outletTransfer(positionsByProduct?.get(p.productId) ?? [], outlet.storeId);
+                return t
+                  ? {
+                      outletFromStoreId: t.fromStoreId,
+                      outletFromStoreName: t.fromStoreName,
+                      outletQuantity: t.quantity,
+                    }
+                  : {};
+              })(),
+            }
+          : {}),
         priority: capitalPriority(p.stockValue),
         productId: p.productId,
         description: p.description,
         brand: p.brand,
-        target: p.brand ?? 'Excesso na rede',
+        // O alvo é a MARCA de análise: `p.brand` é o fornecedor e sai "—" na
+        // maior parte do catálogo, o que virava "Alvo: —" na tela.
+        target: marca ?? 'Excesso na rede',
         quantity: p.currentStock,
         reason: p.friendlyReason,
         confidence: p.confidence,

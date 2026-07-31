@@ -101,11 +101,16 @@ describe('demo: relatórios da Onda 2', () => {
     expect(classes).toMatch(/^A+B*C*$/);
   });
 
-  it('/reports/coverage traz linha GERAL coerente com as marcas', () => {
+  it('/reports/coverage traz linha GERAL da REDE, e as marcas nunca a ultrapassam', () => {
     const r = get('/reports/coverage');
     const somaEstoque = r.rows.reduce((a: number, x: any) => a + x.stockUnits, 0);
-    expect(r.total.stockUnits).toBe(somaEstoque);
     expect(r.total.label).toBe('GERAL');
+    // O GERAL vem da rede (mesma base do dashboard) e as linhas por marca vêm
+    // do catálogo carregado: iguais quando não há amostragem, menores quando há
+    // — e nesse caso a resposta declara em `sampled`.
+    expect(somaEstoque).toBeLessThanOrEqual(r.total.stockUnits);
+    if (r.sampled) expect(r.sampled.stockUnits).toBe(somaEstoque);
+    else expect(r.total.stockUnits).toBe(somaEstoque);
     for (const row of r.rows) expect(['CRITICAL', 'HEALTHY', 'HIGH', 'EXCESS']).toContain(row.level);
   });
 
@@ -264,5 +269,222 @@ describe('demo: lote de geração', () => {
     const datas = rows.map((r) => new Date(r.generatedAt).getTime());
     expect(datas).toEqual([...datas].sort((x, y) => y - x));
     expect(rows[0].compra + rows[0].remanejamento + rows[0].liquidacao).toBe(rows[0].cardsTotal);
+  });
+});
+
+describe('demo: recorte de produto (feedback Galbe — "ainda continua puxando lentes")', () => {
+  const isLens = (c: string) => /lente|tratamento/i.test(c ?? '');
+
+  it('/stock com group=principal não traz lente nem tratamento', () => {
+    const rows = get('/stock', { group: 'principal' }).rows as { category: string }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(isLens(r.category), `veio ${r.category}`).toBe(false);
+  });
+
+  it('o recorte não apaga nada: group=todos volta a trazer mais linhas', () => {
+    const principal = get('/stock', { group: 'principal' }).total;
+    const todos = get('/stock', { group: 'todos' }).total;
+    expect(todos).toBeGreaterThan(principal);
+  });
+
+  it('group=lentes mostra SÓ lente e tratamento (prévia do laboratório)', () => {
+    const rows = get('/stock', { group: 'lentes' }).rows as { category: string }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(isLens(r.category), `veio ${r.category}`).toBe(true);
+  });
+
+  it('filtrar por categoria NÃO fura o recorte', () => {
+    // Escolher uma categoria de lente dentro do recorte principal não pode
+    // trazer lente de volta pela porta dos fundos.
+    const cats = get('/products/categories') as string[];
+    const lensCat = cats.find((c) => isLens(c));
+    if (!lensCat) return; // dataset sem lente: nada a provar
+    const rows = get('/stock', { group: 'principal', category: lensCat }).rows as unknown[];
+    expect(rows.length).toBe(0);
+  });
+
+  it('alertas e produtos respeitam o mesmo recorte', () => {
+    const al = get('/alerts', { group: 'principal' }).rows as { category: string }[];
+    for (const r of al) expect(isLens(r.category), `alerta de ${r.category}`).toBe(false);
+    const pr = get('/products', { group: 'principal' }).rows as { category: string }[];
+    for (const r of pr) expect(isLens(r.category), `produto ${r.category}`).toBe(false);
+  });
+});
+
+describe('demo: /stores (feedback Galbe — "estoque por SKU e loja tá uniforme")', () => {
+  const rows = () => get('/stores').rows as { id: string; _count: { stockItems: number; sales: number } }[];
+
+  it('SKUs em estoque NÃO é o mesmo número em toda loja', () => {
+    const counts = rows().map((s) => s._count.stockItems);
+    expect(counts.length).toBeGreaterThan(1);
+    // O defeito era contar o catálogo inteiro (igual para todas as filiais).
+    expect(new Set(counts).size).toBeGreaterThan(1);
+  });
+
+  it('SKUs em estoque nunca passa do tamanho do catálogo', () => {
+    const catalogo = (get('/products', { group: 'todos' }) as any).total;
+    for (const s of rows()) {
+      expect(s._count.stockItems).toBeLessThanOrEqual(catalogo);
+      expect(s._count.stockItems).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('a contagem é coerente com o estoque daquela loja', () => {
+    // `rows` de /stock é a PÁGINA (200); o número comparável é o `total`, que
+    // o handler conta antes de paginar.
+    for (const s of rows().slice(0, 5)) {
+      const comSaldoDisponivel = get('/stock', {
+        storeId: s.id, group: 'todos', onlyAvailable: 'true',
+      }).total;
+      // "SKUs em estoque" conta saldo na loja; disponível já desconta reserva,
+      // então é sempre um subconjunto.
+      expect(s._count.stockItems).toBeGreaterThanOrEqual(comSaldoDisponivel);
+    }
+  });
+
+  it('Vendas não é número inventado — vem do dataset', () => {
+    // Antes: int(15, 30) a cada render. Agora tem que ser estável.
+    const a = rows().map((s) => s._count.sales);
+    const b = rows().map((s) => s._count.sales);
+    expect(a).toEqual(b);
+  });
+});
+
+describe('demo: janela de vendas medida, não presumida', () => {
+  it('/dashboard/coverage devolve a janela que usou como divisor', () => {
+    const r = get('/dashboard/coverage');
+    expect(r.windowDays).toBeGreaterThan(0);
+    expect(r.days).toBe(r.windowDays);
+  });
+
+  it('cobertura = estoque ÷ (vendas no período × 30/janela)', () => {
+    // O defeito era dividir por 30 quando o período tinha 7 dias, inflando
+    // toda cobertura em 4,3x. A conta tem que fechar com a janela declarada.
+    const r = get('/dashboard/coverage');
+    for (const row of r.rows as any[]) {
+      if (row.monthlyUnits > 0) {
+        expect(row.coverageMonths).toBeCloseTo(row.stockUnits / row.monthlyUnits, 1);
+        expect(row.monthlyUnits).toBeCloseTo((row.unitsSold * 30) / r.windowDays, 0);
+      }
+    }
+  });
+
+  it('cobertura por loja respeita o recorte de produto', () => {
+    const principal = get('/dashboard/coverage', { group: 'principal' });
+    const todos = get('/dashboard/coverage', { group: 'todos' });
+    const soma = (r: any) => (r.rows as any[]).reduce((a, x) => a + x.stockUnits, 0);
+    // Sem lente a rede tem menos unidades — se for igual, o recorte não pegou.
+    expect(soma(principal)).toBeLessThanOrEqual(soma(todos));
+  });
+});
+
+
+describe('demo: filtros de loja e tipo de produto nos relatórios (feedbacks 3.0)', () => {
+  const tipos = get('/products/categories') as string[];
+  const lojas = (get('/stores').rows as { id: string }[]).map((s) => s.id);
+
+  it('curva ABC: o tipo recorta por SKU E por marca — trocar a dimensão não desliga o filtro', () => {
+    // Um tipo que a análise de MARCA cobre: lente, tratamento e acessório
+    // ficam de fora dela por decisão do cliente, e ali o total por marca é
+    // zero mesmo — não é o filtro que falhou.
+    const tipo =
+      tipos.find((t) => get('/reports/abc', { dimension: 'brand', category: t }).totalRevenue > 0) ??
+      tipos[0];
+    const skuTudo = get('/reports/abc', { dimension: 'product' });
+    const skuTipo = get('/reports/abc', { dimension: 'product', category: tipo });
+    expect(skuTipo.totalRevenue).toBeGreaterThan(0);
+    expect(skuTipo.totalRevenue).toBeLessThanOrEqual(skuTudo.totalRevenue);
+    expect((skuTipo.rows as any[]).every((r) => r.category === tipo)).toBe(true);
+
+    const marcaTudo = get('/reports/abc', { dimension: 'brand' });
+    const marcaTipo = get('/reports/abc', { dimension: 'brand', category: tipo });
+    expect(marcaTipo.totalRevenue).toBeLessThanOrEqual(marcaTudo.totalRevenue);
+    // Mesma receita recortada, outro agrupamento.
+    expect(Math.abs(marcaTipo.totalRevenue - skuTipo.totalRevenue)).toBeLessThan(1);
+  });
+
+  it('curva ABC: a loja recorta a receita (o filtro não é decorativo)', () => {
+    const rede = get('/reports/abc', { dimension: 'product' });
+    const uma = get('/reports/abc', { dimension: 'product', storeId: lojas[0] });
+    expect(uma.totalRevenue).toBeGreaterThan(0);
+    expect(uma.totalRevenue).toBeLessThan(rede.totalRevenue);
+  });
+
+  it('giro: fora do recorte, fora do relatório', () => {
+    const r = get('/reports/turnover', { category: tipos[0] });
+    expect((r.rows as any[]).length).toBeGreaterThan(0);
+    expect((r.rows as any[]).every((x) => x.category === tipos[0])).toBe(true);
+  });
+
+  it('alertas: loja e tipo recortam a lista', () => {
+    const todos = get('/alerts', { group: 'principal' });
+    const tipo = (todos.rows as any[])[0]?.category;
+    if (tipo) {
+      const soTipo = get('/alerts', { group: 'principal', category: tipo });
+      expect((soTipo.rows as any[]).every((x) => x.category === tipo)).toBe(true);
+      expect(soTipo.total).toBeLessThanOrEqual(todos.total);
+    }
+    const soLoja = get('/alerts', { group: 'principal', storeId: lojas[0] });
+    expect((soLoja.rows as any[]).every((x) => x.storeId === lojas[0])).toBe(true);
+  });
+});
+
+describe('demo: card de liquidação virando transferência (feedbacks 3.0, item 05)', () => {
+  it('cada card com destino também diz de ONDE sai e QUANTAS', () => {
+    const board = get('/planning/decisions', { days: '90', group: 'principal' });
+    const liq = (board.cards as any[]).filter((c) => c.type === 'LIQUIDACAO' && c.outletStoreId);
+    expect(liq.length).toBeGreaterThan(0);
+    for (const c of liq) {
+      if (!c.outletFromStoreId) continue; // só o destino tem saldo: nada a mover
+      expect(c.outletFromStoreId).not.toBe(c.outletStoreId);
+      expect(c.outletQuantity).toBeGreaterThan(0);
+      expect(c.outletFromStoreName).toBeTruthy();
+    }
+    // A entrega do item 05 é a ação: pelo menos um card precisa ter rota completa.
+    expect(liq.some((c) => c.outletFromStoreId && c.outletQuantity > 0)).toBe(true);
+  });
+});
+
+
+describe('demo: os números batem entre as telas (feedbacks 30/07)', () => {
+  it('curva ABC devolve o denominador do período — "muito baixos" era o recorte', () => {
+    const r = get('/reports/abc', { dimension: 'product', group: 'principal' });
+    expect(r.periodRevenue).toBeGreaterThan(0);
+    expect(r.periodRevenue).toBeGreaterThanOrEqual(r.totalRevenue);
+    // O recorte de óculos/armação/relógio é uma FATIA da receita, não o todo.
+    expect(r.totalRevenue).toBeLessThan(r.periodRevenue);
+  });
+
+  it('a cobertura geral do relatório usa a MESMA base da cobertura do dashboard', () => {
+    // Era o furo do feedback 02: o relatório lia a amostra do catálogo e o
+    // dashboard lia a rede, então um dizia 1,5 mês e o outro ~26 meses.
+    const rel = get('/reports/coverage', { group: 'principal' });
+    const dash = get('/dashboard/coverage', { group: 'principal' });
+    const estoqueDash = (dash.rows as any[]).reduce((a, x) => a + x.stockUnits, 0);
+    expect(rel.total.stockUnits).toBe(estoqueDash);
+    const vendidasDash = (dash.rows as any[]).reduce((a, x) => a + x.unitsSold, 0);
+    expect(rel.total.unitsSold).toBe(vendidasDash);
+  });
+
+  it('quando as linhas por marca são amostra, a resposta declara isso', () => {
+    const rel = get('/reports/coverage', { group: 'principal' });
+    if (rel.sampled) {
+      expect(rel.sampled.stockUnits).toBeLessThan(rel.sampled.networkStockUnits);
+      expect(rel.total.stockUnits).toBe(rel.sampled.networkStockUnits);
+    }
+  });
+
+  it('o desconto do card segue a regra da rede: 20%/30% pelo preço cheio', () => {
+    const board = get('/planning/decisions', { days: '90', group: 'principal' });
+    const liq = (board.cards as any[]).filter((c) => c.type === 'LIQUIDACAO' && c.discountPct > 0);
+    expect(liq.length).toBeGreaterThan(0);
+    for (const c of liq) {
+      const p = c.discountParams;
+      expect(p.stepPct).toBe(10);
+      expect(p.stepDays).toBe(90);
+      expect([20, 30]).toContain(p.basePct);
+      // O sugerido é a regra, limitada pelo teto que zera a margem.
+      expect(c.discountPct).toBe(Math.min(p.basePct + 10 * p.steps, c.discountMaxPct));
+    }
   });
 });

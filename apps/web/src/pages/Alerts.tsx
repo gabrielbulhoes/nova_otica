@@ -1,15 +1,41 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAlerts, getRebalancePlan, setMinStock, type StockAlert } from '../api/client';
+import {
+  getAlerts,
+  getCategories,
+  getRebalancePlan,
+  getStores,
+  setMinStock,
+  type StockAlert,
+} from '../api/client';
 import { PageHeader, Loading, StatCard } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { useScope } from '../lib/scope';
 
 export function Alerts() {
   const { isAdmin } = useAuth();
+  const { scope } = useScope();
   const [level, setLevel] = useState('');
+  const [storeId, setStoreId] = useState('');
+  const [category, setCategory] = useState('');
 
-  const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
+  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
+  const categories = useQuery({
+    queryKey: ['categories', scope],
+    queryFn: () => getCategories({ group: scope }),
+  });
+
+  // Trocar o recorte no título pode deixar um tipo escolhido fora da lista.
+  // Em vez de exibir um filtro fantasma, ele se desfaz sozinho.
+  const tipos = categories.data ?? [];
+  const tipo = category && tipos.length > 0 && !tipos.includes(category) ? '' : category;
+
+  const alerts = useQuery({
+    queryKey: ['alerts', scope, storeId, tipo],
+    queryFn: () =>
+      getAlerts({ group: scope, storeId: storeId || undefined, category: tipo || undefined }),
+  });
   const rows = (alerts.data?.rows ?? []).filter((r) => !level || r.level === level);
 
   // Alerta de transferência (feedback 07): antes de comprar, remanejar o que a
@@ -22,6 +48,8 @@ export function Alerts() {
   });
   const transfers = rebalance.data?.rows.slice(0, 8) ?? [];
 
+  const lojaEscolhida = stores.data?.rows.find((s) => s.id === storeId)?.name;
+
   return (
     <>
       <PageHeader
@@ -29,19 +57,56 @@ export function Alerts() {
         subtitle="Produtos sem saldo (ruptura) ou abaixo do estoque mínimo, por loja."
       />
 
+      {/* Filtros da tela: sem loja e sem tipo de produto, uma lista da rede
+          inteira com tudo junto não é operável. */}
+      <div className="toolbar">
+        {isAdmin && (
+          <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Loja">
+            <option value="">Todas as lojas</option>
+            {stores.data?.rows.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <select value={tipo} onChange={(e) => setCategory(e.target.value)} aria-label="Tipo de produto">
+          <option value="">Todos os tipos</option>
+          {tipos.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <select value={level} onChange={(e) => setLevel(e.target.value)} aria-label="Nível do alerta">
+          <option value="">Ruptura e estoque baixo</option>
+          <option value="OUT">Somente rupturas</option>
+          <option value="LOW">Somente estoque baixo</option>
+        </select>
+        <span style={{ flex: 1 }} />
+        {(storeId || tipo || level) && (
+          <button
+            className="btn sm ghost"
+            onClick={() => {
+              setStoreId('');
+              setCategory('');
+              setLevel('');
+            }}
+          >
+            Limpar filtros
+          </button>
+        )}
+      </div>
+
       {alerts.data && (
-        <div className="grid grid-4">
-          <StatCard label="Total de alertas" value={alerts.data.total} />
+        <div className="grid grid-3">
+          <StatCard
+            label="Total de alertas"
+            value={alerts.data.total}
+            hint={[lojaEscolhida ?? 'Toda a rede', tipo || 'todos os tipos'].join(' · ')}
+          />
           <StatCard label="Rupturas (saldo 0)" value={alerts.data.out} />
           <StatCard label="Estoque baixo" value={alerts.data.low} />
-          <div className="card stat">
-            <div className="label">Filtrar</div>
-            <select value={level} onChange={(e) => setLevel(e.target.value)} style={{ marginTop: 8 }}>
-              <option value="">Todos</option>
-              <option value="OUT">Somente rupturas</option>
-              <option value="LOW">Somente baixo</option>
-            </select>
-          </div>
         </div>
       )}
 
@@ -82,7 +147,11 @@ export function Alerts() {
             </tbody>
           </table>
         ) : (
-          <div className="empty">Nenhum alerta. 🎉</div>
+          <div className="empty">
+            {storeId || tipo || level
+              ? 'Nenhum alerta com esses filtros.'
+              : 'Nenhum alerta. 🎉'}
+          </div>
         )}
       </div>
 

@@ -9,6 +9,21 @@ export function Stores() {
     <>
       <PageHeader title="Lojas" subtitle="Filiais da rede sincronizadas da fonte." />
 
+      {/* A demo estática carrega uma AMOSTRA do catálogo. Sem este aviso, o
+          "SKUs em estoque" parece um número da rede inteira — e é menor. */}
+      {stores.data?.sampled && (
+        <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 12.5 }}>
+          <span className="muted">
+            Nesta demonstração o catálogo vem amostrado
+            {stores.data.catalogSampled && stores.data.productCountNetwork
+              ? `: ${stores.data.catalogSampled.toLocaleString('pt-BR')} de ${stores.data.productCountNetwork.toLocaleString('pt-BR')} SKUs da rede`
+              : ''}
+            . A coluna <strong>SKUs em estoque</strong> conta sobre essa amostra, então fica menor
+            que o número real da filial. Unidades, receita e cobertura são da rede inteira.
+          </span>
+        </div>
+      )}
+
       <div className="card" style={{ padding: 0 }}>
         {stores.isLoading ? (
           <Loading />
@@ -32,7 +47,7 @@ export function Stores() {
                   <td>{s.name}</td>
                   <td>{s.city ?? '—'}</td>
                   <td>{s.state ?? '—'}</td>
-                  <td className="num">{s._count?.stockItems ?? 0}</td>
+                  <td className="num">{(s._count?.stockItems ?? 0).toLocaleString('pt-BR')}</td>
                   <td className="num">{s._count?.sales ?? 0}</td>
                   <td>
                     <span className={`badge ${s.active ? 'green' : 'gray'}`}>

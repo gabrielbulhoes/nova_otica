@@ -11,11 +11,16 @@ import {
 } from '../api/client';
 import { StatCard, PageHeader, Loading, CoverageBadge, fmtMonths } from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { useScope } from '../lib/scope';
 
 export function Dashboard() {
   const { isAdmin } = useAuth();
-  const summary = useQuery({ queryKey: ['summary'], queryFn: getSummary });
-  const coverage = useQuery({ queryKey: ['coverage'], queryFn: () => getStoreCoverage() });
+  const { scope } = useScope();
+  const summary = useQuery({ queryKey: ['summary', scope], queryFn: () => getSummary({ group: scope }) });
+  const coverage = useQuery({
+    queryKey: ['coverage', scope],
+    queryFn: () => getStoreCoverage({ group: scope }),
+  });
   // Mesma queryKey do Planejamento (days=90): compartilha cache e invalidação
   // SSE; staleTime maior porque o plano completo é caro no backend.
   const rebalance = useQuery({
@@ -25,13 +30,20 @@ export function Dashboard() {
     staleTime: 5 * 60_000,
   });
   const sync = useQuery({ queryKey: ['sync-status'], queryFn: getSyncStatus, enabled: isAdmin });
-  const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
+  const alerts = useQuery({ queryKey: ['alerts', scope], queryFn: () => getAlerts({ group: scope }) });
   const orders = useQuery({ queryKey: ['planning-orders', '90', ''], queryFn: () => getPurchaseOrders({ days: '90' }) });
 
   // Cobertura da rede = todo o estoque ÷ toda a venda mensal (média ponderada).
+  //
+  // Soma as UNIDADES VENDIDAS e converte uma vez só. Somar os `monthlyUnits`
+  // já arredondados de cada loja dava 20,6 aqui e 20,7 em Relatórios — e a
+  // diferença de uma casa é exatamente o tipo de coisa que faz o cliente
+  // perguntar, com razão, por que as duas telas não batem.
   const cov = coverage.data?.rows ?? [];
-  const totalMonthly = cov.reduce((a, r) => a + r.monthlyUnits, 0);
+  const janela = coverage.data?.windowDays ?? coverage.data?.days ?? 30;
+  const totalSold = cov.reduce((a, r) => a + r.unitsSold, 0);
   const totalStock = cov.reduce((a, r) => a + r.stockUnits, 0);
+  const totalMonthly = janela > 0 ? (totalSold * 30) / janela : 0;
   const networkCoverage = totalMonthly > 0 ? totalStock / totalMonthly : null;
   const maxMonths = Math.max(1, ...cov.map((r) => r.coverageMonths ?? 0));
 
@@ -94,7 +106,11 @@ export function Dashboard() {
               // precisa dizer a verdade sobre o recorte exibido.
               label={isAdmin ? 'Cobertura da rede' : 'Cobertura da loja'}
               value={networkCoverage === null ? '—' : fmtMonths(Math.round(networkCoverage * 10) / 10)}
-              hint="Estoque ÷ média mensal de unidades vendidas"
+              hint={
+                cov.length > 1
+                  ? `${totalStock.toLocaleString('pt-BR')} un. ÷ ${totalMonthly.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un./mês — pesa o estoque parado das lojas do fim da lista`
+                  : 'Estoque ÷ média mensal de unidades vendidas'
+              }
             />
           </div>
 

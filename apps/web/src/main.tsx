@@ -9,6 +9,7 @@ import { AuthProvider } from './auth/AuthContext';
 // senão o primeiro quadro sai em fonte de sistema.
 import './fonts.css';
 import './styles.css';
+import { ScopeProvider } from './lib/scope';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, staleTime: 10_000 } },
@@ -27,7 +28,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <Router {...routerProps}>
         <AuthProvider>
-          <AppRoot />
+          <ScopeProvider>
+            <AppRoot />
+          </ScopeProvider>
         </AuthProvider>
       </Router>
     </QueryClientProvider>

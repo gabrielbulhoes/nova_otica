@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { asyncHandler, parseList, parsePaging } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
 import { listStock, stockByProduct } from './stock.service.js';
+import { parseGroup } from '../products/product.scope.js';
 
 export const stockRouter = Router();
 
@@ -26,6 +27,7 @@ stockRouter.get(
       productId: req.query.productId as string | undefined,
       search: req.query.search as string | undefined,
       categories: parseList(req.query.category),
+      group: parseGroup(req.query.group),
       onlyAvailable: req.query.onlyAvailable === 'true' || req.query.only_disp === '1',
       limit,
       skip,
@@ -41,6 +43,7 @@ stockRouter.get(
     const rows = await stockByProduct(
       req.query.search as string | undefined,
       parseList(req.query.category),
+      parseGroup(req.query.group),
     );
     res.json({ total: rows.length, rows });
   }),

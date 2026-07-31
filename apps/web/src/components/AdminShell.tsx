@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useLiveInvalidation } from '../hooks/useLiveInvalidation';
+import { ScopePicker } from '../lib/scope';
 
 const dockItems = [
   { to: '/admin', icon: '🏠', label: 'Dashboard', end: true },
@@ -92,7 +93,10 @@ export function AdminShell() {
         <section className="window-main">
           <div className="titlebar">
             <span className="title">{active}</span>
-            <span className="muted" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            {/* Recorte de produto: uma escolha por sessão, sempre visível.
+                Lente e tratamento saem por padrão (são do laboratório). */}
+            <ScopePicker />
+            <span className="muted" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
               <span className="dot green" /> ao vivo
             </span>
           </div>
