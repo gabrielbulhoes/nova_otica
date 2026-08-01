@@ -20,6 +20,7 @@ import {
   BotaoPrimario,
   Codigo,
   AberturaDeSecao,
+  Modal,
 } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
@@ -455,9 +456,7 @@ function MovementModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="card modal" onClick={(e) => e.stopPropagation()}>
-        <h3 className="section-title">Nova movimentação</h3>
+    <Modal titulo="Nova movimentação" onClose={onClose}>
 
         <div className="field">
           <label>Tipo</label>
@@ -584,7 +583,6 @@ function MovementModal({ onClose }: { onClose: () => void }) {
             {create.isPending ? 'Salvando…' : 'Registrar'}
           </BotaoPrimario>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

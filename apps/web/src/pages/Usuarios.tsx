@@ -9,7 +9,7 @@ import {
   type AdminUser,
   type Role,
 } from '../api/client';
-import { PageHeader, Loading, Selo, Botao, BotaoPrimario, Codigo } from '../components/ui';
+import { PageHeader, Loading, Selo, Botao, BotaoPrimario, Codigo, Modal } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 
@@ -252,18 +252,7 @@ function CreateUserModal({
   });
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <form
-        className="card modal"
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={(e) => {
-          e.preventDefault();
-          save.mutate();
-        }}
-      >
-        <h3 className="section-title" style={{ marginTop: 0 }}>
-          Novo usuário
-        </h3>
+    <Modal titulo="Novo usuário" onClose={onClose} comoFormulario onSubmit={() => save.mutate()}>
         <div className="field">
           <label>Nome</label>
           <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required minLength={2} autoFocus />
@@ -306,7 +295,6 @@ function CreateUserModal({
             {save.isPending ? 'Criando…' : 'Criar'}
           </BotaoPrimario>
         </div>
-      </form>
-    </div>
+    </Modal>
   );
 }

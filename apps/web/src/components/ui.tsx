@@ -1,3 +1,5 @@
+import { useEffect, useId, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import type { CoverageLevel } from '../api/client';
 import { toCsv, downloadCsv, type CsvColumn } from '../bi/csv';
@@ -570,5 +572,134 @@ export function ExportCsv<T>({
     >
       Exportar CSV ({rows.length})
     </Botao>
+  );
+}
+
+/**
+ * Diálogo modal — o de verdade, não a `div` sobre um scrim.
+ *
+ * A auditoria de teclado da Onda 4 mediu os três modais do console e achou o
+ * mesmo defeito nos três: sem `role="dialog"`, sem foco entrando, sem
+ * armadilha de foco e sem Esc. Com o modal aberto, 18 Tabs percorriam a página
+ * DE TRÁS e batiam em botões "Transferir" cobertos pelo scrim — dá para
+ * acionar o que não se vê. E quem abria pelo teclado não tinha como preencher
+ * nem como fechar.
+ *
+ * Um componente só, porque a correção replicada em três lugares vira três
+ * correções que divergem no primeiro ajuste.
+ */
+export function Modal({
+  titulo,
+  onClose,
+  children,
+  largura,
+  comoFormulario,
+  onSubmit,
+}: {
+  titulo: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+  largura?: number;
+  /** Renderiza o corpo como <form> — Enter submete, que é o esperado. */
+  comoFormulario?: boolean;
+  onSubmit?: () => void;
+}) {
+  const caixa = useRef<HTMLDivElement>(null);
+  const idTitulo = `dlg-${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
+
+  useEffect(() => {
+    // Quem tinha o foco antes precisa recebê-lo de volta ao fechar: sem isso o
+    // teclado volta para o topo do documento e a pessoa reconstrói o caminho.
+    const gatilho = document.activeElement as HTMLElement | null;
+    const focaveis = () =>
+      Array.from(
+        caixa.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+
+    // autoFocus do React já pode ter posto o foco num campo; só forçamos quando
+    // o foco ainda está fora do diálogo.
+    if (!caixa.current?.contains(document.activeElement)) focaveis()[0]?.focus();
+
+    const aoTeclar = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const lista = focaveis();
+      if (lista.length === 0) return;
+      const primeiro = lista[0];
+      const ultimo = lista[lista.length - 1];
+      const atual = document.activeElement as HTMLElement | null;
+      // A armadilha: o Tab circula DENTRO do diálogo em vez de vazar para a
+      // página coberta pelo scrim.
+      if (!caixa.current?.contains(atual)) {
+        e.preventDefault();
+        primeiro.focus();
+      } else if (e.shiftKey && atual === primeiro) {
+        e.preventDefault();
+        ultimo.focus();
+      } else if (!e.shiftKey && atual === ultimo) {
+        e.preventDefault();
+        primeiro.focus();
+      }
+    };
+    document.addEventListener('keydown', aoTeclar, true);
+
+    // A página de trás fica INERTE: além da armadilha de Tab, é isto que impede
+    // o leitor de tela de ler a tela coberta pelo scrim como se ela ainda
+    // estivesse disponível. Só funciona porque o diálogo é levado para o
+    // <body> por portal — enquanto ele morava dentro de `.macos-window`, marcar
+    // a janela como inerte teria desligado o próprio diálogo junto.
+    const fundo = Array.from(
+      document.querySelectorAll<HTMLElement>('.macos-window, .store, .launcher'),
+    ).filter((el) => !el.contains(caixa.current));
+    for (const el of fundo) el.setAttribute('inert', '');
+
+    return () => {
+      document.removeEventListener('keydown', aoTeclar, true);
+      for (const el of fundo) el.removeAttribute('inert');
+      gatilho?.focus?.();
+    };
+  }, [onClose]);
+
+  const corpo = (
+    <>
+      <h3 className="section-title" id={idTitulo} style={{ marginTop: 0 }}>
+        {titulo}
+      </h3>
+      {children}
+    </>
+  );
+
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        ref={caixa}
+        className="card modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={idTitulo}
+        style={largura ? { width: largura } : undefined}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {comoFormulario ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSubmit?.();
+            }}
+          >
+            {corpo}
+          </form>
+        ) : (
+          corpo
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }

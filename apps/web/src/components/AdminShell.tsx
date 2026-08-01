@@ -3,7 +3,7 @@ import type { RefObject } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useLiveInvalidation } from '../hooks/useLiveInvalidation';
-import { ScopePicker } from '../lib/scope';
+import { ScopePicker, SCOPE_LABEL, useScope } from '../lib/scope';
 import { Mark } from '../brand/Brand';
 import { Icon, type IconName } from '../brand/Icon';
 
@@ -204,6 +204,7 @@ export function AdminShell() {
   const conteudoRef = useRef<HTMLElement>(null);
   const dock = useDockDaRolagem(conteudoRef, location.pathname);
 
+  const { scope } = useScope();
   const visible = links.filter((l) => !l.adminOnly || isAdmin);
   const active =
     [...visible]
@@ -427,6 +428,15 @@ export function AdminShell() {
             tabIndex={-1}
             aria-label={`Conteúdo — ${active}`}
           >
+            {/* Cabeçalho DE PAPEL. Os cinco relatórios saíam da impressora com
+                texto de capa idêntico — o nome do relatório mora num
+                `.segmented`, que o `@media print` esconde —, e nenhuma folha
+                dizia de que rede era, de que recorte, nem de quando. Um maço
+                sem isso não se recompõe depois de cair no chão. Só aparece no
+                papel; em tela não ocupa um pixel. */}
+            <div className="print-only cabecalho-papel" aria-hidden="true">
+              A GRACIOSA · Nova Ótica · {active} · recorte: {SCOPE_LABEL[scope]}
+            </div>
             <Outlet />
           </main>
 

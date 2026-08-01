@@ -695,6 +695,36 @@ textarea:focus-visible,
     display: none;
   }
 }
+/* ONDA 4 · A BARRA PASSA A QUEBRAR EM VEZ DE VAZAR.
+   Medido a 768px: o bloco de título era espremido a largura ZERO (o nome da
+   tela sumia por inteiro) e o grupo da direita terminava 5px ALÉM da janela,
+   o que dava barra de rolagem horizontal em `.macos-window` nas 15 rotas do
+   admin. Barra horizontal na casca é sempre defeito. O recorte ganhou dois
+   chips nos Feedbacks 5.0, então a barra ficou ainda mais larga do que quando
+   isso foi medido.
+   Abaixo de 900px ela deixa de ser uma linha de 44px e passa a ser um bloco
+   que quebra: o título ocupa a primeira faixa inteira e os controles a
+   segunda. Ninguém some, ninguém vaza. */
+@media (max-width: 900px) {
+  .titlebar {
+    height: auto;
+    min-height: 44px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 8px 12px;
+  }
+  .titlebar .title {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  /* O recorte continua sendo o último a encolher, mas quando nem assim couber
+     ele rola dentro de si em vez de empurrar a barra para fora da janela. */
+  .titlebar .scope-picker {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+  }
+}
 .main {
   flex: 1 1 auto;
   min-height: 0; /* essencial p/ o scroll interno funcionar dentro do flex */
@@ -769,6 +799,19 @@ header > .eyebrow {
 @media (max-width: 1100px) {
   .grid-4 {
     grid-template-columns: repeat(2, 1fr);
+  }
+}
+/* Duas e três colunas viram uma. Medido a 768px: `.main` de /admin/decisoes
+   rolava na horizontal (scrollWidth 742 × clientWidth 524) por causa da
+   `.grid-3`, e /admin/estrategia pela `.grid-2`. Não era tabela larga dentro de
+   um cartão — era a área de conteúdo inteira que rolava.
+   A regra mora AQUI, e não junto do bloco da casca lá em cima, porque
+   `.grid-3` só é definida nesta altura do arquivo: a media query escrita antes
+   perdia para a regra base por ordem de cascata, com a mesma especificidade. */
+@media (max-width: 900px) {
+  .grid-3,
+  .grid-2 {
+    grid-template-columns: 1fr;
   }
 }
 @media (max-width: 720px) {
@@ -1048,6 +1091,15 @@ input[type='number'] {
   font-family: var(--font-mono);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+/* Os dois campos de data de /admin/vendas eram os ÚNICOS dois focáveis sem
+   anel em todo o console (WCAG 2.4.7 e 2.4.11). O `input[type=date]` do
+   Chromium leva o foco para uma parte interna do controle, e a regra genérica
+   de `:focus` não chegava lá — `:focus-within` chega. */
+input[type='date']:focus,
+input[type='date']:focus-within {
+  border-color: var(--ouro-texto);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 
 /* ─── Filtro multi-seleção (MultiSelect) ────────────────────────────────── */
@@ -2412,7 +2464,25 @@ td .codigo {
   margin: 10mm;
 }
 
+/* Bloco que só existe no papel. Fora do @media print ele não ocupa espaço
+   nenhum — é a contraparte de .no-print. */
+.print-only {
+  display: none;
+}
+
 @media print {
+  .print-only {
+    display: block !important;
+  }
+  .cabecalho-papel {
+    font-family: var(--font-titulo);
+    font-size: 9pt;
+    color: #000;
+    border-bottom: 1px solid #000;
+    padding-bottom: 4px;
+    margin-bottom: 10px;
+  }
+
   /* 1 · SAI TUDO QUE É NAVEGAÇÃO OU CONTROLE ------------------------------- */
   .demo-seal,
   .sidebar,
@@ -2421,8 +2491,30 @@ td .codigo {
   .topbar,
   .no-print,
   .segmented,
+  .skip-link,
   button {
     display: none !important;
+  }
+
+  /* A.2 · A ABA ESCOLHIDA VIRA O SUBTÍTULO DO DOCUMENTO -------------------- */
+  /* Os cinco relatórios imprimiam texto de capa IDÊNTICO: o nome do relatório
+     mora no `.segmented`, e o bloco acima esconde `.segmented` e `button`. Quem
+     leva cinco relatórios para uma reunião ficava com cinco maços cuja única
+     diferença estava no cabeçalho da tabela, no meio da primeira folha. */
+  .segmented:has(button.active) {
+    display: block !important;
+    border: 0 !important;
+    background: none !important;
+  }
+  .segmented button.active {
+    display: block !important;
+    border: 0 !important;
+    background: none !important;
+    padding: 0 !important;
+    color: #000 !important;
+    font-family: var(--font-titulo);
+    font-size: 13pt;
+    text-align: left;
   }
   /* A .toolbar CONTINUA imprimindo, de propósito: com os botões escondidos e os
      campos virando texto (bloco 5), ela vira a linha de proveniência do
@@ -2535,10 +2627,34 @@ td .codigo {
   td {
     padding: 2px 4px !important;
     font-size: 8pt !important;
-    /* Sem isto uma razão social sem espaços trava a largura mínima da coluna e
-       a tabela volta a estourar a folha. */
-    overflow-wrap: anywhere;
+    /* A regra certa na dose errada. `overflow-wrap: anywhere` entrou aqui por
+       uma razão social sem espaços (LUXOTTICA BRASIL PRODUTOS OTICOS E
+       ESPORTIVOS LTDA), que sem ele trava a largura mínima da coluna. Aplicado
+       a TODA célula, ele autorizava o navegador a partir dentro de um valor:
+       na Curva ABC, 100% das linhas de RECEITA saíam como "R$ 6.714," numa
+       linha e "00" na seguinte, e os cabeçalhos viravam CLASS/E, DISPONÍV/EL,
+       AÇ/ÃO. Volta ao padrão, e a exceção fica onde o problema estava. */
+    overflow-wrap: normal;
     word-break: normal;
+  }
+  th {
+    hyphens: none;
+  }
+  /* Dinheiro, quantidade, SKU e data são unidades indivisíveis: um número
+     partido em duas linhas deixa de ser um número. */
+  td.num,
+  th.num,
+  .codigo,
+  .valor,
+  .unidade {
+    white-space: nowrap;
+  }
+  /* E aqui, sim, pode partir: é texto longo sem separador natural. */
+  td.produto,
+  td.fornecedor,
+  td.marca,
+  td .codigo + span {
+    overflow-wrap: anywhere;
   }
   td.num,
   th.num {
@@ -2593,7 +2709,11 @@ td .codigo {
     border-left: 2px solid #000 !important; /* atenção */
   }
   .badge.green {
-    border-left: 1px solid #000 !important; /* saudável */
+    /* Era 1px sólido — a MESMA borda que todo badge já tem em toda a volta, o
+       que fazia "saudável" e um chip sem cor saírem com o mesmo desenho. Dos
+       cinco estados, quatro se distinguiam no papel; o quinto, não. Ponteado é
+       o único estilo ainda não usado e não colide com o duplo do `blue`. */
+    border-left: 3px dotted #000 !important; /* saudável */
   }
   .badge.blue {
     border-left: 3px double #000 !important; /* informativo */
