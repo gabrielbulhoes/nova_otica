@@ -15,18 +15,22 @@ export class Tipografia {
 
     const alvo = document.getElementById('fichas');
     OBRAS.forEach((obra, i) => {
+      // movimentos sem título são a abertura e o fecho do mundo, não pinturas
+      if (!obra.titulo) return;
+
+      const acervo = [obra.ano, obra.tecnica, obra.dimensoes]
+        .filter(Boolean)
+        .map((linha) => `<span>${linha}</span>`)
+        .join('');
+
       const el = document.createElement('article');
       el.className = 'ficha';
       el.dataset.lado = obra.lado;
       el.innerHTML = `
         <span class="ficha__ordem">obra ${obra.ordem}</span>
         <h2 class="ficha__titulo">${obra.titulo}</h2>
-        <p class="ficha__tecnica">
-          <span>${obra.ano}</span>
-          <span>${obra.tecnica}</span>
-          <span>${obra.dimensoes}</span>
-        </p>
-        <p class="ficha__reflexao">${obra.reflexao}</p>
+        ${acervo ? `<p class="ficha__tecnica">${acervo}</p>` : ''}
+        ${obra.reflexao ? `<p class="ficha__reflexao">${obra.reflexao}</p>` : ''}
       `;
       alvo.appendChild(el);
 
@@ -34,6 +38,7 @@ export class Tipografia {
       this.fichas.push({
         el,
         lado,
+        indice: i,
         opacidade: gsap.quickTo(el, 'opacity', { duration: 0.5, ease: 'power2.out' }),
         desloc: gsap.quickTo(el, 'x', { duration: 0.9, ease: 'power2.out' }),
         desfoque: gsap.quickSetter(el, 'filter'),
@@ -58,13 +63,13 @@ export class Tipografia {
     });
     this.opColofao = gsap.quickTo(this.colofao, 'opacity', { duration: 0.9, ease: 'power2.out' });
 
-    // rastro: seis marcas discretas, uma por obra
+    // rastro: uma marca discreta por movimento
     const rastro = document.getElementById('rastro');
     OBRAS.forEach((obra, i) => {
       const b = document.createElement('button');
       b.className = 'rastro__marca';
       b.type = 'button';
-      b.setAttribute('aria-label', `${obra.titulo}, obra ${obra.ordem}`);
+      b.setAttribute('aria-label', obra.titulo || `movimento ${obra.ordem}`);
       b.dataset.indice = String(i);
       rastro.appendChild(b);
       this.marcas.push(b);
@@ -87,9 +92,7 @@ export class Tipografia {
   atualizar(p, cru) {
     for (let i = 0; i < this.fichas.length; i++) {
       const f = this.fichas[i];
-      let pres = presenca(p, i);
-      /* a primeira ficha espera o frontispício sair de cena */
-      if (i === 0) pres = Math.min(pres, Math.max(0, cru * 22 - 0.35));
+      const pres = presenca(p, f.indice);
       const suave = pres * pres * (3 - 2 * pres);
 
       if (Math.abs(suave - f.anterior) > 0.002) {

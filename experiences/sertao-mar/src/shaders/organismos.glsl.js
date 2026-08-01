@@ -72,9 +72,10 @@ void main(){
   float submersoPonto = smoothstep(0.0, -1.4, vMundo.y - uAgua);
   cor += vAlbedo * uSolCor * causticas(vMundo.xz * 1.6, uTempo) * submersoPonto * uCausticas * 1.2;
 
-  /* a luz que a vida guardou */
-  float pulso = 0.45 + 0.55 * sin(uTempo * 0.8 + vDados.z * 37.0);
-  cor += vec3(0.18, 0.95, 0.88) * vDados.y * uBio * pulso * 2.2;
+  /* a luz que a vida guardou — cor de pavio, não de LED */
+  float pulso = 0.62 + 0.38 * sin(uTempo * 1.7 + vDados.z * 37.0)
+                     + 0.10 * sin(uTempo * 5.3 + vDados.z * 11.0);
+  cor += vec3(1.0, 0.60, 0.26) * vDados.y * uBio * pulso * 0.85;
 
   cor = aplicarNeblina(cor, dist, rd, vMundo.y);
   cor = mix(cor * 0.15, cor, uDesvelo);
@@ -132,7 +133,7 @@ void main(){
 
   vNormal = n;
   vMundo = mundo;
-  vDados = vec3(sombraDoSol(mundo), m * 0.55 * step(0.35, hash11(iSemente + 8.0)), iSemente);
+  vDados = vec3(sombraDoSol(mundo), m * 0.30 * step(0.62, hash11(iSemente + 8.0)), iSemente);
 
   gl_Position = projectionMatrix * viewMatrix * vec4(mundo, 1.0);
 }
@@ -171,7 +172,7 @@ void main(){
 
   vNormal = n;
   vMundo = mundo;
-  vDados = vec3(sombraDoSol(mundo), 0.16 * uCoral, iSemente);
+  vDados = vec3(sombraDoSol(mundo), 0.07 * uCoral, iSemente);
 
   gl_Position = projectionMatrix * viewMatrix * vec4(mundo, 1.0);
 }
@@ -228,7 +229,7 @@ void main(){
 
   vNormal = n;
   vMundo = mundo;
-  vDados = vec3(mix(0.6, 1.0, sombraDoSol(mundo)), 0.09, iSemente);
+  vDados = vec3(mix(0.6, 1.0, sombraDoSol(mundo)), 0.02, iSemente);
 
   gl_Position = projectionMatrix * viewMatrix * vec4(mundo, 1.0);
 }

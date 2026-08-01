@@ -45,7 +45,7 @@ void main(){
 
   float tamanho = mix(1.0 + s * 1.1, 1.6 + s * 2.6, uPlancton);
   gl_PointSize = tamanho * (uResolucao.y * 0.0009) * (60.0 / max(vDist, 1.0));
-  gl_PointSize = clamp(gl_PointSize, 0.6, 22.0);
+  gl_PointSize = clamp(gl_PointSize, 0.6, 13.0);
 
   /* desaparecem antes de tocar a borda da caixa: ninguém vê a costura */
   vec3 borda = min(p, CAIXA - p) / (CAIXA * 0.5);
@@ -53,7 +53,7 @@ void main(){
 
   vMar = uPlancton;
   vBrilho = margem * mix(0.16 + s * 0.24, 0.42 + s * 0.7, uPlancton);
-  vBrilho *= mix(1.0, 1.7, uBio);
+  vBrilho *= mix(1.0, 1.15, uBio);
   vBrilho *= smoothstep(2.0, 9.0, vDist);       // não engasga na lente
 
   gl_Position = projectionMatrix * vista;
@@ -76,7 +76,7 @@ void main(){
   float halo = pow(1.0 - r, 0.7) * 0.25;
 
   vec3 poeira = uSolCor * 0.55 + uNeblinaCor * 0.85;
-  vec3 plancton = mix(vec3(0.18, 0.72, 0.74), vec3(0.10, 0.95, 0.86), uBio);
+  vec3 plancton = mix(vec3(0.20, 0.66, 0.66), vec3(0.16, 0.74, 0.68), uBio);
   vec3 cor = mix(poeira, plancton, pow(vMar, 1.7));
 
   /* a névoa também engole a poeira */

@@ -25,7 +25,7 @@ const PERTO = 0.25;
 const LONGE = 2200;
 
 /* Distribuição das criaturas ao longo de todo o percurso da câmera. */
-const CORREDOR = { z0: 70, z1: -480, largura: 130 };
+const CORREDOR = { z0: 80, z1: -600, largura: 130 };
 
 function aleatorio(semente) {
   let s = semente >>> 0;

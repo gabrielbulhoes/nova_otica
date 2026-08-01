@@ -167,9 +167,10 @@ void main(){
   float trama = sin(uv.x * uResolucao.x * 1.4) * sin(uv.y * uResolucao.y * 1.4);
   cor *= 1.0 + trama * 0.012;
 
-  /* grão de pigmento */
+  /* grão de pigmento — o preto do fundo fica limpo, como tinta e não como ruído */
   float grao = ruidoBranco(uv * uResolucao + fract(uTempo) * 431.0) - 0.5;
-  cor += grao * 0.015 * (1.0 - 0.6 * dot(cor, vec3(0.333)));
+  float massa = dot(cor, vec3(0.333));
+  cor += grao * 0.015 * (1.0 - 0.6 * massa) * smoothstep(0.0, 0.10, massa);
 
   /* sombra de galeria nas bordas */
   float vinheta = smoothstep(0.98, 0.22, raio2 * 1.9);

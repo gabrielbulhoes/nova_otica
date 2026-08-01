@@ -118,10 +118,10 @@ void main(){
     /* bioluminescência: colônias acendendo no ritmo delas */
     if (uBio > 0.001){
       vec2 col = celulas(posTerreno.xz * 0.42 + 4.0);
-      float nucleo = smoothstep(0.2, 0.0, col.x);
+      float nucleo = pow(smoothstep(0.40, 0.02, col.x), 2.2);
       float pulso = 0.45 + 0.55 * sin(uTempo * 0.55 + hash21(floor(posTerreno.xz * 0.42)) * 42.0);
-      float onde = smoothstep(0.38, 0.72, fbm2(posTerreno.xz * 0.07 + 19.0, 3));
-      cor += vec3(0.16, 0.92, 0.86) * nucleo * pulso * onde * uBio * 1.9;
+      float onde = smoothstep(0.42, 0.78, fbm2(posTerreno.xz * 0.07 + 19.0, 3));
+      cor += vec3(0.13, 0.44, 0.42) * nucleo * pulso * onde * uBio * 0.55;
     }
 
     cor = aplicarNeblina(cor, tTerreno, rd, posTerreno.y);
