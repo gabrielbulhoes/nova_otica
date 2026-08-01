@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>O sertão já foi mar</title>
+    <meta
+      name="description"
+      content="Uma coleção de pinturas vivas sobre a metamorfose entre o sertão, o mar e uma evolução que não aconteceu."
+    />
+    <meta name="theme-color" content="#0b0c0d" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/styles/main.css" />
+  </head>
+  <body>
+    <!-- A obra. Uma única tela, do início ao fim. -->
+    <canvas id="tela" aria-hidden="true"></canvas>
+
+    <!-- Véu de entrada: o quadro ainda coberto. -->
+    <div id="veu" class="veu">
+      <div class="veu__interior">
+        <p class="veu__epigrafe" id="veu-epigrafe">
+          <span>O sertão já foi mar.</span>
+          <span>O mar já foi sertão.</span>
+          <span>E inevitavelmente voltarão a ser um só.</span>
+        </p>
+        <div class="veu__barra"><i id="veu-progresso"></i></div>
+        <button class="veu__entrada" id="veu-entrada" type="button" hidden>entrar</button>
+      </div>
+    </div>
+
+    <!-- Tipografia: nunca rouba o protagonismo. -->
+    <main id="camadas" class="camadas" aria-label="Coleção">
+      <header class="frontispicio" id="frontispicio">
+        <h1 class="frontispicio__titulo">
+          <span>O sertão</span><span>já foi mar</span>
+        </h1>
+        <p class="frontispicio__autor" id="frontispicio-autor"></p>
+      </header>
+
+      <div class="fichas" id="fichas" aria-live="polite"></div>
+
+      <footer class="colofao" id="colofao">
+        <p class="colofao__linha">o ciclo recomeça</p>
+        <button class="colofao__voltar" id="colofao-voltar" type="button">
+          voltar ao princípio
+        </button>
+      </footer>
+    </main>
+
+    <!-- Interface invisível. -->
+    <nav class="rastro" id="rastro" aria-label="Percurso"></nav>
+
+    <button class="som" id="som" type="button" aria-pressed="false" title="paisagem sonora">
+      <span class="som__marca"><i></i><i></i><i></i></span>
+      <span class="som__rotulo">som</span>
+    </button>
+
+    <div class="convite" id="convite"><span>desça</span></div>
+
+    <noscript>
+      <div class="noscript">
+        Esta obra é feita de luz em movimento. É preciso JavaScript para atravessá-la.
+      </div>
+    </noscript>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

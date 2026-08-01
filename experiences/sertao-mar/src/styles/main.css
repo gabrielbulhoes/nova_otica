@@ -1,0 +1,525 @@
+/* ---------------------------------------------------------------------------
+   O sertão já foi mar
+   A interface é uma instalação: quase invisível, nunca competindo com a obra.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --sal: #e8e2d6;
+  --sal-fraco: rgba(232, 226, 214, 0.52);
+  --sal-tenue: rgba(232, 226, 214, 0.26);
+  --breu: #08090a;
+  --ocre: #c08a4e;
+  --turquesa: #6fa9a2;
+
+  --serifa: 'Cormorant Garamond', 'EB Garamond', Garamond, Georgia, 'Times New Roman', serif;
+  --grotesca: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+
+  --margem: clamp(1.25rem, 4vw, 4.5rem);
+  --lento: 1600ms;
+  --curva: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--breu);
+  color: var(--sal);
+  font-family: var(--serifa);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+html {
+  scrollbar-width: none;
+}
+html::-webkit-scrollbar {
+  display: none;
+}
+
+body {
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+}
+
+body.imovel {
+  overflow: hidden;
+  height: 100%;
+}
+
+::selection {
+  background: rgba(111, 169, 162, 0.3);
+  color: var(--sal);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* --- a tela ---------------------------------------------------------------- */
+
+#tela {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  display: block;
+  z-index: 0;
+}
+
+/* --- o véu de entrada ------------------------------------------------------ */
+
+.veu {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: var(--breu);
+  transition: opacity 2200ms var(--curva), visibility 0s linear 2200ms;
+}
+
+.veu.aberto {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.veu__interior {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(2rem, 6vh, 4rem);
+  padding: var(--margem);
+  text-align: center;
+}
+
+.veu__epigrafe {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  font-size: clamp(1.05rem, 2.4vw, 1.9rem);
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: var(--sal-fraco);
+  max-width: 34ch;
+}
+
+.veu__epigrafe span {
+  opacity: 0;
+  transform: translateY(0.6em);
+  filter: blur(6px);
+  animation: emergir 2600ms var(--curva) forwards;
+}
+.veu__epigrafe span:nth-child(1) {
+  animation-delay: 400ms;
+}
+.veu__epigrafe span:nth-child(2) {
+  animation-delay: 1500ms;
+}
+.veu__epigrafe span:nth-child(3) {
+  animation-delay: 2600ms;
+}
+
+@keyframes emergir {
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
+}
+
+.veu__barra {
+  width: min(38vw, 260px);
+  height: 1px;
+  background: rgba(232, 226, 214, 0.12);
+  overflow: hidden;
+}
+
+.veu__barra i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--sal-fraco);
+  transition: width 700ms var(--curva);
+}
+
+.veu__entrada {
+  font-family: var(--grotesca);
+  font-size: 0.66rem;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--sal-fraco);
+  padding: 1em 1.6em 1em 2em;
+  border: 1px solid rgba(232, 226, 214, 0.16);
+  border-radius: 999px;
+  transition: color 700ms var(--curva), border-color 700ms var(--curva),
+    letter-spacing 700ms var(--curva);
+  animation: emergir 1800ms var(--curva) forwards;
+  opacity: 0;
+}
+
+.veu__entrada:hover,
+.veu__entrada:focus-visible {
+  color: var(--sal);
+  border-color: rgba(232, 226, 214, 0.4);
+  letter-spacing: 0.5em;
+}
+
+/* --- as camadas de texto --------------------------------------------------- */
+
+.camadas {
+  position: relative;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* Os trechos não têm conteúdo: existem apenas para dar altura ao tempo. */
+.trecho {
+  display: block;
+  width: 100%;
+  height: 140vh;
+}
+
+.frontispicio {
+  position: fixed;
+  left: var(--margem);
+  bottom: calc(var(--margem) + 2.5rem);
+  max-width: 22ch;
+  will-change: opacity, transform, filter;
+}
+
+.frontispicio__titulo {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  font-weight: 300;
+  font-size: clamp(2.4rem, 7.5vw, 6.4rem);
+  line-height: 0.94;
+  letter-spacing: -0.02em;
+  text-shadow: 0 0.06em 1.4em rgba(8, 9, 10, 0.55);
+}
+
+.frontispicio__autor {
+  margin: 1.6em 0 0;
+  font-family: var(--grotesca);
+  font-size: 0.62rem;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: var(--sal-tenue);
+}
+
+/* ficha técnica de cada obra */
+
+.fichas {
+  position: fixed;
+  inset: 0;
+}
+
+.ficha {
+  position: absolute;
+  left: var(--margem);
+  bottom: calc(var(--margem) + 2.2rem);
+  width: clamp(17rem, 34vw, 26rem);
+  opacity: 0;
+  will-change: opacity, transform, filter;
+}
+
+.ficha[data-lado='direita'] {
+  left: auto;
+  right: calc(var(--margem) + 1.6rem);
+  text-align: right;
+}
+
+.ficha__ordem {
+  display: block;
+  font-family: var(--grotesca);
+  font-size: 0.58rem;
+  letter-spacing: 0.44em;
+  text-transform: uppercase;
+  color: var(--sal-tenue);
+  margin-bottom: 1.6em;
+}
+
+.ficha__titulo {
+  margin: 0;
+  font-weight: 300;
+  font-size: clamp(1.7rem, 3.7vw, 3.3rem);
+  line-height: 1.04;
+  overflow-wrap: break-word;
+  letter-spacing: -0.015em;
+  text-shadow: 0 0.06em 1.2em rgba(8, 9, 10, 0.5);
+}
+
+.ficha__tecnica {
+  margin: 1.5em 0 0;
+  font-family: var(--grotesca);
+  font-size: 0.63rem;
+  line-height: 2.1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--sal-tenue);
+}
+
+.ficha__tecnica span {
+  display: block;
+}
+
+.ficha__reflexao {
+  margin: 1.9em 0 0;
+  font-size: clamp(0.95rem, 1.5vw, 1.16rem);
+  font-style: italic;
+  font-weight: 300;
+  line-height: 1.62;
+  color: var(--sal-fraco);
+  max-width: 30ch;
+  text-shadow: 0 0.06em 1em rgba(8, 9, 10, 0.6);
+}
+
+.ficha[data-lado='direita'] .ficha__reflexao {
+  margin-left: auto;
+}
+
+/* colofão: o ciclo recomeça */
+
+.colofao {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 2.6rem;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.colofao.presente {
+  pointer-events: auto;
+}
+
+.colofao__linha {
+  margin: 0;
+  font-size: clamp(1.4rem, 3.4vw, 2.6rem);
+  font-style: italic;
+  font-weight: 300;
+  color: var(--sal-fraco);
+  letter-spacing: 0.02em;
+}
+
+.colofao__voltar {
+  font-family: var(--grotesca);
+  font-size: 0.6rem;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--sal-tenue);
+  padding: 1em 1.5em 1em 1.9em;
+  border-bottom: 1px solid rgba(232, 226, 214, 0.16);
+  transition: color 800ms var(--curva), border-color 800ms var(--curva);
+}
+
+.colofao__voltar:hover,
+.colofao__voltar:focus-visible {
+  color: var(--sal);
+  border-color: rgba(232, 226, 214, 0.4);
+}
+
+/* --- interface invisível --------------------------------------------------- */
+
+.rastro {
+  position: fixed;
+  right: calc(var(--margem) * 0.62);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  opacity: 0;
+  transition: opacity 1400ms var(--curva);
+}
+
+.rastro.presente {
+  opacity: 1;
+}
+
+.rastro__marca {
+  position: relative;
+  width: 1px;
+  height: 22px;
+  background: rgba(232, 226, 214, 0.13);
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
+
+.rastro__marca::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--sal);
+  transform: scaleY(var(--preenchimento, 0));
+  transform-origin: top;
+  transition: transform 260ms linear;
+}
+
+.rastro__marca::before {
+  content: '';
+  position: absolute;
+  inset: -10px -14px;
+}
+
+.som {
+  position: fixed;
+  left: var(--margem);
+  top: var(--margem);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  opacity: 0;
+  transition: opacity 1400ms var(--curva);
+}
+
+.som.presente {
+  opacity: 0.5;
+}
+
+.som.presente:hover {
+  opacity: 1;
+}
+
+.som__marca {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11px;
+}
+
+.som__marca i {
+  width: 1px;
+  height: 3px;
+  background: var(--sal);
+  transition: height 400ms var(--curva);
+}
+
+.som[aria-pressed='true'] .som__marca i {
+  animation: respirar 2600ms ease-in-out infinite;
+}
+.som[aria-pressed='true'] .som__marca i:nth-child(2) {
+  animation-delay: 300ms;
+}
+.som[aria-pressed='true'] .som__marca i:nth-child(3) {
+  animation-delay: 700ms;
+}
+
+@keyframes respirar {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 11px;
+  }
+}
+
+.som__rotulo {
+  font-family: var(--grotesca);
+  font-size: 0.56rem;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: var(--sal-fraco);
+}
+
+.convite {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--margem) * 0.9);
+  transform: translateX(-50%);
+  z-index: 20;
+  font-family: var(--grotesca);
+  font-size: 0.56rem;
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  color: var(--sal-tenue);
+  opacity: 0;
+  transition: opacity 1600ms var(--curva);
+}
+
+.convite.presente {
+  opacity: 1;
+  animation: maresia 4200ms ease-in-out infinite;
+}
+
+@keyframes maresia {
+  0%,
+  100% {
+    transform: translate(-50%, 0);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translate(-50%, 6px);
+    opacity: 0.8;
+  }
+}
+
+.noscript {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: var(--breu);
+  font-style: italic;
+  color: var(--sal-fraco);
+  text-align: center;
+}
+
+/* --- respeito ao movimento reduzido / telas estreitas ---------------------- */
+
+@media (max-width: 720px) {
+  .ficha,
+  .ficha[data-lado='direita'] {
+    left: var(--margem);
+    right: var(--margem);
+    width: auto;
+    text-align: left;
+  }
+  .ficha[data-lado='direita'] .ficha__reflexao {
+    margin-left: 0;
+  }
+  .rastro {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .veu__epigrafe span,
+  .veu__entrada {
+    animation-duration: 1ms;
+    animation-delay: 0ms;
+  }
+  .convite.presente {
+    animation: none;
+  }
+  .som[aria-pressed='true'] .som__marca i {
+    animation: none;
+  }
+}

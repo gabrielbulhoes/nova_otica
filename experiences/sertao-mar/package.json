@@ -1,0 +1,23 @@
+{
+  "name": "sertao-mar",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "O sertão já foi mar — experiência artística navegável",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173"
+  },
+  "dependencies": {
+    "gsap": "^3.13.0",
+    "lenis": "^1.3.11",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}
