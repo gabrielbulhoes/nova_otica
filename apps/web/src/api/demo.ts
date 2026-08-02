@@ -295,7 +295,6 @@ const availableAt = (storeId: string, productId: string) =>
 // ─── Derivações de métricas ──────────────────────────────────────────────────
 
 // Com dados reais os totais são da REDE INTEIRA (pré-amostragem do catálogo).
-const stockUnits = real ? real.totals.stockUnitsNetwork : [...stockQty.values()].reduce((a, b) => a + b, 0);
 const salesByStore = real
   ? real.salesByStore.map((s) => ({ storeId: `st_${s.externalId}`, storeName: s.name, count: s.count, total: s.total }))
   : stores.map((s) => ({
@@ -387,34 +386,114 @@ function alerts(group: ProductGroup = 'todos', category?: string | string[], sto
   };
 }
 
-function timeseries(days: number) {
+function timeseries(days: number, fatia = 1, aproximado = false) {
   if (real) {
     // Série diária REAL (30 dias da sonda), recortada ao período pedido.
-    const points = real.dailySales.slice(-days).map((d) => ({ date: d.date, total: d.total, count: d.count }));
-    return { days, granularity: 'day', points };
+    // A sonda traz o dia a dia em AGREGADO DE REDE, sem quebra por categoria:
+    // com recorte ativo a série é projetada pela fatia que o recorte ocupa no
+    // período, e vai marcada como aproximada. Melhor uma curva declaradamente
+    // proporcional do que a curva da rede inteira fingindo ser a do recorte.
+    const points = real.dailySales.slice(-days).map((d) => ({
+      date: d.date,
+      total: round2(d.total * fatia),
+      count: Math.round(d.count * fatia),
+    }));
+    return { days, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
   }
   const points = [];
   const now = new Date();
   for (let i = days - 1; i >= 0; i -= 1) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
-    points.push({ date: d.toISOString().slice(0, 10), total: money(3000, 14000), count: int(2, 9) });
+    points.push({
+      date: d.toISOString().slice(0, 10),
+      total: round2(money(3000, 14000) * fatia),
+      count: Math.max(1, Math.round(int(2, 9) * fatia)),
+    });
   }
-  return { days, granularity: 'day', points };
+  return { days, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
 }
 
-function byDimension(by: string) {
+/**
+ * ── BI · O RECORTE ────────────────────────────────────────────────────────────
+ *
+ * O módulo inteiro era cego ao recorte: nenhuma das seis rotas lia `group` ou
+ * `category`, e trocar "Óculos" por "Lentes" no topo do console não mexia um
+ * pixel de gráfico nenhum. Pior: metade dos números era sorteada
+ * (`unitsSold: int(400, 700)`) ou era o agregado da REDE mesmo quando havia
+ * uma loja escolhida.
+ *
+ * Agora tudo sai da MESMA base dos relatórios — `soldItemsScoped` ∩
+ * `noRecorte` —, que é o que faz os números baterem entre as telas.
+ *
+ * O que NÃO dá para recortar com a extração atual está marcado como
+ * `aproximado` e a tela diz isso em texto: a forma de pagamento cobre a venda
+ * inteira (uma venda de armação + lente tem um cartão só), e a série diária e
+ * o mapa de calor vêm da sonda em agregado de rede, sem quebra por categoria.
+ */
+function biBase(group: ProductGroup, category: string | string[] | undefined, storeId?: string) {
+  const dentro = noRecorte(group, category);
+  const itens = soldItemsScoped(storeId).filter((x) => dentro(x.p));
+  const receita = round2(itens.reduce((a, x) => a + x.revenue, 0));
+  const unidades = itens.reduce((a, x) => a + x.units, 0);
+  // Quanto o recorte pesa no período — é este fator que projeta o que a sonda
+  // só traz agregado (dia a dia, dia da semana, forma de pagamento).
+  const totalPeriodo = round2(soldItemsScoped(storeId).reduce((a, x) => a + x.revenue, 0));
+  const fatia = totalPeriodo > 0 ? receita / totalPeriodo : 0;
+  const recortando = group !== 'todos' || Boolean(asSet(category)) || Boolean(storeId);
+  return { itens, receita, unidades, fatia, recortando };
+}
+
+function byDimension(
+  by: string,
+  group: ProductGroup = 'todos',
+  category?: string | string[],
+  storeId?: string,
+) {
+  const base = biBase(group, category, storeId);
   let rows: { key: string; label: string; total: number; count: number }[] = [];
-  if (by === 'store') rows = salesByStore.map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }));
-  else if (real) {
-    const src = by === 'payment' ? real.byPayment : by === 'brand' ? real.byBrand : real.byCategory;
-    rows = src.map((m) => ({ key: m.label, label: m.label, total: m.total, count: m.count }));
-  } else if (by === 'payment') rows = PAG.map((m) => ({ key: m, label: m, total: money(20000, 70000), count: int(10, 40) }));
-  else {
-    const dims = by === 'brand' ? MARCAS : CATEGORIAS;
-    rows = dims.map((m) => ({ key: m, label: m, total: money(15000, 60000), count: int(20, 90) }));
+  let aproximado = false;
+
+  if (by === 'store') {
+    // Por loja, o valor é a soma dos itens DAQUELA loja dentro do recorte —
+    // não o faturamento inteiro que passou por ela.
+    const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
+    const dentro = noRecorte(group, category);
+    rows = escopo
+      .map((st) => {
+        const itens = soldItemsScoped(st.id).filter((x) => dentro(x.p));
+        return {
+          key: st.id,
+          label: st.name,
+          total: round2(itens.reduce((a, x) => a + x.revenue, 0)),
+          count: itens.reduce((a, x) => a + x.units, 0),
+        };
+      })
+      .filter((r) => r.total > 0);
+  } else if (by === 'payment') {
+    // Não se reparte por produto. Com recorte ativo, o que existe é a fatia do
+    // recorte no período — declarada como aproximação, nunca como medida.
+    const src = real
+      ? real.byPayment.map((m) => ({ key: m.label, label: m.label, total: m.total, count: m.count }))
+      : PAG.map((m) => ({ key: m, label: m, total: money(20000, 70000), count: int(10, 40) }));
+    aproximado = base.recortando;
+    rows = aproximado
+      ? src.map((r) => ({ ...r, total: round2(r.total * base.fatia), count: Math.round(r.count * base.fatia) }))
+      : src;
+  } else {
+    // Categoria e marca saem do item vendido: aqui o recorte é exato.
+    const acc = new Map<string, { total: number; count: number }>();
+    for (const x of base.itens) {
+      const k = by === 'brand' ? brandLabel(x.p) : x.p.category || 'Não classificado';
+      const cur = acc.get(k) ?? { total: 0, count: 0 };
+      cur.total += x.revenue;
+      cur.count += x.units;
+      acc.set(k, cur);
+    }
+    rows = [...acc.entries()].map(([k, v]) => ({ key: k, label: k, total: round2(v.total), count: v.count }));
   }
-  return { by, rows: rows.sort((a, b) => b.total - a.total) };
+  rows.sort((a, b) => b.total - a.total);
+  return aproximado ? { by, rows, aproximado } : { by, rows };
 }
 
 const realSalesByProduct = new Map((real?.productSales ?? []).map((x) => [`pr_${x.externalId}`, x]));
@@ -573,6 +652,37 @@ const effectiveDays = (days: number) => (real ? realWindowDays : days);
  * 40.563. Galbe viu 1,5 mês aqui e ~26 meses lá. Agora a linha GERAL sai da
  * mesma fonte, e as linhas por marca declaram que são a amostra.
  */
+/**
+ * Estoque da rede no recorte — a MESMA conta no painel e no BI.
+ *
+ * As duas telas respondiam a pergunta "quantas unidades a rede tem neste
+ * recorte" por caminhos diferentes: o painel somava o agregado da sonda
+ * inteiro, o BI somava o catálogo amostrado, e no recorte "Tudo" isso dava
+ * 211.026 contra 112.515 no mesmo instante. Uma função só, para não voltarem a
+ * divergir.
+ *
+ * Sem loja escolhida o número é o da REDE — inclui centro de distribuição e
+ * assistência, que têm estoque de verdade. Com loja escolhida, só aquela loja.
+ */
+function estoqueDaRedeNoRecorte(
+  group: ProductGroup,
+  category?: string | string[],
+  storeId?: string,
+): number | null {
+  const porCategoria = real?.storeCategory;
+  if (!porCategoria || porCategoria.length === 0) return null;
+  const sel = asSet(category);
+  const alvo = storeId ? stores.find((s) => s.id === storeId)?.externalId : null;
+  let unidades = 0;
+  for (const r of porCategoria) {
+    if (!matchesProductGroup(r.label, group)) continue;
+    if (sel && !sel.has(r.label)) continue;
+    if (alvo && r.storeExt !== alvo) continue;
+    unidades += r.stockUnits;
+  }
+  return unidades;
+}
+
 function redeNoRecorte(group: ProductGroup, category?: string | string[], storeId?: string) {
   const porCategoria = real?.storeCategory;
   if (!porCategoria || porCategoria.length === 0) return null;
@@ -703,14 +813,18 @@ function turnover(days: number, group: ProductGroup = 'todos', category?: string
   };
 }
 
-function salesFlow() {
+function salesFlow(group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
   const links: { source: string; target: string; value: number }[] = [];
   const names = new Set<string>();
   if (real) {
     // Alocação proporcional: total real da categoria × participação real da
-    // loja no faturamento (top 6 × top 8 para o sankey respirar).
-    const cats = [...real.byCategory].sort((a, b) => b.total - a.total).slice(0, 6);
-    const tops = [...salesByStore].sort((a, b) => b.total - a.total).slice(0, 8);
+    // loja no faturamento (top 6 × top 8 para o sankey respirar). As duas
+    // pontas agora saem do recorte: a categoria vem do item vendido dentro
+    // dele, e a loja, quando escolhida, é a única do fluxo.
+    const porCategoria = byDimension('category', group, category, storeId).rows;
+    const cats = porCategoria.slice(0, 6);
+    const lojas = byDimension('store', group, category, storeId).rows;
+    const tops = lojas.slice(0, 8).map((r) => ({ storeName: r.label, total: r.total }));
     const topTotal = tops.reduce((a, b) => a + b.total, 0) || 1;
     for (const cat of cats)
       for (const st of tops) {
@@ -722,8 +836,12 @@ function salesFlow() {
       }
     return { nodes: [...names].map((name) => ({ name })), links };
   }
-  for (const cat of CATEGORIAS)
-    for (const st of stores) {
+  // Catálogo fictício: o mesmo recorte, senão o sabor sem dados reais fica
+  // com um sankey da rede inteira enquanto o resto da tela já obedece.
+  const dentro = noRecorte(group, category);
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
+  for (const cat of CATEGORIAS.filter((c) => dentro({ category: c })))
+    for (const st of escopo) {
       const v = money(2000, 25000);
       links.push({ source: cat, target: st.name, value: v });
       names.add(cat);
@@ -732,33 +850,55 @@ function salesFlow() {
   return { nodes: [...names].map((name) => ({ name })), links };
 }
 
-function transferFlow() {
-  return {
-    nodes: [
-      { name: `Origem: ${stores[3].name}` },
-      { name: `Destino: ${stores[1].name}` },
-      { name: `Origem: ${stores[0].name}` },
-      { name: `Destino: ${stores[2].name}` },
-    ],
-    links: [
-      { source: `Origem: ${stores[3].name}`, target: `Destino: ${stores[1].name}`, value: 5 },
-      { source: `Origem: ${stores[0].name}`, target: `Destino: ${stores[2].name}`, value: 3 },
-    ],
-  };
+/**
+ * Sankey de transferências. Era um par de setas fixo, escrito à mão, que
+ * ignorava período, loja e recorte — o único gráfico da tela que não respondia
+ * a nada. Agora sai das movimentações que a demo realmente tem (a semente e
+ * tudo que o operador criar na sessão), com o mesmo recorte dos outros.
+ */
+function transferFlow(group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
+  const dentro = noRecorte(group, category);
+  const links: { source: string; target: string; value: number }[] = [];
+  const names = new Set<string>();
+  for (const m of movements) {
+    if (m.type !== 'TRANSFER') continue;
+    const de = (m.fromStore as { id: string; name: string } | null)?.name;
+    const para = (m.toStore as { id: string; name: string } | null)?.name;
+    const deId = (m.fromStore as { id: string } | null)?.id;
+    const paraId = (m.toStore as { id: string } | null)?.id;
+    if (!de || !para) continue;
+    if (storeId && deId !== storeId && paraId !== storeId) continue;
+    const prod = prodById((m.product as { id: string }).id);
+    if (prod && !dentro(prod)) continue;
+    // Prefixo evita ciclo no sankey (A→B e B→A viram nós distintos).
+    const origem = `Origem: ${de}`;
+    const destino = `Destino: ${para}`;
+    const existente = links.find((l) => l.source === origem && l.target === destino);
+    if (existente) existente.value += Number(m.quantity) || 0;
+    else links.push({ source: origem, target: destino, value: Number(m.quantity) || 0 });
+    names.add(origem);
+    names.add(destino);
+  }
+  return { nodes: [...names].map((name) => ({ name })), links };
 }
 
-function heatmap() {
-  const yLabels = stores.map((s) => s.name);
+function heatmap(fatia = 1, aproximado = false, storeId?: string) {
+  // A sonda traz loja × dia da semana sem quebra por categoria: mesma regra da
+  // série diária — projeta pela fatia do recorte e declara a aproximação.
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
+  const yLabels = escopo.map((s) => s.name);
   const cells: [number, number, number][] = [];
   if (real) {
     const byKey = new Map(real.weekdayStore.map((w) => [`${w.storeExt}|${w.weekday}`, w.total]));
-    stores.forEach((s, yi) =>
-      WEEK.forEach((_, wd) => cells.push([wd, yi, Math.round(byKey.get(`${s.externalId}|${wd}`) ?? 0)])),
+    escopo.forEach((s, yi) =>
+      WEEK.forEach((_, wd) =>
+        cells.push([wd, yi, Math.round((byKey.get(`${s.externalId}|${wd}`) ?? 0) * fatia)]),
+      ),
     );
   } else {
-    yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000))])));
+    yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000) * fatia)])));
   }
-  return { xLabels: WEEK, yLabels, cells };
+  return { xLabels: WEEK, yLabels, cells, ...(aproximado ? { aproximado: true } : {}) };
 }
 
 function cartView() {
@@ -941,23 +1081,20 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     // (48k) e outros (28k) respondem por 170 mil deles. O KPI passa a respeitar
     // o recorte, como as demais telas — no recorte de óculos dá 40.563.
     const g = productGroup(params.group);
-    const unidades = real?.storeCategory?.length
-      ? real.storeCategory.reduce(
-          (a, r) => a + (matchesProductGroup(r.label, g) ? r.stockUnits : 0),
-          0,
-        )
-      : // Sem o agregado da rede, soma o catálogo local — e soma do MESMO jeito
+    const unidades =
+      estoqueDaRedeNoRecorte(g) ??
+      // Sem o agregado da rede, soma o catálogo local — e soma do MESMO jeito
         // em todo recorte. O atalho que 'todos' tinha aqui lia `stockQty`
-        // inteiro, incluindo CD e assistência, que `stores` exclui: os quatro
-        // recortes não fechavam com o total por causa de loja, não de produto.
-        products.reduce(
-            (a, p) =>
-              a +
-              (matchesProductGroup(p.category, g)
-                ? stores.reduce((b, st) => b + (stockQty.get(key(st.id, p.id)) ?? 0), 0)
-                : 0),
-            0,
-          );
+      // inteiro, incluindo CD e assistência, que `stores` exclui: os quatro
+      // recortes não fechavam com o total por causa de loja, não de produto.
+      products.reduce(
+        (a, p) =>
+          a +
+          (matchesProductGroup(p.category, g)
+            ? stores.reduce((b, st) => b + (stockQty.get(key(st.id, p.id)) ?? 0), 0)
+            : 0),
+        0,
+      );
     // SKUs: o número da REDE, não o do catálogo amostrado que a demo carrega.
     // "Não temos só 1631 SKU's" — correto: a rede tem 21.683.
     //
@@ -1121,22 +1258,64 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     return { total: rows.length, page: 1, limit: 100, rows };
   }
 
-  // BI
-  if (url === '/bi/kpis') {
-    const positions = stores.length * products.length;
-    const al = alerts();
-    return {
-      days, revenue, salesCount, avgTicket: round2(revenue / salesCount), turnover: 0.14,
-      rupturaRate: round2((al.out / positions) * 100), lowStockRate: round2((al.low / positions) * 100),
-      stockUnits, unitsSold: int(400, 700), stockPositions: positions, outOfStock: al.out, lowStock: al.low,
-      pendingTransfers: movements.filter((x) => ['REQUESTED', 'PENDING'].includes(x.status as string)).length,
-    };
+  // ── BI ────────────────────────────────────────────────────────────────────
+  // O recorte do console (group) e o tipo de produto (category) valem aqui como
+  // valem em Alertas e Relatórios. Antes desta linha o BI inteiro os ignorava.
+  const grupoBi = productGroup(params.group);
+  const tipoBi = params.category;
+  const lojaBi = one(params.storeId);
+  if (url.startsWith('/bi/')) {
+    const base = biBase(grupoBi, tipoBi, lojaBi);
+    if (url === '/bi/kpis') {
+      const al = alerts(grupoBi, tipoBi, lojaBi);
+      const escopo = lojaBi ? stores.filter((s) => s.id === lojaBi) : stores;
+      const dentro = noRecorte(grupoBi, tipoBi);
+      const noGrupo = products.filter((p) => dentro(p));
+      const positions = escopo.length * Math.max(1, noGrupo.length);
+      // MESMA base do painel: quando o dataset traz o agregado da rede, o
+      // estoque vem dele. Somar só o catálogo amostrado daria 112.515 no BI
+      // contra 211.026 no painel, para o mesmo recorte e no mesmo instante —
+      // e duas telas com números diferentes destroem as duas.
+      const unidadesEmEstoque =
+        estoqueDaRedeNoRecorte(grupoBi, tipoBi, lojaBi) ??
+        escopo.reduce(
+          (a, st) => a + noGrupo.reduce((b, p) => b + (stockQty.get(key(st.id, p.id)) ?? 0), 0),
+          0,
+        );
+      // `salesCount` proporcional e declarado: uma venda mistura armação e
+      // lente, então "quantas vendas do recorte" não existe no dado da sonda.
+      const vendas = Math.max(1, Math.round(salesCount * base.fatia));
+      return {
+        days,
+        revenue: base.recortando ? base.receita : revenue,
+        salesCount: base.recortando ? vendas : salesCount,
+        avgTicket: round2((base.recortando ? base.receita : revenue) / (base.recortando ? vendas : salesCount)),
+        // O que o recorte de fato move: R$/peça. Ver o comentário em bi.math.
+        avgUnitPrice: base.unidades > 0 ? round2(base.receita / base.unidades) : 0,
+        // Giro MENSAL, e não "unidades do período ÷ estoque": a janela real da
+        // sonda é de 7 dias, e a razão crua dava 0,01 em todo recorte — o
+        // medidor ficava parado enquanto o resto da tela reagia. Normalizado
+        // para 30 dias, ele é o inverso da cobertura em meses que o painel
+        // mostra, e as duas telas passam a contar a mesma história.
+        turnover: round2(((base.unidades / Math.max(1, effectiveDays(days))) * 30) / Math.max(1, unidadesEmEstoque)),
+        rupturaRate: round2((al.out / Math.max(1, positions)) * 100),
+        lowStockRate: round2((al.low / Math.max(1, positions)) * 100),
+        stockUnits: unidadesEmEstoque,
+        unitsSold: base.unidades,
+        stockPositions: positions,
+        outOfStock: al.out,
+        lowStock: al.low,
+        pendingTransfers: movements.filter((x) => ['REQUESTED', 'PENDING'].includes(x.status as string)).length,
+        vendasAproximadas: base.recortando,
+      };
+    }
+    if (url === '/bi/sales-timeseries') return timeseries(days, base.recortando ? base.fatia : 1, base.recortando);
+    if (url === '/bi/sales-by-dimension')
+      return byDimension(one(params.by) ?? 'store', grupoBi, tipoBi, lojaBi);
+    if (url === '/bi/sales-flow') return salesFlow(grupoBi, tipoBi, lojaBi);
+    if (url === '/bi/transfer-flow') return transferFlow(grupoBi, tipoBi, lojaBi);
+    if (url === '/bi/heatmap') return heatmap(base.recortando ? base.fatia : 1, base.recortando, lojaBi);
   }
-  if (url === '/bi/sales-timeseries') return timeseries(days);
-  if (url === '/bi/sales-by-dimension') return byDimension(one(params.by) ?? 'store');
-  if (url === '/bi/sales-flow') return salesFlow();
-  if (url === '/bi/transfer-flow') return transferFlow();
-  if (url === '/bi/heatmap') return heatmap();
 
   // Relatórios
   const grupoRel = productGroup(params.group);

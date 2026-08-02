@@ -776,6 +776,8 @@ export interface BiKpis {
   revenue: number;
   salesCount: number;
   avgTicket: number;
+  /** Receita ÷ unidades vendidas. É o que responde ao recorte; o ticket não. */
+  avgUnitPrice?: number;
   turnover: number;
   rupturaRate: number;
   lowStockRate: number;
@@ -785,6 +787,8 @@ export interface BiKpis {
   outOfStock: number;
   lowStock: number;
   pendingTransfers: number;
+  /** No recorte, a contagem de vendas é proporcional (uma venda mistura tipos). */
+  vendasAproximadas?: boolean;
 }
 
 export interface TimeseriesPoint {
@@ -809,6 +813,8 @@ export interface HeatmapData {
   xLabels: string[];
   yLabels: string[];
   cells: [number, number, number][];
+  /** Projetado pela fatia do recorte: o CDS não traz dia da semana por tipo. */
+  aproximado?: boolean;
 }
 
 type BiParams = Record<string, string | number | undefined>;
@@ -817,11 +823,19 @@ export const getBiKpis = (params: BiParams) =>
   api.get<BiKpis>('/bi/kpis', { params }).then((r) => r.data);
 export const getBiTimeseries = (params: BiParams) =>
   api
-    .get<{ days: number; granularity: string; points: TimeseriesPoint[] }>('/bi/sales-timeseries', { params })
+    .get<{
+      days: number;
+      granularity: string;
+      points: TimeseriesPoint[];
+      /** A série é projetada pela fatia do recorte (o CDS não a traz por tipo). */
+      aproximado?: boolean;
+    }>('/bi/sales-timeseries', { params })
     .then((r) => r.data);
 export const getBiDimension = (by: string, params: BiParams) =>
   api
-    .get<{ by: string; rows: DimensionRow[] }>('/bi/sales-by-dimension', { params: { ...params, by } })
+    .get<{ by: string; rows: DimensionRow[]; aproximado?: boolean }>('/bi/sales-by-dimension', {
+      params: { ...params, by },
+    })
     .then((r) => r.data);
 export const getBiSalesFlow = (params: BiParams) =>
   api.get<SalesFlow>('/bi/sales-flow', { params }).then((r) => r.data);

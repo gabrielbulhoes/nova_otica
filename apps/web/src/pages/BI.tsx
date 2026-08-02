@@ -8,10 +8,12 @@ import {
   getBiTransferFlow,
   getBiHeatmap,
   getArStats,
+  getCategories,
   getStores,
   formatBRL,
 } from '../api/client';
 import { PageHeader, StatCard, Loading, AberturaDeSecao } from '../components/ui';
+import { MultiSelect } from '../components/MultiSelect';
 import { EChart } from '../components/EChart';
 import { Icon } from '../brand/Icon';
 import {
@@ -24,6 +26,7 @@ import {
 } from '../bi/transforms';
 import { toCsv, downloadCsv } from '../bi/csv';
 import { useAuth } from '../auth/AuthContext';
+import { useScope } from '../lib/scope';
 
 /**
  * Vocabulário de cor dos gráficos desta página.
@@ -58,19 +61,46 @@ const COR = {
 
 export function BI() {
   const { isAdmin } = useAuth();
+  const { scope } = useScope();
   const [days, setDays] = useState('90');
   const [storeId, setStoreId] = useState('');
-  const p = { days, storeId: storeId || undefined };
+  const [categorias, setCategorias] = useState<string[]>([]);
+
+  const listaDeTipos = useQuery({
+    queryKey: ['categories', scope],
+    queryFn: () => getCategories({ group: scope }),
+  });
+  // Trocar o recorte no topo pode deixar um tipo escolhido fora da lista; ele
+  // se desfaz sozinho em vez de virar filtro fantasma (mesma regra de Alertas).
+  const tiposDisponiveis = listaDeTipos.data ?? [];
+  const tipos =
+    tiposDisponiveis.length > 0 ? categorias.filter((c) => tiposDisponiveis.includes(c)) : categorias;
+
+  /*
+     O BI INTEIRO ERA CEGO AO RECORTE.
+     Nenhuma das seis consultas passava `group` ou `category`, e nenhuma delas
+     tinha isso na chave de cache: trocar "Óculos" por "Lentes" no topo do
+     console — ou marcar categorias aqui — não mexia um gráfico sequer, porque
+     nem a URL mudava nem o React Query tinha por que refazer a busca. As duas
+     metades do defeito estão nesta linha e nas chaves abaixo.
+  */
+  const p = {
+    days,
+    storeId: storeId || undefined,
+    group: scope,
+    category: tipos.length > 0 ? tipos.join(',') : undefined,
+  };
+  const chave = [days, storeId, scope, tipos.join(',')];
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
-  const kpis = useQuery({ queryKey: ['bi-kpis', days, storeId], queryFn: () => getBiKpis(p) });
-  const timeseries = useQuery({ queryKey: ['bi-ts', days, storeId], queryFn: () => getBiTimeseries(p) });
-  const byStore = useQuery({ queryKey: ['bi-store', days, storeId], queryFn: () => getBiDimension('store', p) });
-  const byPayment = useQuery({ queryKey: ['bi-pay', days, storeId], queryFn: () => getBiDimension('payment', p) });
-  const byCategory = useQuery({ queryKey: ['bi-cat', days, storeId], queryFn: () => getBiDimension('category', p) });
-  const flow = useQuery({ queryKey: ['bi-flow', days, storeId], queryFn: () => getBiSalesFlow(p) });
-  const transferFlow = useQuery({ queryKey: ['bi-transfer', days, storeId], queryFn: () => getBiTransferFlow(p) });
-  const heatmap = useQuery({ queryKey: ['bi-heat', days, storeId], queryFn: () => getBiHeatmap(p) });
+  const kpis = useQuery({ queryKey: ['bi-kpis', ...chave], queryFn: () => getBiKpis(p) });
+  const timeseries = useQuery({ queryKey: ['bi-ts', ...chave], queryFn: () => getBiTimeseries(p) });
+  const byStore = useQuery({ queryKey: ['bi-store', ...chave], queryFn: () => getBiDimension('store', p) });
+  const byPayment = useQuery({ queryKey: ['bi-pay', ...chave], queryFn: () => getBiDimension('payment', p) });
+  const byCategory = useQuery({ queryKey: ['bi-cat', ...chave], queryFn: () => getBiDimension('category', p) });
+  const flow = useQuery({ queryKey: ['bi-flow', ...chave], queryFn: () => getBiSalesFlow(p) });
+  const transferFlow = useQuery({ queryKey: ['bi-transfer', ...chave], queryFn: () => getBiTransferFlow(p) });
+  const heatmap = useQuery({ queryKey: ['bi-heat', ...chave], queryFn: () => getBiHeatmap(p) });
   const arStats = useQuery({ queryKey: ['ar-stats', days], queryFn: () => getArStats(Number(days)) });
 
   /*
@@ -90,6 +120,26 @@ export function BI() {
   const fluxoTransferencias = transferFlow.data;
   const mapaCalor = heatmap.data;
   const ar = arStats.data;
+
+  /**
+   * Aviso de proporcionalidade.
+   *
+   * Com recorte ativo, três coisas não vêm quebradas por categoria na extração
+   * do CDS: a série diária, o mapa de calor (loja × dia da semana) e a forma de
+   * pagamento — esta última porque um pagamento cobre a VENDA inteira, e uma
+   * venda mistura armação e lente. Nesses três o número é projetado pela fatia
+   * que o recorte ocupa no período. Dizer isso na tela custa uma linha; deixar
+   * de dizer custa a confiança no painel inteiro.
+   */
+  const NotaProporcional = ({ o_que }: { o_que: string }) => (
+    <p className="hint" style={{ display: 'flex', gap: 6, alignItems: 'flex-start', marginTop: 6 }}>
+      <Icon name="atencao" size={14} style={{ flex: 'none', marginTop: 2 }} />
+      <span>
+        No recorte escolhido, {o_que} é <strong>proporcional</strong>: a extração atual do CDS não
+        traz esse dado quebrado por tipo de produto.
+      </span>
+    </p>
+  );
 
   const exportTimeseries = () => {
     if (!serie) return;
@@ -139,7 +189,7 @@ export function BI() {
           <option value="180">Últimos 180 dias</option>
         </select>
         {isAdmin && (
-          <select value={storeId} onChange={(e) => setStoreId(e.target.value)}>
+          <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Loja">
             <option value="">Toda a rede</option>
             {stores.data?.rows.map((s) => (
               <option key={s.id} value={s.id}>
@@ -148,6 +198,16 @@ export function BI() {
             ))}
           </select>
         )}
+        {/* O filtro de tipo que o BI nunca teve. Multisseleção, como no Estoque:
+            "quero ver armação e óculos, sem relógio" é uma pergunta de uma
+            marcação só, não de cinco recargas de tela. */}
+        <MultiSelect
+          options={tiposDisponiveis.map((c) => ({ value: c, label: c }))}
+          selected={tipos}
+          onChange={setCategorias}
+          allLabel="Todos os tipos"
+          noun="tipos"
+        />
       </div>
 
       {kpis.isLoading || !indicadores ? (
@@ -173,9 +233,24 @@ export function BI() {
               className="largo"
               label="Faturamento"
               value={formatBRL(indicadores.revenue)}
-              hint={`${indicadores.salesCount} ${indicadores.salesCount === 1 ? 'venda' : 'vendas'} no período`}
+              hint={`${indicadores.salesCount}${indicadores.vendasAproximadas ? '~' : ''} ${
+                indicadores.salesCount === 1 ? 'venda' : 'vendas'
+              } no período${indicadores.vendasAproximadas ? ' (proporcional ao recorte)' : ''}`}
             />
-            <StatCard label="Ticket médio" value={formatBRL(indicadores.avgTicket)} />
+            {/* Sob recorte o ticket médio é um número morto: receita e número de
+                vendas caem juntos, e ele devolvia ~R$ 2.180 em óculos, relógio,
+                lente e consolidado. O que o recorte move de verdade é o valor
+                por peça — R$ 1.300 em óculos contra R$ 597 em lente. O cartão
+                troca de pergunta em vez de repetir a mesma resposta. */}
+            {indicadores.vendasAproximadas && indicadores.avgUnitPrice != null ? (
+              <StatCard
+                label="Valor médio por peça"
+                value={formatBRL(indicadores.avgUnitPrice)}
+                hint="Receita ÷ peças vendidas no recorte."
+              />
+            ) : (
+              <StatCard label="Ticket médio" value={formatBRL(indicadores.avgTicket)} />
+            )}
             {/* `unidade`, e não " un." colado no texto do valor: assim o carimbo
                 é mono e o número continua em Fraunces tabular. */}
             <StatCard
@@ -226,13 +301,20 @@ export function BI() {
               />
             </div>
             <div className="card">
-              <h3 className="section-title">Giro (proxy da rede)</h3>
+              <h3 className="section-title">Giro mensal do estoque</h3>
               <EChart
                 option={(tema) =>
-                  gaugeOption(indicadores.turnover, 2, 'un. vendidas / estoque', COR.saudavel, '', { tema })
+                  // Escala 0–0,5: o giro mensal do varejo ótico vive na casa de
+                  // 0,05 (≈ 20 meses de cobertura). Numa escala 0–2 o ponteiro
+                  // encostava no zero em todo recorte e o medidor não dizia nada.
+                  gaugeOption(indicadores.turnover, 0.5, 'giros por mês', COR.saudavel, '', { tema })
                 }
                 height={200}
               />
+              <p className="hint" style={{ marginTop: 4 }}>
+                Unidades vendidas por mês ÷ unidades em estoque. É o inverso da cobertura: 0,05 aqui
+                é o mesmo que 20 meses de estoque no painel.
+              </p>
             </div>
           </div>
 
@@ -268,6 +350,7 @@ export function BI() {
                 exportName={`faturamento-${days}d`}
               />
             )}
+            {serie?.aproximado && <NotaProporcional o_que="a curva diária" />}
           </div>
 
           {/* Colunas + Pizza */}
@@ -296,6 +379,7 @@ export function BI() {
                   exportName="formas-de-pagamento"
                 />
               )}
+              {porPagamento?.aproximado && <NotaProporcional o_que="a divisão por forma de pagamento" />}
             </div>
           </div>
 
@@ -353,6 +437,7 @@ export function BI() {
             </div>
             <div className="card">
               <h3 className="section-title">Receita por loja × dia da semana</h3>
+              {mapaCalor?.aproximado && <NotaProporcional o_que="a receita por dia da semana" />}
               {mapaCalor && mapaCalor.yLabels.length > 0 ? (
                 <EChart
                   option={(tema) => heatmapOption(mapaCalor, { tema, unidade: 'moeda' })}

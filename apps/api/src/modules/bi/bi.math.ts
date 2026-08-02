@@ -27,6 +27,17 @@ export interface KpiInputs {
 export interface Kpis extends KpiInputs {
   /** ticket médio = receita / nº de vendas. */
   avgTicket: number;
+  /**
+   * Valor médio POR PEÇA = receita / unidades vendidas.
+   *
+   * Existe porque o ticket médio não se recorta: sob um recorte de produto a
+   * receita e a contagem de vendas caem quase na mesma proporção, e o ticket
+   * dava R$ 2.180 em óculos, em relógio, em lente e no consolidado — quatro
+   * telas diferentes mostrando o mesmo número. Isso é a "falsa verdade" que o
+   * cliente já apontou em outro cartão. O valor por peça, sim, é do recorte:
+   * R$ 1.300 em óculos contra R$ 597 em lente.
+   */
+  avgUnitPrice: number;
   /** giro proxy da rede = unidades vendidas / unidades em estoque. */
   turnover: number;
   /** % de posições em ruptura (saldo ≤ 0). */
@@ -40,6 +51,7 @@ export function deriveKpis(i: KpiInputs): Kpis {
   return {
     ...i,
     avgTicket: i.salesCount > 0 ? round2(i.revenue / i.salesCount) : 0,
+    avgUnitPrice: i.unitsSold > 0 ? round2(i.revenue / i.unitsSold) : 0,
     turnover: i.stockUnits > 0 ? round2(i.unitsSold / i.stockUnits) : 0,
     rupturaRate: i.stockPositions > 0 ? round2((i.outOfStock / i.stockPositions) * 100) : 0,
     lowStockRate: i.stockPositions > 0 ? round2((i.lowStock / i.stockPositions) * 100) : 0,

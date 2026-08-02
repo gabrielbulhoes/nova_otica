@@ -537,3 +537,95 @@ describe('demo: os recortes particionam o catálogo', () => {
     expect(plano('lentes').some((r) => ids.has(r.description))).toBe(false);
   });
 });
+
+/**
+ * "Os gráficos do BI não estão atualizando quando marcamos categorias
+ * específicas" (Galbe). Estava certo: o módulo inteiro ignorava `group` e
+ * `category` — as seis rotas, a chave de cache e metade dos números, que eram
+ * sorteados ou vinham do agregado da rede.
+ */
+describe('demo: o BI obedece ao recorte', () => {
+  const bi = (url: string, params: Record<string, string | undefined> = {}) => get(url, params);
+
+  it('trocar o recorte muda faturamento, unidades e estoque', () => {
+    const oculos = bi('/bi/kpis', { days: '90', group: 'principal' });
+    const lentes = bi('/bi/kpis', { days: '90', group: 'lentes' });
+    const tudo = bi('/bi/kpis', { days: '90', group: 'todos' });
+    for (const k of ['revenue', 'unitsSold', 'stockUnits'] as const) {
+      expect(oculos[k], k).not.toBe(lentes[k]);
+      expect(oculos[k], k).toBeLessThanOrEqual(tudo[k]);
+    }
+    // E o número deixou de ser sorteado: duas chamadas iguais dão o mesmo valor.
+    expect(bi('/bi/kpis', { days: '90', group: 'principal' }).unitsSold).toBe(oculos.unitsSold);
+  });
+
+  it('vendas por categoria só devolve categoria DENTRO do recorte', () => {
+    const rows = bi('/bi/sales-by-dimension', { by: 'category', group: 'principal' }).rows as {
+      label: string;
+    }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.label).not.toMatch(/lente|tratamento/i);
+  });
+
+  it('marcar um tipo específico recorta todos os gráficos, não só um', () => {
+    const tipos = get('/products/categories', { group: 'principal' }) as string[];
+    const alvo = tipos[0];
+    const cheio = bi('/bi/sales-by-dimension', { by: 'store', group: 'principal' });
+    const marcado = bi('/bi/sales-by-dimension', { by: 'store', group: 'principal', category: alvo });
+    const soma = (r: Record<string, any>) =>
+      (r.rows as { total: number }[]).reduce((a, x) => a + x.total, 0);
+    expect(soma(marcado)).toBeLessThan(soma(cheio));
+
+    // O sankey de vendas segue o mesmo recorte — antes ele era da rede inteira.
+    const fluxo = bi('/bi/sales-flow', { group: 'principal', category: alvo });
+    for (const n of fluxo.nodes as { name: string }[]) {
+      const ehCategoria = tipos.includes(n.name);
+      if (ehCategoria) expect(n.name).toBe(alvo);
+    }
+  });
+
+  it('o que não se reparte por produto vem MARCADO como proporcional', () => {
+    // Pagamento cobre a venda inteira; série e mapa de calor vêm agregados.
+    expect(bi('/bi/sales-by-dimension', { by: 'payment', group: 'principal' }).aproximado).toBe(true);
+    expect(bi('/bi/sales-timeseries', { days: '30', group: 'principal' }).aproximado).toBe(true);
+    expect(bi('/bi/heatmap', { group: 'principal' }).aproximado).toBe(true);
+    // Sem recorte não há aproximação nenhuma a declarar.
+    expect(bi('/bi/sales-by-dimension', { by: 'payment', group: 'todos' }).aproximado).toBeUndefined();
+    expect(bi('/bi/sales-timeseries', { days: '30', group: 'todos' }).aproximado).toBeUndefined();
+  });
+
+  it('o cartão de valor médio responde ao recorte — o ticket médio não responderia', () => {
+    // Sob recorte, receita e nº de vendas caem juntos e o ticket devolve o
+    // mesmo número em todo recorte. O valor POR PEÇA é o que separa óculos de
+    // lente, e é ele que a tela mostra quando há recorte.
+    const v = (g: string) => bi('/bi/kpis', { days: '90', group: g }).avgUnitPrice as number;
+    const oculos = v('principal');
+    const lentes = v('lentes');
+    expect(oculos).toBeGreaterThan(0);
+    expect(lentes).toBeGreaterThan(0);
+    expect(oculos).not.toBeCloseTo(lentes, 0);
+  });
+
+  it('escolher uma loja recorta o mapa de calor e as vendas por loja', () => {
+    const loja = (get('/stores').rows as { id: string; name: string }[])[0];
+    const mapa = bi('/bi/heatmap', { storeId: loja.id });
+    expect(mapa.yLabels).toEqual([loja.name]);
+    const porLoja = bi('/bi/sales-by-dimension', { by: 'store', storeId: loja.id });
+    expect((porLoja.rows as { label: string }[]).every((r) => r.label === loja.name)).toBe(true);
+  });
+});
+
+/**
+ * As duas telas respondiam "quantas unidades a rede tem neste recorte" por
+ * caminhos diferentes — 211.026 no painel contra 112.515 no BI, no mesmo
+ * instante e no mesmo recorte. Uma função só, e um teste para provar.
+ */
+describe('demo: painel e BI contam o mesmo estoque', () => {
+  for (const g of ['principal', 'relogios', 'lentes', 'outros', 'todos']) {
+    it(`recorte "${g}": o KPI do BI bate com o do painel`, () => {
+      const painel = get('/dashboard/summary', { group: g }).stockUnits as number;
+      const bi = get('/bi/kpis', { days: '90', group: g }).stockUnits as number;
+      expect(bi).toBe(painel);
+    });
+  }
+});
