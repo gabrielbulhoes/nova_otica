@@ -402,18 +402,15 @@ function timeseries(days: number, fatia = 1, aproximado = false) {
     // monta rótulo com ele, e um 30 em cima de 7 pontos é o rótulo mentindo.
     return { days: points.length, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
   }
-  const points = [];
-  const now = new Date();
-  for (let i = days - 1; i >= 0; i -= 1) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    points.push({
-      date: d.toISOString().slice(0, 10),
-      total: round2(money(3000, 14000) * fatia),
-      count: Math.max(1, Math.round(int(2, 9) * fatia)),
-    });
-  }
-  return { days, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
+  // Fictício: a MESMA série que o KPI e o recorte por data leem. Era aqui que
+  // ela nascia sorteada a cada chamada, e por isso o KPI e o gráfico ao lado
+  // nunca fechavam.
+  const points = serieDiaria().slice(-effectiveDays(days)).map((d) => ({
+    date: d.date,
+    total: round2(d.total * fatia),
+    count: Math.max(1, Math.round(d.count * fatia)),
+  }));
+  return { days: points.length, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
 }
 
 /**
@@ -701,6 +698,16 @@ function medirJanela(): number {
 }
 const realWindowDays = real ? medirJanela() : 0;
 
+/** Janela do sabor FICTÍCIO — ver `serieFicticia`, mais abaixo. */
+const JANELA_FICTICIA = 180;
+
+/**
+ * Dias que a amostra em uso realmente cobre: 7 na fotografia do CDS, 180 no
+ * sabor fictício. Ter UM número para os dois é o que permite ao recorte por
+ * data funcionar igual nos dois lados — e o CI roda só o fictício.
+ */
+const janelaDaAmostra = real ? realWindowDays : JANELA_FICTICIA;
+
 /** Janela que a amostra estática realmente responde. */
 export interface CoberturaDaAmostra {
   /** Dias de venda medidos na série diária. */
@@ -748,8 +755,8 @@ export function coberturaDoDataset(): CoberturaDaAmostra | null {
  * infla); pedir MENOS é um recorte legítimo, e agora ele é respeitado — era o
  * que fazia o filtro não mover número nenhum dentro da amostra.
  */
-const effectiveDays = (days: number) =>
-  real ? Math.max(1, Math.min(days, realWindowDays)) : days;
+const effectiveDays = (days: number) => Math.max(1, Math.min(days, janelaDaAmostra));
+
 
 /* ───────────────────────────────────────────────────────────────────────────
    RECORTE POR DATA DENTRO DA AMOSTRA
@@ -767,25 +774,76 @@ const effectiveDays = (days: number) =>
    (ver LegendaDaAmostra) em vez de deixar o rótulo do filtro mentir.
    ─────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * Janela do sabor FICTÍCIO. O comentário de `coberturaDoDataset` sempre disse
+ * que o dataset fictício "é gerado para a janela inteira" — e não era: o ramo
+ * sem dados reais de `timeseries()` sorteava `money(3000, 14000)` A CADA
+ * CHAMADA, com um RNG que avança de estado, e `vendasNaJanela`/`fatiaDaJanela`
+ * devolviam o total do período inteiro para qualquer janela.
+ *
+ * O efeito era invisível aqui (o desenvolvimento roda com o JSON real) e fatal
+ * no CI, que roda só o fictício: o KPI mostrava R$ 241.644 ao lado de uma série
+ * que somava R$ 3.243, a soma por loja estourava a rede em 8,6% e a análise de
+ * vendas de 1 dia era idêntica à de 7. Três testes vermelhos, uma causa.
+ *
+ * Agora o fictício tem série diária DE VERDADE: 180 dias, gerada uma vez na
+ * carga do módulo e memoizada. Como todo o resto já lê a janela por
+ * `diasNaJanela`/`vendasNaJanela`/`fatiaDaJanela`, os dois sabores passam a
+ * responder ao filtro pelo mesmo caminho.
+ */
+type PontoDiario = { date: string; total: number; count: number };
+let serieCache: PontoDiario[] | null = null;
+
+/**
+ * A série diária do sabor em uso — é ela que define a janela dos dois lados.
+ *
+ * No fictício ela é gerada uma vez e ESCALADA para somar exatamente o
+ * faturamento do catálogo (`soldItems`). Sem isso, série e itens vendidos são
+ * dois universos aleatórios independentes: a fatia de 1 dia calculada na série
+ * multiplicava um total de outra ordem de grandeza, e a soma por loja saía 83%
+ * fora da rede. É a mesma propriedade que a fotografia do CDS tem de graça —
+ * lá o dia a dia e o item vendido vêm da mesma extração.
+ *
+ * Preguiçosa de propósito: `soldItems()` só existe depois deste ponto do módulo.
+ */
+function serieDiaria(): PontoDiario[] {
+  if (real) return (serieCache ??= real.dailySales.map((d) => ({ date: d.date, total: d.total, count: d.count })));
+  if (serieCache) return serieCache;
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const bruta = Array.from({ length: JANELA_FICTICIA }, (_, i) => {
+    const d = new Date(hoje);
+    d.setDate(d.getDate() - (JANELA_FICTICIA - 1 - i));
+    return { date: d.toISOString().slice(0, 10), peso: money(3000, 14000), count: int(2, 9) };
+  });
+  const somaPesos = bruta.reduce((a, x) => a + x.peso, 0) || 1;
+  const alvo = round2(soldItems().reduce((a, x) => a + x.revenue, 0));
+  const somaContagens = bruta.reduce((a, x) => a + x.count, 0) || 1;
+  serieCache = bruta.map((x) => ({
+    date: x.date,
+    total: round2((x.peso / somaPesos) * alvo),
+    count: Math.max(1, Math.round((x.count / somaContagens) * salesCount)),
+  }));
+  return serieCache;
+}
+
 /** Datas medidas, em ordem crescente. */
-const datasDaAmostra = real ? real.dailySales.map((d) => d.date).sort() : [];
+const datasDaAmostra = () => serieDiaria().map((d) => d.date).sort();
 
 /** Dia da semana (domingo = 0) de uma data ISO, sem depender do fuso local. */
 const diaDaSemana = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
 
 /** Os N últimos dias medidos — o recorte que o filtro pediu. */
 function diasNaJanela(days: number): string[] {
-  if (!real) return [];
-  return datasDaAmostra.slice(-effectiveDays(days));
+  return datasDaAmostra().slice(-effectiveDays(days));
 }
 
 /** Faturamento e nº de vendas da rede no recorte, somados da série diária. */
 function vendasNaJanela(days: number): { total: number; count: number } {
-  if (!real) return { total: revenue, count: salesCount };
   const dias = new Set(diasNaJanela(days));
   let total = 0;
   let count = 0;
-  for (const d of real.dailySales) {
+  for (const d of serieDiaria()) {
     if (!dias.has(d.date)) continue;
     total += d.total;
     count += d.count;
@@ -801,8 +859,7 @@ function vendasNaJanela(days: number): { total: number; count: number } {
  * exemplo). Fora da amostra real vale 1 — nada é projetado.
  */
 function fatiaDaJanela(days: number): number {
-  if (!real) return 1;
-  const total = vendasNaJanela(realWindowDays).total;
+  const total = vendasNaJanela(janelaDaAmostra).total;
   return total > 0 ? vendasNaJanela(days).total / total : 1;
 }
 
@@ -830,7 +887,7 @@ function ocorrenciasPorDiaDaSemana(datas: string[]): Map<number, number> {
  * número certo. Duas respostas para a mesma pergunta, na mesma tela.
  */
 const lojaPorDataEhExata = () =>
-  real ? [...ocorrenciasPorDiaDaSemana(datasDaAmostra).values()].every((n) => n <= 1) : false;
+  real ? [...ocorrenciasPorDiaDaSemana(datasDaAmostra()).values()].every((n) => n <= 1) : false;
 
 /**
  * Faturamento por loja no recorte, a partir de `weekdayStore`.
@@ -847,7 +904,7 @@ const lojaPorDataEhExata = () =>
 function salesByStoreNaJanela(days: number): typeof salesByStore {
   if (!real) return salesByStore;
   const naJanela = ocorrenciasPorDiaDaSemana(diasNaJanela(days));
-  const naAmostra = ocorrenciasPorDiaDaSemana(datasDaAmostra);
+  const naAmostra = ocorrenciasPorDiaDaSemana(datasDaAmostra());
   const porLoja = new Map<string, number>();
   for (const w of real.weekdayStore) {
     const dentro = naJanela.get(w.weekday) ?? 0;

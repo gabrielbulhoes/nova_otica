@@ -707,13 +707,18 @@ describe('demo: o BI obedece ao recorte', () => {
   });
 
   it('o que não se reparte por produto vem MARCADO como proporcional', () => {
-    // Pagamento cobre a venda inteira; série e mapa de calor vêm agregados.
-    expect(bi('/bi/sales-by-dimension', { by: 'payment', group: 'principal' }).aproximado).toBe(true);
-    expect(bi('/bi/sales-timeseries', { days: '30', group: 'principal' }).aproximado).toBe(true);
-    expect(bi('/bi/heatmap', { group: 'principal' }).aproximado).toBe(true);
-    // Sem recorte não há aproximação nenhuma a declarar.
-    expect(bi('/bi/sales-by-dimension', { by: 'payment', group: 'todos' }).aproximado).toBeUndefined();
-    expect(bi('/bi/sales-timeseries', { days: '30', group: 'todos' }).aproximado).toBeUndefined();
+    // `aproximado` passou a ter DUAS causas: o recorte de produto (pagamento
+    // cobre a venda inteira; série e mapa de calor vêm agregados) e o recorte
+    // de DATA em quebras que não têm dia. Para isolar a primeira, a janela
+    // pedida aqui é maior que a amostra — ela é limitada à cobertura, então
+    // não há recorte de data nenhum e o que sobrar é projeção de produto.
+    const AMOSTRA_INTEIRA = '3650';
+    expect(bi('/bi/sales-by-dimension', { by: 'payment', days: AMOSTRA_INTEIRA, group: 'principal' }).aproximado).toBe(true);
+    expect(bi('/bi/sales-timeseries', { days: AMOSTRA_INTEIRA, group: 'principal' }).aproximado).toBe(true);
+    expect(bi('/bi/heatmap', { days: AMOSTRA_INTEIRA, group: 'principal' }).aproximado).toBe(true);
+    // Sem recorte de produto e sem recorte de data, nada a declarar.
+    expect(bi('/bi/sales-by-dimension', { by: 'payment', days: AMOSTRA_INTEIRA, group: 'todos' }).aproximado).toBeUndefined();
+    expect(bi('/bi/sales-timeseries', { days: AMOSTRA_INTEIRA, group: 'todos' }).aproximado).toBeUndefined();
   });
 
   it('o cartão de valor médio responde ao recorte — o ticket médio não responderia', () => {
