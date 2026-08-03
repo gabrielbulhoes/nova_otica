@@ -2761,3 +2761,361 @@ td .codigo {
     background: #000 !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CENTRAL DE OPERAÇÕES
+   A tela de entrada do console: sete módulos em cartões, no lugar dos 15 links.
+
+   SOBRE O DESENHO, e por que ele não tem canto arredondado nem sombra:
+   o manual põe superfície como PAPEL — filete de 1px, raio 0, sem sombra
+   difusa (ver --radius e --shadow-card). O "arredondado" desta marca é o CORTE
+   ASSIMÉTRICO do símbolo (--corte), que já vive no .btn; aqui ele aparece na
+   PLACA DO ÍCONE, que é o elemento de marca do cartão. Elevação no hover é
+   feita com filete dourado + lavagem + 1.02 de escala: o mesmo vocabulário do
+   resto do produto, sem importar vidro de outro sistema.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+.central {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+/* ─── Cabeçalho ─────────────────────────────────────────────────────────── */
+.central-topo {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding-bottom: 22px;
+}
+.central-identidade {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+.central-marca {
+  color: var(--accent);
+  flex: none;
+  margin-top: 2px;
+}
+.central-titulo {
+  font-family: var(--font-titulo);
+  font-weight: 600;
+  font-size: clamp(26px, 3.4vw, 38px);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  margin: 2px 0 4px;
+  color: var(--text);
+}
+.central-papel {
+  margin: 0;
+}
+
+/* Busca global: filtra módulo E página interna, para o agrupamento não
+   esconder nada de quem já sabe o nome da tela. */
+.central-busca {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 260px;
+  max-width: 380px;
+}
+.central-busca-icone {
+  position: absolute;
+  left: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.central-busca input {
+  width: 100%;
+  padding: 10px 36px 10px 36px;
+  font-size: 14px;
+  font-family: var(--font-corpo);
+}
+.central-busca input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.central-busca-limpar {
+  position: absolute;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.central-busca-limpar:hover {
+  color: var(--accent);
+}
+
+/* ─── Grupos por categoria ──────────────────────────────────────────────── */
+.central-grupo + .central-grupo {
+  margin-top: 34px;
+}
+.central-grupo-topo {
+  margin-bottom: 14px;
+}
+.central-grupo-topo .eyebrow {
+  margin: 10px 0 0;
+}
+
+/* ─── Grade: 4 colunas no desktop, 3 no laptop, 2 no tablet e no celular ── */
+.central-grade {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  /* TRÊS colunas, não quatro. Os grupos têm 1 a 3 módulos: em quatro colunas a
+     fileira nunca fechava e sobrava uma coluna vazia à direita em todo grupo.
+     Com três, "Operação" e "Inteligência" preenchem a linha inteira e a largura
+     do cartão fica idêntica entre os grupos — que é o alinhamento que a tela
+     promete. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.central-grade > li {
+  display: flex; /* estica o cartão: todos ficam com a MESMA altura */
+}
+
+/* ─── O cartão do módulo ────────────────────────────────────────────────── */
+.modulo-card {
+  /* É um <button>: zera o que o agente do usuário desenha e assume o papel. */
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-corpo);
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 20px 16px;
+
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius); /* papel: canto reto, como o resto do produto */
+  color: var(--text);
+
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+.modulo-card:hover {
+  border-color: var(--border-ouro);
+  background: var(--hover);
+  transform: scale(1.02);
+}
+.modulo-card:active {
+  transform: scale(0.995);
+}
+.modulo-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.modulo-cabeca {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* A PLACA DO ÍCONE é o elemento de marca do cartão: leva o corte assimétrico
+   do símbolo. O ícone é protagonista — mesma família, mesmo peso, mesmo
+   tamanho em todos os sete cartões. */
+.modulo-placa {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  color: var(--accent);
+  border: 1px solid var(--border-ouro);
+  border-radius: var(--corte) 0 var(--corte) 0;
+  background: transparent;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.modulo-card:hover .modulo-placa {
+  background: var(--accent);
+  color: var(--window-solid);
+}
+
+/* Indicador de pendência: número + rótulo no aria-label do cartão, nunca cor
+   sozinha carregando o significado. */
+.modulo-aviso {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--window-solid);
+  background: var(--red);
+  border-radius: var(--corte-sm) 0 var(--corte-sm) 0;
+  flex: none;
+}
+
+.modulo-nome {
+  font-family: var(--font-titulo);
+  font-weight: 600;
+  font-size: 21px;
+  line-height: 1.15;
+  letter-spacing: -0.005em;
+  margin-top: 2px;
+}
+.modulo-descricao {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  /* Empurra o rodapé para baixo: com alturas iguais, "Entrar" alinha entre
+     todos os cartões da fileira. */
+  flex: 1 1 auto;
+}
+
+/* Páginas que casaram com a busca — some quando não há busca. */
+.modulo-casadas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.modulo-casada {
+  font-size: 11.5px;
+  padding: 3px 8px;
+  color: var(--accent);
+  border: 1px solid var(--border-ouro);
+}
+
+.modulo-rodape {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+}
+.modulo-entrar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.modulo-seta {
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+.modulo-card:hover .modulo-seta {
+  transform: translateX(3px);
+}
+.modulo-badge {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+/* ─── Barra lateral contextual ──────────────────────────────────────────── */
+.sidebar-dica {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.sidebar-modulo {
+  display: flex;
+  flex-direction: column;
+}
+.nav-voltar {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 0 10px;
+}
+.nav-voltar:hover {
+  color: var(--accent);
+}
+.nav-voltar-seta {
+  font-size: 14px;
+  line-height: 1;
+}
+.sidebar-modulo-nome {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 6px;
+  color: var(--accent);
+}
+
+/* ─── Responsivo ────────────────────────────────────────────────────────── */
+@media (max-width: 1180px) {
+  .central-grade {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 860px) {
+  .central-grade {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  /* Duas colunas também no celular (pedido explícito): o cartão encolhe o
+     respiro e a placa, mas mantém ícone, nome e "Entrar". */
+  .modulo-card {
+    padding: 14px 14px 12px;
+    gap: 8px;
+  }
+  .modulo-placa {
+    width: 42px;
+    height: 42px;
+  }
+  .modulo-nome {
+    font-size: 17px;
+  }
+  .modulo-descricao {
+    font-size: 12.5px;
+  }
+  .modulo-badge {
+    display: none; /* a categoria já é o título do grupo logo acima */
+  }
+  .central-topo {
+    align-items: stretch;
+  }
+  .central-busca {
+    max-width: none;
+  }
+}
+
+/* Quem pediu menos movimento não recebe escala nem deslocamento. */
+@media (prefers-reduced-motion: reduce) {
+  .modulo-card,
+  .modulo-placa,
+  .modulo-seta {
+    transition: none;
+  }
+  .modulo-card:hover {
+    transform: none;
+  }
+  .modulo-card:hover .modulo-seta {
+    transform: none;
+  }
+}

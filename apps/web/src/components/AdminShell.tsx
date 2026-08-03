@@ -6,6 +6,7 @@ import { useLiveInvalidation } from '../hooks/useLiveInvalidation';
 import { ScopePicker, SCOPE_LABEL, useScope } from '../lib/scope';
 import { Mark } from '../brand/Brand';
 import { Icon, type IconName } from '../brand/Icon';
+import { moduloDaRota, paginaDaRota, ROTA_CENTRAL } from '../lib/modulos';
 
 interface DockItem {
   to: string;
@@ -23,7 +24,10 @@ interface DockItem {
  * passa a parecer outro produto em cada máquina da rede.
  */
 const dockItems: DockItem[] = [
-  { to: '/admin', icon: 'painel', label: 'Dashboard', end: true },
+  // A Central abre o dock: voltar para a visão dos módulos é um clique de
+  // qualquer tela, sem depender do caminho de volta na barra lateral.
+  { to: '/admin', icon: 'marca', label: 'Central de operações', end: true },
+  { to: '/admin/dashboard', icon: 'painel', label: 'Painel' },
   { to: '/admin/bi', icon: 'indicadores', label: 'BI' },
   { to: '/admin/estoque', icon: 'estoque', label: 'Estoque' },
   { to: '/admin/decisoes', icon: 'decisoes', label: 'Decisões' },
@@ -34,30 +38,15 @@ const dockItems: DockItem[] = [
   { to: '/loja', icon: 'loja', label: 'Loja online' },
 ];
 
-interface LinkDef {
-  to: string;
-  label: string;
-  end?: boolean;
-  adminOnly?: boolean;
-}
-
-const links: LinkDef[] = [
-  { to: '/admin', label: 'Dashboard', end: true },
-  { to: '/admin/bi', label: 'BI' },
-  { to: '/admin/estoque', label: 'Estoque' },
-  { to: '/admin/produtos', label: 'Produtos' },
-  { to: '/admin/transferencias', label: 'Transferências' },
-  { to: '/admin/alertas', label: 'Alertas' },
-  { to: '/admin/relatorios', label: 'Relatórios' },
-  { to: '/admin/decisoes', label: 'Decisões (cards)' },
-  { to: '/admin/historico', label: 'Histórico Geral' },
-  { to: '/admin/estrategia', label: 'Estratégia comercial' },
-  { to: '/admin/planejamento', label: 'Planejamento & Compras' },
-  { to: '/admin/vendas', label: 'Vendas' },
-  { to: '/admin/usuarios', label: 'Usuários', adminOnly: true },
-  { to: '/admin/lojas', label: 'Lojas', adminOnly: true },
-  { to: '/admin/sincronizacao', label: 'Sincronização', adminOnly: true },
-];
+/*
+   A LISTA DE 15 LINKS SAIU DAQUI.
+   Ela virou o mapa de módulos em src/lib/modulos.ts, e a barra lateral passou a
+   ser CONTEXTUAL: na Central não mostra link nenhum (os cartões são a
+   navegação), e dentro de um módulo mostra só as páginas daquele módulo — no
+   máximo quatro. Era essa lista que, no celular, ocupava cinco linhas de
+   rótulos antes de qualquer conteúdo.
+   As rotas não mudaram: quem tinha um link salvo continua chegando.
+*/
 
 // ─── Tema ───────────────────────────────────────────────────────────────────
 
@@ -205,12 +194,17 @@ export function AdminShell() {
   const dock = useDockDaRolagem(conteudoRef, location.pathname);
 
   const { scope } = useScope();
-  const visible = links.filter((l) => !l.adminOnly || isAdmin);
-  const active =
-    [...visible]
-      .sort((a, b) => b.to.length - a.to.length)
-      .find((l) => (l.end ? location.pathname === l.to : location.pathname.startsWith(l.to)))?.label ??
-    'Painel';
+
+  /*
+     Onde estamos: qual módulo e qual página. Na Central `modulo` é null — é a
+     raiz da navegação, não pertence a módulo nenhum.
+  */
+  const modulo = moduloDaRota(location.pathname);
+  const naCentral = location.pathname === ROTA_CENTRAL;
+  const paginasDoModulo = (modulo?.paginas ?? []).filter((p) => !p.adminOnly || isAdmin);
+  const active = naCentral
+    ? 'Central de operações'
+    : paginaDaRota(location.pathname)?.label ?? modulo?.nome ?? 'Central de operações';
 
   /**
    * Rolagem NÃO vaza entre telas.
@@ -271,16 +265,47 @@ export function AdminShell() {
             <Mark size={20} decorative style={{ marginRight: 9, verticalAlign: 'middle' }} />
             Nova<span>Ótica</span>
           </div>
-          {visible.map((l) => (
-            <NavLink
-              key={l.to}
-              to={l.to}
-              end={l.end}
-              className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-            >
-              {l.label}
-            </NavLink>
-          ))}
+          {/*
+             NAVEGAÇÃO CONTEXTUAL.
+             Na Central não há link nenhum: os cartões SÃO a navegação, e
+             repetir os módulos aqui seria a mesma lista de antes com outro
+             nome. Dentro de um módulo aparecem só as páginas dele, precedidas
+             do caminho de volta — no máximo cinco paradas de Tab, contra as 15
+             de antes.
+
+             A dica não diz "ao lado" nem "abaixo": no celular a barra vira
+             cabeçalho e os cartões passam a ficar embaixo — a frase tem de
+             valer nas duas larguras.
+          */}
+          {naCentral ? (
+            <p className="sidebar-dica">
+              Escolha um módulo para entrar. Os atalhos do dock levam direto às
+              telas do dia a dia.
+            </p>
+          ) : (
+            <nav className="sidebar-modulo" aria-label={`Telas de ${modulo?.nome ?? 'módulo'}`}>
+              <NavLink to={ROTA_CENTRAL} end className="nav-voltar">
+                <span className="nav-voltar-seta" aria-hidden="true">&#8592;</span>
+                Central de operações
+              </NavLink>
+              {modulo && (
+                <p className="eyebrow sidebar-modulo-nome">
+                  <Icon name={modulo.icone} size={14} aria-hidden="true" />
+                  {modulo.nome}
+                </p>
+              )}
+              {paginasDoModulo.map((p) => (
+                <NavLink
+                  key={p.to}
+                  to={p.to}
+                  end={p.end}
+                  className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                >
+                  {p.label}
+                </NavLink>
+              ))}
+            </nav>
+          )}
 
           {/* O style inline não é enfeite: `.sidebar > div[style]` é o seletor que
               reposiciona este bloco quando a barra vira cabeçalho no mobile. */}

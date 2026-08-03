@@ -8,6 +8,7 @@ import { Login } from './pages/Login';
 import { Usuarios } from './pages/Usuarios';
 import { DEMO } from './api/client';
 import { DemoBadge } from './components/DemoBadge';
+import { Central } from './pages/Central';
 import { Dashboard } from './pages/Dashboard';
 import { Stock } from './pages/Stock';
 import { Products } from './pages/Products';
@@ -50,7 +51,13 @@ export function App() {
           </RequireAuth>
         }
       >
-        <Route index element={<Dashboard />} />
+        {/* A entrada do console é a Central de Operações: sete módulos em
+            cartões, no lugar da lista de 15 links. O Painel continua existindo
+            — virou uma tela DENTRO do módulo Operação, com rota própria. As 15
+            rotas que já existiam seguem exatamente as mesmas: nenhum link
+            antigo quebra. */}
+        <Route index element={<Central />} />
+        <Route path="dashboard" element={<Dashboard />} />
         <Route
           path="bi"
           element={
