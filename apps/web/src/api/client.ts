@@ -1,8 +1,24 @@
 import axios from 'axios';
-import { demoHandle } from './demo';
+import { coberturaDoDataset, demoHandle } from './demo';
+import type { CoberturaDaAmostra } from './demo';
 
 /** Modo demonstração: o app roda sem backend, com dados fictícios no navegador. */
 export const DEMO = import.meta.env.VITE_DEMO === '1';
+
+export type { CoberturaDaAmostra };
+
+/**
+ * Janela que a amostra estática responde de verdade, ou `null` quando não há
+ * limite a declarar (backend ao vivo, ou demonstração com dados fictícios).
+ *
+ * A porta é aqui, e não em `demo.ts`, por causa do gate: o dataset real é
+ * embarcado por `import.meta.glob` sempre que o arquivo existe na árvore, mesmo
+ * num build ligado ao backend. Sem checar DEMO, um build ao vivo herdaria o
+ * limite de uma fotografia que ele nem usa.
+ */
+export function coberturaDaAmostra(): CoberturaDaAmostra | null {
+  return DEMO ? coberturaDoDataset() : null;
+}
 
 export const api = axios.create({ baseURL: '/api' });
 

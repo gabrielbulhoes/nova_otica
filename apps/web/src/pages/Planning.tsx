@@ -35,6 +35,27 @@ import {
 import { Icon, type IconName } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { downloadCsv, toCsv } from '../bi/csv';
+import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
+
+/**
+ * Recortes das duas telas. O rateio de feira pede janela LONGA de propósito —
+ * ele reparte uma compra pela participação histórica de cada loja —, e é por
+ * isso que nenhuma das opções cabe numa amostra de 7 dias. Nesse caso
+ * `opcoesDePeriodo` acrescenta a própria cobertura como primeira opção, para a
+ * tela continuar utilizável com o que a base tem.
+ */
+const PERIODOS_RATEIO = [
+  { dias: 90, label: '90 dias' },
+  { dias: 180, label: '180 dias' },
+  { dias: 365, label: '1 ano' },
+];
+
+const PERIODOS_ANALISE = [
+  { dias: 30, label: 'Últimos 30 dias' },
+  { dias: 90, label: 'Últimos 90 dias' },
+  { dias: 180, label: 'Últimos 180 dias' },
+];
 
 /**
  * Estado operacional desta tela, no formato que o <Selo> compartilhado consome.
@@ -712,7 +733,7 @@ function FairSplit() {
   const [brand, setBrand] = useState('');
   const [category, setCategory] = useState('');
   const [qty, setQty] = useState('100');
-  const [days, setDays] = useState('180');
+  const [days, setDays] = useState(() => periodoInicial(PERIODOS_RATEIO, 180));
   const [submitted, setSubmitted] = useState<{ brand?: string; category?: string; qty: string; days: string } | null>(null);
 
   const split = useQuery({
@@ -769,9 +790,11 @@ function FairSplit() {
         />
         <label className="muted">un., histórico</label>
         <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Janela de histórico">
-          <option value="90">90 dias</option>
-          <option value="180">180 dias</option>
-          <option value="365">1 ano</option>
+          {opcoesDePeriodo(PERIODOS_RATEIO).map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
         </select>
         {/* O ÚNICO sólido da tela.
             Planejamento & Compras é uma tela de muitas ações, mas todas as
@@ -785,6 +808,8 @@ function FairSplit() {
           Distribuir
         </BotaoPrimario>
       </div>
+
+      <LegendaDaAmostra />
 
       {submitted && (
         split.isLoading ? (
@@ -846,7 +871,7 @@ function FairSplit() {
 
 export function Planning() {
   const { isAdmin } = useAuth();
-  const [days, setDays] = useState('90');
+  const [days, setDays] = useState(() => periodoInicial(PERIODOS_ANALISE, 90));
   const [storeId, setStoreId] = useState('');
   // Recorte de cobertura: a operação fala de "cobertura" como óculos + grau +
   // relógio (principal); lentes são acompanhadas à parte; consolidado é tudo.
@@ -905,9 +930,11 @@ export function Planning() {
           ))}
         </div>
         <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período de análise">
-          <option value="30">Últimos 30 dias</option>
-          <option value="90">Últimos 90 dias</option>
-          <option value="180">Últimos 180 dias</option>
+          {opcoesDePeriodo(PERIODOS_ANALISE).map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
         </select>
         {isAdmin && (
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Escopo de loja">
@@ -924,6 +951,8 @@ export function Planning() {
       <div className="muted" style={{ fontSize: 12.5, margin: '-14px 0 18px' }}>
         {GROUP_OPTIONS.find((g) => g.value === group)!.hint}
       </div>
+
+      <LegendaDaAmostra />
 
       {/* ── O que fazer hoje: prioridades em 1 olhada, ação em 1 clique ──
           É o painel de decisão da tela, e por isso ganha a abertura completa do

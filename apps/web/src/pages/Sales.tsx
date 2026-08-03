@@ -3,6 +3,15 @@ import { useQuery } from '@tanstack/react-query';
 import { getSales, getSalesAnalysis, getStores, formatBRL, type AnalysisDimension } from '../api/client';
 import { PageHeader, Loading, ExportCsv, Codigo, AberturaDeSecao } from '../components/ui';
 import { Icon } from '../brand/Icon';
+import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
+
+/** Recortes desta tela. O filtro só oferece os que a base responde. */
+const PERIODOS = [
+  { dias: 30, label: '30 dias' },
+  { dias: 90, label: '90 dias' },
+  { dias: 180, label: '180 dias' },
+];
 
 /** Rótulos das dimensões da análise (feedback 10: foco em produto/unidades). */
 const DIMENSIONS: { value: AnalysisDimension; label: string }[] = [
@@ -21,7 +30,7 @@ export function Sales() {
   const [end, setEnd] = useState('');
   const [by, setBy] = useState<AnalysisDimension>('brand');
   const [metric, setMetric] = useState<Metric>('units');
-  const [days, setDays] = useState('30');
+  const [days, setDays] = useState(() => periodoInicial(PERIODOS, 30));
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
   const sales = useQuery({
@@ -138,9 +147,11 @@ export function Sales() {
             </button>
           </div>
           <select aria-label="Período da análise" value={days} onChange={(e) => setDays(e.target.value)}>
-            <option value="30">30 dias</option>
-            <option value="90">90 dias</option>
-            <option value="180">180 dias</option>
+            {opcoesDePeriodo(PERIODOS).map((o) => (
+              <option key={o.value} value={o.value} disabled={o.disabled}>
+                {o.label}
+              </option>
+            ))}
           </select>
           <span style={{ flex: 1 }} />
           <ExportCsv
@@ -153,6 +164,7 @@ export function Sales() {
             ]}
           />
         </div>
+        <LegendaDaAmostra />
         {analysis.isLoading ? (
           <Loading />
         ) : top.length > 0 ? (

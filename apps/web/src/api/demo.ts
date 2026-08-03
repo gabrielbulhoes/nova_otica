@@ -637,6 +637,35 @@ function medirJanela(): number {
 }
 const realWindowDays = real ? medirJanela() : 0;
 
+/** Janela que a amostra estática realmente responde. */
+export interface CoberturaDaAmostra {
+  /** Dias de venda medidos na série diária. */
+  dias: number;
+  /** Primeiro dia com venda (ISO). */
+  de: string;
+  /** Último dia com venda (ISO). */
+  ate: string;
+}
+
+/**
+ * Cobertura da amostra, para a INTERFACE — o contrário de esconder o limite.
+ *
+ * A matemática já respeitava a janela medida (`effectiveDays`), mas o filtro
+ * continuava oferecendo 30, 90 e 180 dias e devolvendo sempre os mesmos sete:
+ * quem escolhia 30 via o número de 7 com o rótulo de 30 e concluía, com razão,
+ * que o filtro não funcionava. Expondo a cobertura, a tela passa a oferecer só
+ * o que a fotografia responde.
+ *
+ * Devolve `null` quando não há amostra real embarcada (dataset fictício, que é
+ * gerado para a janela inteira) — nesse caso não existe limite a declarar.
+ */
+export function coberturaDoDataset(): CoberturaDaAmostra | null {
+  if (!real) return null;
+  const dias = (real.dailySales ?? []).map((d) => d.date).filter(Boolean).sort();
+  if (dias.length === 0) return null;
+  return { dias: realWindowDays, de: dias[0], ate: dias[dias.length - 1] };
+}
+
 /**
  * A fotografia real cobre `realWindowDays`: pedir um período maior usaria os
  * mesmos números como se fossem do período maior e inflaria a cobertura.
@@ -807,7 +836,12 @@ function turnover(days: number, group: ProductGroup = 'todos', category?: string
       return {
         productId: p.id, description: p.description, brand: p.brand, category: p.category,
         unitsSold, currentStock, turnover: round2(unitsSold / Math.max(currentStock, 1)),
-        daysOfInventory: unitsSold > 0 ? round2(currentStock / (unitsSold / days)) : null,
+        // `effectiveDays` e não `days`: a venda deste bloco é a MEDIDA na
+        // amostra (7 dias). Dividindo por 30 a demanda diária saía 4,3x menor e
+        // a cobertura em dias, 4,3x maior — o mesmo erro que `medirJanela`
+        // existe para evitar, e que aqui tinha escapado.
+        daysOfInventory:
+          unitsSold > 0 ? round2(currentStock / (unitsSold / effectiveDays(days))) : null,
       };
     }).sort((a, b) => b.turnover - a.turnover),
   };

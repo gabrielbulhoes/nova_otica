@@ -27,6 +27,16 @@ import {
 import { toCsv, downloadCsv } from '../bi/csv';
 import { useAuth } from '../auth/AuthContext';
 import { useScope } from '../lib/scope';
+import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
+
+/** Recortes desta tela. O filtro só oferece os que a base responde. */
+const PERIODOS = [
+  { dias: 7, label: 'Últimos 7 dias' },
+  { dias: 30, label: 'Últimos 30 dias' },
+  { dias: 90, label: 'Últimos 90 dias' },
+  { dias: 180, label: 'Últimos 180 dias' },
+];
 
 /**
  * Vocabulário de cor dos gráficos desta página.
@@ -62,7 +72,7 @@ const COR = {
 export function BI() {
   const { isAdmin } = useAuth();
   const { scope } = useScope();
-  const [days, setDays] = useState('90');
+  const [days, setDays] = useState(() => periodoInicial(PERIODOS, 90));
   const [storeId, setStoreId] = useState('');
   const [categorias, setCategorias] = useState<string[]>([]);
 
@@ -182,11 +192,12 @@ export function BI() {
       />
 
       <div className="toolbar">
-        <select value={days} onChange={(e) => setDays(e.target.value)}>
-          <option value="7">Últimos 7 dias</option>
-          <option value="30">Últimos 30 dias</option>
-          <option value="90">Últimos 90 dias</option>
-          <option value="180">Últimos 180 dias</option>
+        <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período">
+          {opcoesDePeriodo(PERIODOS).map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
         </select>
         {isAdmin && (
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Loja">
@@ -209,6 +220,8 @@ export function BI() {
           noun="tipos"
         />
       </div>
+
+      <LegendaDaAmostra />
 
       {kpis.isLoading || !indicadores ? (
         <Loading />

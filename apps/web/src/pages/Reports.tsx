@@ -24,6 +24,16 @@ import {
 import { Icon } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { useScope, SCOPE_LABEL, type Scope } from '../lib/scope';
+import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
+
+/** Recortes desta tela. O filtro só oferece os que a base responde. */
+const PERIODOS = [
+  { dias: 7, label: 'Últimos 7 dias' },
+  { dias: 30, label: 'Últimos 30 dias' },
+  { dias: 90, label: 'Últimos 90 dias' },
+  { dias: 180, label: 'Últimos 180 dias' },
+];
 
 type Tab = 'abc' | 'turnover' | 'coverage' | 'transfers' | 'brandmix';
 
@@ -127,7 +137,7 @@ export function Reports() {
   const { scope } = useScope();
   const [tab, setTab] = useState<Tab>('abc');
   const [dimension, setDimension] = useState<AbcDimension>('product');
-  const [days, setDays] = useState('30');
+  const [days, setDays] = useState(() => periodoInicial(PERIODOS, 30));
   const [storeId, setStoreId] = useState('');
   const [category, setCategory] = useState('');
 
@@ -232,10 +242,11 @@ export function Reports() {
           em qualquer aba e em qualquer dimensão. */}
       <div className="toolbar">
         <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período">
-          <option value="7">Últimos 7 dias</option>
-          <option value="30">Últimos 30 dias</option>
-          <option value="90">Últimos 90 dias</option>
-          <option value="180">Últimos 180 dias</option>
+          {opcoesDePeriodo(PERIODOS).map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
         </select>
         {isAdmin && filtraLoja && (
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Loja">
@@ -351,6 +362,10 @@ export function Reports() {
           />
         )}
       </div>
+
+      {/* O limite da base, escrito onde o filtro está — não numa nota lá
+          embaixo. Some sozinho quando a extração cobrir a janela cheia. */}
+      <LegendaDaAmostra />
 
       {((tab === 'abc' && dimension === 'brand') || tab === 'coverage') && <BrandScopeNote scope={scope} />}
 
