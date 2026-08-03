@@ -1,8 +1,10 @@
 name: Deploy (produção)
 
-# Só no merge para main, e só por push. `pull_request` NÃO dispara aqui: num
-# repositório público, qualquer pessoa abre PR, e um workflow com segredos
-# rodando em código de terceiro é como se entrega a chave da VPS.
+# Só no merge para main, e só por push. `pull_request` NÃO dispara aqui: um
+# workflow com segredos rodando em código que veio de fora é como entregar a
+# chave da VPS. Vale mesmo com o repositório privado — colaborador com acesso
+# de escrita também abre PR, e a revisão do código do PR aconteceria DEPOIS de
+# ele já ter rodado com os segredos.
 on:
   push:
     branches: [main]

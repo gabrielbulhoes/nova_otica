@@ -34,9 +34,11 @@ services:
       WEB_ORIGIN: ${WEB_ORIGIN:?defina WEB_ORIGIN com origens explicitas, sem curinga}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@novaotica.com}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?defina uma SEED_ADMIN_PASSWORD própria}
-      # Credenciais da CDS/Sellbie. Só existem no .env da VPS — o repositório é
-      # público. Ficam vazias enquanto SELLBIE_MODE=mock; quando o modo vira
-      # `live`, a própria API valida a presença delas e se recusa a subir sem.
+      # Credenciais da CDS/Sellbie. Só existem no .env da VPS, com permissão
+      # 600 — nunca no Git, seja ele público ou privado (repositório privado
+      # ganha colaborador, vira público de novo e é clonado para notebook).
+      # Ficam vazias enquanto SELLBIE_MODE=mock; quando o modo vira `live`, a
+      # própria API valida a presença delas e se recusa a subir sem.
       SELLBIE_BASE_URL: ${SELLBIE_BASE_URL:-}
       SELLBIE_API_KEY: ${SELLBIE_API_KEY:-}
       SELLBIE_API_TOKEN: ${SELLBIE_API_TOKEN:-}

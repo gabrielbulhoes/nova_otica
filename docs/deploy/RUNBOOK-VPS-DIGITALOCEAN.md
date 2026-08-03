@@ -128,11 +128,13 @@ dig +short app.novaotica.gb.app.br    # tem que devolver SEU_IP
 
 ---
 
-## 5. Usuário de deploy (a parte que protege o repositório público)
+## 5. Usuário de deploy
 
-O GitHub Actions precisa de uma chave para publicar. O repositório é **público**
-— então a chave não pode dar shell. A trava é o *forced command*: o servidor
-ignora o comando que a chave pedir e roda sempre o mesmo script.
+O GitHub Actions precisa de uma chave para publicar, e essa chave não pode dar
+shell. A trava é o *forced command*: o servidor ignora o comando que a chave
+pedir e roda sempre o mesmo script. Vale com o repositório público ou privado —
+a chave está nos segredos do GitHub, e o que ela protege é a **máquina**, não o
+código.
 
 ```bash
 # Usuário sem senha e sem sudo, dono só do diretório do projeto
@@ -145,6 +147,29 @@ sudo chown deploy:deploy /srv/nova-otica
 sudo -u deploy git clone https://github.com/gabrielbulhoes/nova_otica.git /srv/nova-otica
 cd /srv/nova-otica && sudo -u deploy git checkout main
 ```
+
+> **Se o repositório for privado**, o clone anônimo acima falha. A VPS precisa
+> de uma *deploy key* de leitura — chave própria, diferente da que o Actions
+> usa, e por isso um vazamento de uma não implica a outra:
+>
+> ```bash
+> sudo -u deploy ssh-keygen -t ed25519 -f /home/deploy/.ssh/id_repo -N "" -C "vps-novaotica-leitura"
+> sudo -u deploy cat /home/deploy/.ssh/id_repo.pub
+> ```
+>
+> Cole em **Settings → Deploy keys → Add deploy key** do repositório, com
+> *Allow write access* **desmarcado** — a VPS lê, nunca escreve. Depois:
+>
+> ```bash
+> sudo -u deploy tee -a /home/deploy/.ssh/config >/dev/null <<'EOF'
+> Host github.com
+>   IdentityFile /home/deploy/.ssh/id_repo
+>   IdentitiesOnly yes
+> EOF
+> sudo -u deploy chmod 600 /home/deploy/.ssh/config
+> sudo -u deploy ssh-keyscan -t ed25519 github.com >> /home/deploy/.ssh/known_hosts
+> sudo -u deploy git clone git@github.com:gabrielbulhoes/nova_otica.git /srv/nova-otica
+> ```
 
 Gere o par de chaves **na sua máquina** (a privada nunca toca a VPS):
 
@@ -254,8 +279,11 @@ Nos segredos **do ambiente `producao`**:
 servidor que atendesse por aquele IP, e o deploy poderia ir para a máquina
 errada. O workflow falha de propósito se o segredo estiver ausente.
 
-A partir daí, **merge na `main` publica**. O workflow não roda em `pull_request`
-— num repositório público isso entregaria os segredos a qualquer PR de terceiro.
+A partir daí, **merge na `main` publica**. O workflow não roda em
+`pull_request`: um workflow com segredos executando código que veio de um PR é
+entregar a chave da VPS a quem abriu o PR — e isso vale também com o
+repositório privado, porque a revisão do código aconteceria depois de ele já
+ter rodado.
 
 Verificar a esteira sem esperar um merge: aba **Actions → Deploy (produção) →
 Run workflow**.
@@ -326,7 +354,45 @@ Já está pronto no repositório:
 
 ---
 
-## 11. O que muda para o cliente
+## 11. Repositório privado — o que muda
+
+Tornar o repositório privado é a escolha certa para trabalho comercial de
+cliente, e há um motivo concreto e verificado para fazê-lo agora (§ abaixo).
+Mas ele **não substitui** nenhuma das travas deste runbook. O que muda:
+
+| | Público | Privado |
+|---|---|---|
+| Clone na VPS | anônimo, direto | exige *deploy key* de leitura (§5) |
+| Minutos de Actions | ilimitados | consomem a cota do plano (2.000/mês no Free) |
+| GitHub Pages | disponível | exige plano Pro/Team |
+| Segredos em PR | risco de PR de terceiro | risco menor, não nulo (colaborador) |
+| Credenciais em commit | exposição imediata | exposição a quem tem acesso |
+
+O `deploy-pages.yml` publica uma demo em GitHub Pages e **para de funcionar no
+plano Free** se o repositório virar privado. Como a entrega ao cliente é o zip
+no HostGator, o caminho mais limpo é remover esse workflow em vez de manter uma
+esteira quebrada no verde do CI.
+
+### O que privar resolve — e o que não resolve
+
+**Resolve:** um commit abandonado continua baixável por SHA depois de um
+force-push. Este repositório tem um: `b7a718e` carrega nove PNGs de auditoria
+com dados reais da rede (nomes de loja, saldo, R$ 657.652,91). Eles foram
+retirados por *amend* minutos depois, mas o objeto ainda está no servidor e
+qualquer pessoa com o SHA o busca com `git fetch origin <sha>` — verificado.
+Tornar o repositório privado tira esse objeto do alcance público.
+
+**Não resolve:** o que já foi copiado enquanto o repositório era público, e a
+rotação das credenciais do CDS (§7) — elas circularam no desenvolvimento e
+precisam morrer independentemente da visibilidade do repositório.
+
+**Não relaxa:** a disciplina de `.gitignore`. Repositório privado ganha
+colaborador, é clonado para notebook e pode voltar a ser público com um clique.
+Dado comercial e credencial continuam fora do Git.
+
+---
+
+## 12. O que muda para o cliente
 
 A demo do HostGator **continua onde está** e não depende disto — ela é estática
 e serve para apresentação. O que a VPS acrescenta:
