@@ -4,10 +4,13 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nova_otica}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nova_otica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina uma POSTGRES_PASSWORD forte}
       POSTGRES_DB: ${POSTGRES_DB:-nova_otica}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # SEM `ports:` de propósito. O banco fala só com a API, pela rede interna do
+    # compose. Publicar 5432 no host é o erro mais comum e mais caro deste tipo
+    # de instalação: o Postgres passa a ser varrido da internet em minutos.
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-nova_otica}']
       interval: 5s
@@ -16,22 +19,103 @@ services:
 
   app:
     build: .
+    image: nova-otica-app:${TAG:-latest}
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
       NODE_ENV: ${NODE_ENV:-production}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-nova_otica}:${POSTGRES_PASSWORD:-nova_otica}@db:5432/${POSTGRES_DB:-nova_otica}?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER:-nova_otica}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-nova_otica}?schema=public
       # Sem defaults inseguros: o compose falha se estes não forem definidos.
       JWT_SECRET: ${JWT_SECRET:?defina um JWT_SECRET forte (>= 24 caracteres)}
       SELLBIE_MODE: ${SELLBIE_MODE:-mock}
       SYNC_ON_BOOT: ${SYNC_ON_BOOT:-true}
-      WEB_ORIGIN: ${WEB_ORIGIN:?defina WEB_ORIGIN com origens explícitas (sem "*")}
+      WEB_ORIGIN: ${WEB_ORIGIN:?defina WEB_ORIGIN com origens explicitas, sem curinga}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@novaotica.com}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?defina uma SEED_ADMIN_PASSWORD própria}
+      # Credenciais da CDS/Sellbie. Só existem no .env da VPS — o repositório é
+      # público. Ficam vazias enquanto SELLBIE_MODE=mock; quando o modo vira
+      # `live`, a própria API valida a presença delas e se recusa a subir sem.
+      SELLBIE_BASE_URL: ${SELLBIE_BASE_URL:-}
+      SELLBIE_API_KEY: ${SELLBIE_API_KEY:-}
+      SELLBIE_API_TOKEN: ${SELLBIE_API_TOKEN:-}
+      SELLBIE_CLIENT_ID: ${SELLBIE_CLIENT_ID:-}
+      SELLBIE_WINDOW_START: "${SELLBIE_WINDOW_START:-06:00}"
+      SELLBIE_WINDOW_END: "${SELLBIE_WINDOW_END:-07:00}"
+      SYNC_CRON: "${SYNC_CRON:-0 6 * * *}"
+      # O lote das 6h é 6h EM NATAL. Sem fuso explícito o container roda em UTC
+      # e o sync cai às 03h local — antes de a rede abrir e depois do
+      # fechamento do dia anterior, que é o pior dos dois mundos.
+      TZ: ${TZ:-America/Recife}
+    # Também sem `ports:`. Quem publica é o Caddy; a API só é alcançável por
+    # dentro da rede do compose. É isso que impede alguém de chegar em
+    # http://IP:3333 e pular o TLS.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:3333/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
     ports:
-      - '${APP_PORT:-3333}:3333'
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMINIO: "${DOMINIO:?defina o dominio, ex. app.novaotica.gb.app.br}"
+      ACME_EMAIL: ${ACME_EMAIL:?defina o e-mail do certificado}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      # `caddy_data` guarda os certificados. É volume nomeado de propósito:
+      # perdê-los a cada deploy faria bater no limite de emissão da Let's
+      # Encrypt (5 por domínio por semana) e o site ficaria sem HTTPS.
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+
+  # Backup diário do banco. Serviço próprio em vez de cron do host: assim ele
+  # sobe junto no `docker compose up` e não depende de alguém lembrar de
+  # instalar a linha de cron na máquina.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nova_otica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-nova_otica}
+      POSTGRES_HOST: db
+      BACKUP_DIR: /backups
+      RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      TZ: ${TZ:-America/Recife}
+    volumes:
+      - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+      - backups:/backups
+    # Um dump por dia, às 03:00 no fuso do container. Dorme até a próxima 03:00
+    # em vez de instalar um cron: um processo a menos, o mesmo resultado.
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        while true; do
+          agora=$$(date +%s)
+          alvo=$$(date -d "today 03:00" +%s 2>/dev/null || echo $$agora)
+          [ "$$alvo" -le "$$agora" ] && alvo=$$((alvo + 86400))
+          sleep $$((alvo - agora))
+          sh /usr/local/bin/backup.sh || echo "backup falhou em $$(date -Iseconds)"
+        done
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
+  caddy_logs:
+  backups:

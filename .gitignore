@@ -13,6 +13,8 @@ build/
 .env.local
 .env.*.local
 !.env.example
+# O EXEMPLO de produção entra (só placeholders); o `.env` preenchido, nunca.
+!.env.production.example
 
 # Prisma
 apps/api/prisma/*.db

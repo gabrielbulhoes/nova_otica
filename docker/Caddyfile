@@ -1,0 +1,47 @@
+# Proxy reverso e TLS da Nova Ótica.
+#
+# O Caddy resolve o certificado sozinho (Let's Encrypt, ACME HTTP-01) e o
+# renova sem intervenção. É por isso que a API NÃO publica porta no host: quem
+# fala com a internet é este container, nas portas 80 e 443, e o resto da rede
+# do compose fica interna.
+#
+# `DOMINIO` vem do .env de produção. Em teste local, use:
+#   DOMINIO=localhost  (o Caddy emite um certificado próprio e confiável no host)
+
+{
+	# E-mail do ACME: é para onde a Let's Encrypt avisa de expiração ou problema.
+	email {$ACME_EMAIL}
+	# Sem servidor de administração exposto — nada além de 80/443 sai daqui.
+	admin off
+}
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	# Cabeçalhos de segurança. O console é um painel interno de rede de lojas:
+	# não há razão para ser enquadrado por terceiro nem para vazar referrer.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# O servidor não precisa se anunciar.
+		-Server
+	}
+
+	# A API serve também o frontend compilado (SERVE_WEB=true no Dockerfile),
+	# então há um destino só — sem dividir /api e / entre dois upstreams.
+	reverse_proxy app:3333 {
+		health_uri /health
+		health_interval 30s
+		health_timeout 5s
+	}
+
+	log {
+		output file /var/log/caddy/acesso.log {
+			roll_size 20MiB
+			roll_keep 7
+		}
+		format json
+	}
+}
