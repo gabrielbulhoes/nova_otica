@@ -1,5 +1,12 @@
 # Handoff do projeto — Nova Ótica (para continuar em outro Claude)
 
+> ⚠ **Este documento descreve a rodada do PR #27.** Há trabalho mais recente,
+> na branch `claude/optical-inventory-system-qafpfr` (**PR #35**): Central de
+> Operações, tema, e a coerência entre o filtro de período e a amostra estática.
+> Comece por [`HANDOFF-CENTRAL-TEMA-FILTROS.md`](./HANDOFF-CENTRAL-TEMA-FILTROS.md)
+> e volte aqui para o contexto do produto (o que é, monorepo, `@planning`,
+> integração CDS), que continua valendo.
+
 > Documento para quem vai **continuar o desenvolvimento**. Resume o que o
 > sistema é, o que foi feito nesta rodada, onde está o código, como rodar/
 > testar/publicar, o que depende do cliente e o backlog. Leia isto primeiro;
