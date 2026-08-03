@@ -13,7 +13,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * quando não há amostra estática (backend ao vivo).
  */
 
-const AMOSTRA_7_DIAS = { dias: 7, de: '2026-07-07', ate: '2026-07-13' };
+const AMOSTRA_7_DIAS = { dias: 7, de: '2026-07-07', ate: '2026-07-13', lojaPorDataExata: true };
+/** Amostra maior: o dia da semana deixa de identificar a data. */
+const AMOSTRA_30_DIAS = { dias: 30, de: '2026-06-14', ate: '2026-07-13', lojaPorDataExata: false };
 
 /** Troca a cobertura devolvida pelo client antes de cada import do módulo. */
 async function comCobertura(cobertura: typeof AMOSTRA_7_DIAS | null) {
@@ -102,6 +104,47 @@ describe('período com amostra de 7 dias', () => {
     // …e a que não move, dita com todas as letras.
     expect(texto).toContain('marca');
     expect(texto).toContain('7 dias');
+  });
+});
+
+describe('amostra maior reabre os recortes SOZINHA', () => {
+  /*
+     A pergunta que este bloco responde: quando a extração passar a cobrir 30,
+     60 ou 90 dias, alguém precisa mexer em código para os filtros voltarem?
+     Não. A cobertura é MEDIDA do próprio arquivo, então o seletor se reconstrói
+     a partir dela — e a única coisa que precisa acontecer é o snapshot chegar
+     mais completo.
+  */
+  it('com 30 dias medidos, o recorte de 30 dias volta a ser selecionável', async () => {
+    const { opcoesDePeriodo, periodoInicial } = await comCobertura(AMOSTRA_30_DIAS);
+    const opcoes = opcoesDePeriodo(RELATORIOS);
+
+    const validas = opcoes.filter((o) => !o.disabled).map((o) => o.value);
+    expect(validas).toContain('30');
+    expect(validas).toContain('7');
+    // Os degraus intermediários também aparecem, para o filtro ter o que mover.
+    expect(validas).toEqual(['1', '3', '7', '14', '30']);
+    // 90 e 180 seguem bloqueados: ainda estão fora do que foi medido.
+    expect(opcoes.filter((o) => o.disabled).map((o) => o.value)).toEqual(['90', '180']);
+    // E a tela abre no maior recorte que a base responde.
+    expect(periodoInicial(RELATORIOS, 30)).toBe('30');
+  });
+
+  it('a tela de compras reabre 90 dias assim que a amostra alcançar 90', async () => {
+    const AMOSTRA_90 = { dias: 90, de: '2026-04-15', ate: '2026-07-13', lojaPorDataExata: false };
+    const { opcoesDePeriodo, periodoInicial } = await comCobertura(AMOSTRA_90);
+    const opcoes = opcoesDePeriodo(RATEIO);
+
+    expect(opcoes.find((o) => o.value === '90')?.disabled).toBe(false);
+    expect(opcoes.find((o) => o.value === '180')?.disabled).toBe(true);
+    expect(periodoInicial(RATEIO, 180)).toBe('90');
+  });
+
+  it('acima de 7 dias a legenda para de prometer medição por loja', async () => {
+    const { legendaDaAmostra } = await comCobertura(AMOSTRA_30_DIAS);
+    const texto = legendaDaAmostra(7)!;
+    // O dia da semana já não identifica a data: por loja passa a ser proporção.
+    expect(texto).toContain('em proporção');
   });
 });
 

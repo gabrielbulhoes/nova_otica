@@ -665,6 +665,12 @@ export interface CoberturaDaAmostra {
   de: string;
   /** Último dia com venda (ISO). */
   ate: string;
+  /**
+   * O desempenho por loja é recortável DIA A DIA (amostra de até 7 dias, em que
+   * o dia da semana identifica a data) ou só proporcionalmente? A interface usa
+   * isto para não prometer medição onde há projeção.
+   */
+  lojaPorDataExata: boolean;
 }
 
 /**
@@ -683,7 +689,12 @@ export function coberturaDoDataset(): CoberturaDaAmostra | null {
   if (!real) return null;
   const dias = (real.dailySales ?? []).map((d) => d.date).filter(Boolean).sort();
   if (dias.length === 0) return null;
-  return { dias: realWindowDays, de: dias[0], ate: dias[dias.length - 1] };
+  return {
+    dias: realWindowDays,
+    de: dias[0],
+    ate: dias[dias.length - 1],
+    lojaPorDataExata: lojaPorDataEhExata(),
+  };
 }
 
 /**
@@ -751,20 +762,54 @@ function fatiaDaJanela(days: number): number {
   return total > 0 ? vendasNaJanela(days).total / total : 1;
 }
 
+/** Quantas vezes cada dia da semana aparece numa lista de datas. */
+function ocorrenciasPorDiaDaSemana(datas: string[]): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const d of datas) {
+    const wd = diaDaSemana(d);
+    m.set(wd, (m.get(wd) ?? 0) + 1);
+  }
+  return m;
+}
+
 /**
- * Faturamento por loja no recorte, reconstruído de `weekdayStore`.
+ * A reconstrução por loja é EXATA?
  *
- * O nº de VENDAS por loja não tem quebra diária na sonda; ele é rateado pela
- * fatia de faturamento que a loja fez no recorte, e só alimenta rótulos
- * secundários — nenhuma decisão sai dele.
+ * Só quando cada dia da semana aparece no máximo uma vez na amostra — ou seja,
+ * até 7 dias. Aí "quinta-feira" identifica UMA data e o balde de `weekdayStore`
+ * é o faturamento daquele dia.
+ *
+ * Numa amostra de 30 dias, "quinta" acumula ~4 datas no mesmo balde e não há
+ * como separá-las: a reconstrução vira proporcional (ver abaixo). Sem esta
+ * distinção o recorte de 7 dias numa amostra de 30 devolvia o faturamento dos
+ * 30 — medido, R$ 4,53 mi no lugar de R$ 1,08 mi, com o KPI ao lado mostrando o
+ * número certo. Duas respostas para a mesma pergunta, na mesma tela.
+ */
+const lojaPorDataEhExata = () =>
+  real ? [...ocorrenciasPorDiaDaSemana(datasDaAmostra).values()].every((n) => n <= 1) : false;
+
+/**
+ * Faturamento por loja no recorte, a partir de `weekdayStore`.
+ *
+ * Cada balde entra na proporção das suas ocorrências DENTRO da janela sobre as
+ * ocorrências na amostra inteira. Numa amostra de até 7 dias essa razão é 1 ou
+ * 0, e o resultado é a medição exata; em amostras maiores ela reparte o balde
+ * entre as datas que ele agrega, que é a melhor resposta possível sem uma
+ * quebra por dia que a sonda não traz.
+ *
+ * O nº de VENDAS por loja não tem quebra diária; é rateado pela fatia de
+ * faturamento da loja no recorte e só alimenta rótulos secundários.
  */
 function salesByStoreNaJanela(days: number): typeof salesByStore {
   if (!real) return salesByStore;
-  const semanaDoRecorte = new Set(diasNaJanela(days).map(diaDaSemana));
+  const naJanela = ocorrenciasPorDiaDaSemana(diasNaJanela(days));
+  const naAmostra = ocorrenciasPorDiaDaSemana(datasDaAmostra);
   const porLoja = new Map<string, number>();
   for (const w of real.weekdayStore) {
-    if (!semanaDoRecorte.has(w.weekday)) continue;
-    porLoja.set(w.storeExt, (porLoja.get(w.storeExt) ?? 0) + w.total);
+    const dentro = naJanela.get(w.weekday) ?? 0;
+    const total = naAmostra.get(w.weekday) ?? 0;
+    if (dentro === 0 || total === 0) continue;
+    porLoja.set(w.storeExt, (porLoja.get(w.storeExt) ?? 0) + w.total * (dentro / total));
   }
   return real.salesByStore.map((s) => {
     const total = round2(porLoja.get(s.externalId) ?? 0);

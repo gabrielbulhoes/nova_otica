@@ -393,6 +393,36 @@ describe('demo: mudar o filtro muda o dado', () => {
     expect(um.points).not.toEqual(tres.points.slice(0, 1));
   });
 
+  /*
+     GUARDA DE COERÊNCIA — foi este teste que pegou o defeito.
+
+     O faturamento por loja é reconstruído do balde `loja × dia da semana`. Numa
+     amostra de até 7 dias o dia da semana identifica UMA data e a conta é
+     exata; numa de 30, "quinta" agrega ~4 datas. A primeira versão somava o
+     balde inteiro sempre que o dia da semana caísse na janela — e um recorte de
+     7 dias sobre 30 devolvia os 30 (R$ 4,53 mi em vez de R$ 1,08 mi), com o KPI
+     ao lado mostrando o número certo: duas respostas para a mesma pergunta, na
+     mesma tela. Agora cada balde entra na proporção das ocorrências dentro da
+     janela, o que é exato quando a amostra tem até 7 dias.
+  */
+  it('KPI, série e soma por loja contam a MESMA história em toda janela', () => {
+    for (const days of ['1', '3', '7', '30']) {
+      const kpi = get('/bi/kpis', { days, group: 'todos' });
+      const porLoja = get('/bi/sales-by-dimension', { days, by: 'store', group: 'todos' });
+      const serie = get('/bi/sales-timeseries', { days, group: 'todos' });
+
+      const somaSerie = serie.points.reduce((a: number, p: any) => a + p.total, 0);
+      const somaLojas = porLoja.rows.reduce((a: number, r: any) => a + r.total, 0);
+
+      // O KPI é a soma da série — as duas leem a mesma janela.
+      expect(kpi.revenue, `KPI vs série em ${days} dias`).toBeCloseTo(somaSerie, 1);
+      // E a soma por loja não pode divergir da rede em mais de 5%.
+      const desvio = Math.abs(somaLojas - kpi.revenue) / Math.max(1, kpi.revenue);
+      expect(desvio, `por loja vs rede em ${days} dias (desvio ${(desvio * 100).toFixed(1)}%)`)
+        .toBeLessThan(0.05);
+    }
+  });
+
   it('a cobertura declara a janela que realmente usou, nunca maior que a pedida', () => {
     for (const days of ['1', '7', '30', '90']) {
       const r = get('/dashboard/coverage', { days });

@@ -130,10 +130,14 @@ export function legendaDaAmostra(days?: number | string): string | null {
 
   const inicio = somaDias(c.ate, -(recorte - 1));
   const rotulo = recorte === 1 ? 'Recorte de 1 dia' : `Recorte de ${recorte} dias`;
+  // Em amostra de até 7 dias o dia da semana identifica a data e o número por
+  // loja é medido; acima disso ele é repartido, e a frase muda para dizer isso.
+  const porLoja = c.lojaPorDataExata
+    ? 'Faturamento, série diária e desempenho por loja acompanham o recorte'
+    : 'Faturamento e série diária acompanham o recorte, e o desempenho por loja acompanha em proporção';
   return (
     `${rotulo} (${diaMes(inicio)} a ${diaMes(c.ate)}/${ano}), dentro da amostra de ${c.dias} dias. ` +
-    'Faturamento, série diária e desempenho por loja acompanham o recorte; ' +
-    'as quebras por marca, produto, vendedor e forma de pagamento não têm data na amostra ' +
-    `e seguem mostrando os ${c.dias} dias.`
+    `${porLoja}; as quebras por marca, produto, vendedor e forma de pagamento não têm data ` +
+    `na amostra e seguem mostrando os ${c.dias} dias.`
   );
 }
