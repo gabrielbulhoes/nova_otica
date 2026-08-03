@@ -7,6 +7,7 @@ import { ScopePicker, SCOPE_LABEL, useScope } from '../lib/scope';
 import { Mark } from '../brand/Brand';
 import { Icon, type IconName } from '../brand/Icon';
 import { moduloDaRota, paginaDaRota, ROTA_CENTRAL } from '../lib/modulos';
+import { alternarTema, useTema } from '../lib/tema';
 
 interface DockItem {
   to: string;
@@ -48,25 +49,18 @@ const dockItems: DockItem[] = [
    As rotas não mudaram: quem tinha um link salvo continua chegando.
 */
 
-/* ─── Tema: CLARO, FIXO, EM TODAS AS PÁGINAS ──────────────────────────────────
-   O produto passa a ter UMA aparência — o branco-papel do NANOFLOW, que é o
-   padrão do manual: superfície de papel, filete de 1px, canto reto e o ouro
-   como único acento. Aqui moravam o alternador (`useTemaDoConsole`) e a chave
-   de preferência `novaotica.tema`; os dois saíram, junto com o botão da barra
-   de título. Nenhuma casca escreve mais `data-tema`, e a ausência do atributo É
-   o tema claro.
+/* ─── Tema ────────────────────────────────────────────────────────────────────
+   O alternador claro/escuro vive na barra de título e o estado mora em
+   `lib/tema.ts`, fora deste arquivo, porque a vitrine (/loja) lê o mesmo valor.
+   O claro é o ponto de partida de TODA abertura: o tema não é gravado no
+   navegador, então não existe estado antigo capaz de fazer o console abrir
+   preto. O porquê completo está no cabeçalho de `lib/tema.ts`.
 
-   Por que fixar em vez de manter a opção: a escolha ficava gravada no
-   navegador, então bastava um clique de alguém, uma vez, para a demonstração
-   seguinte abrir preta — uma marca diferente da que o cliente aprovou, na
-   primeira tela que ele vê. Nenhuma linha consulta `prefers-color-scheme`: o
-   tema do sistema operacional do gerente nunca decidiu isto, e continua sem
-   decidir.
-
-   O escuro NÃO foi apagado, só desligado. Os blocos `[data-tema='escuro']` de
-   styles.css seguem intactos e `bi/transforms.ts` continua sabendo montar as
-   duas paletas; como ninguém escreve o atributo, esse caminho fica dormente.
-   Reativar é voltar a escrever `data-tema` — não reescrever o tema.
+   O atributo é escrito como PROP de um elemento renderizado pelo React, e não
+   com `setAttribute` no <html>: assim o DOM não tem como divergir do estado
+   (StrictMode montando duas vezes, outra casca sobrescrevendo na troca de
+   rota, dois efeitos disputando o mesmo nó). O <EChart> observa mutações de
+   `data-tema` na subárvore do documento, então recebe a troca do mesmo jeito.
    ─────────────────────────────────────────────────────────────────────────── */
 
 // ─── Dock que recolhe na rolagem ────────────────────────────────────────────
@@ -162,6 +156,7 @@ export function AdminShell() {
   const { user, isAdmin, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const tema = useTema();
   useLiveInvalidation();
 
   // Quem rola é .main (a janela tem altura fixa e o conteúdo rola dentro dela),
@@ -215,9 +210,10 @@ export function AdminShell() {
   }, [active]);
 
   return (
-    // Sem `data-tema`: a ausência do atributo É o tema claro, o padrão do
-    // produto e agora o único (ver o bloco "Tema", no topo do arquivo).
-    <div className="macos-desktop">
+    // O escuro cobre a janela inteira do console porque a escolha é do usuário e
+    // vale para tudo o que ele está operando. Em claro o atributo NÃO é escrito:
+    // ausência de `data-tema` é o estado padrão, e é o que o seletor CSS espera.
+    <div className="macos-desktop" data-tema={tema === 'escuro' ? 'escuro' : undefined}>
       {/* Atalho para o conteúdo (WCAG 2.4.1). Medido: não havia UM skip link em
           17 rotas, e a casca cobra 20 paradas fixas de Tab (15 links da barra
           lateral + Sair + os 3 chips de recorte + o tema) antes que o teclado
@@ -340,11 +336,35 @@ export function AdminShell() {
                 <span className="dot green" aria-hidden="true" />
                 <span className="live-status-text">Dados ao vivo</span>
               </span>
-              {/* Aqui ficava o alternador de tema. Saiu junto com a decisão de
-                  fixar o claro em todo o produto: um controle que não tem mais
-                  dois estados é ruído na barra — e, na prática, um jeito de a
-                  demonstração abrir com uma aparência diferente da aprovada.
-                  O CSS do escuro segue no lugar, apenas dormente. */}
+              {/* O rótulo nomeia a AÇÃO ("Tema escuro" = passar para o escuro), e
+                  é texto visível: serve de nome acessível e de indicação de
+                  estado sem depender de cor nenhuma.
+                  ONDA 4 · o botão não expunha ESTADO: sem aria-pressed e sem
+                  role=switch, o rótulo sozinho é ambíguo — "Tema escuro" pode
+                  ser lido como o estado atual ou como o destino, e ao acionar o
+                  usuário recebia silêncio. Com aria-pressed o leitor de tela
+                  anuncia "não pressionado → pressionado" na própria ativação,
+                  sem precisar de uma região aria-live que ninguém mais usa.
+                  O `aria-label` é explícito porque abaixo de 960px o CSS esconde
+                  a palavra e sobra só o ícone. */}
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={alternarTema}
+                aria-pressed={tema === 'escuro'}
+                aria-label={tema === 'escuro' ? 'Tema escuro ativo' : 'Tema escuro'}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <Icon name="ideia" size={15} />
+                <span className="rotulo-tema">
+                  {tema === 'escuro' ? 'Tema claro' : 'Tema escuro'}
+                </span>
+              </button>
             </div>
           </div>
           {/* O DOCK VEM ANTES DO <main> NO DOM, e é de propósito.
