@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
+  LIMIAR_ROSCA,
   barOption,
+  formatarValor,
+  formatarValorCurto,
   gaugeOption,
   heatmapOption,
   pieOption,
@@ -10,6 +13,8 @@ import {
 
 // Acesso solto às séries (EChartsOption é um union amplo).
 const series = (opt: unknown) => (opt as { series: any[] }).series;
+const eixoX = (opt: unknown) => (opt as { xAxis: any }).xAxis;
+const eixoY = (opt: unknown) => (opt as { yAxis: any }).yAxis;
 
 describe('transforms do BI', () => {
   it('gaugeOption monta um medidor com valor arredondado e max', () => {
@@ -17,7 +22,8 @@ describe('transforms do BI', () => {
     expect(s.type).toBe('gauge');
     expect(s.max).toBe(100);
     expect(s.data[0].value).toBe(12.67);
-    expect(s.data[0].name).toBe('Ruptura');
+    // Rótulo em mono é caixa alta por regra do manual — o nome chega maiúsculo.
+    expect(s.data[0].name).toBe('RUPTURA');
   });
 
   it('timeSeriesOption gera linha com eixo e dados alinhados', () => {
@@ -28,13 +34,26 @@ describe('transforms do BI', () => {
     const s = series(opt)[0];
     expect(s.type).toBe('line');
     expect(s.data).toEqual([10, 20]);
-    expect((opt as any).xAxis.data).toEqual(['06-01', '06-02']);
+    // O eixo guarda a data ISO inteira; quem vira dd/mm (ordem brasileira) é o
+    // formatador, para que o tooltip ainda possa mostrar o ano.
+    expect(eixoX(opt).data).toEqual(['2024-06-01', '2024-06-02']);
+    expect(eixoX(opt).axisLabel.formatter('2024-06-01')).toBe('01/06');
   });
 
   it('barOption gera colunas', () => {
-    const s = series(barOption([{ label: 'Loja A', total: 100 }]))[0];
+    const opt = barOption([{ label: 'Loja A', total: 100 }]);
+    const s = series(opt)[0];
     expect(s.type).toBe('bar');
     expect(s.data).toEqual([100]);
+  });
+
+  it('barOption vira barra horizontal ordenada quando há muitas categorias', () => {
+    const rows = Array.from({ length: 12 }, (_, i) => ({ label: `Loja ${i}`, total: i + 1 }));
+    const opt = barOption(rows);
+    // Horizontal = categoria no eixo Y; e a maior fica no topo da lista.
+    expect(eixoY(opt).type).toBe('category');
+    expect(eixoY(opt).data[eixoY(opt).data.length - 1]).toBe('Loja 11');
+    expect(series(opt)[0].type).toBe('bar');
   });
 
   it('pieOption mapeia rótulo/valor', () => {
@@ -43,11 +62,45 @@ describe('transforms do BI', () => {
     expect(s.data[0]).toEqual({ name: 'PIX', value: 50 });
   });
 
-  it('sankeyOption repassa nós e links', () => {
-    const flow = { nodes: [{ name: 'Armação' }, { name: 'Loja A' }], links: [{ source: 'Armação', target: 'Loja A', value: 5 }] };
+  it('pieOption troca a rosca por barra ordenada acima do limiar', () => {
+    const rows = Array.from({ length: 22 }, (_, i) => ({ label: `Meio ${i}`, total: 22 - i }));
+    const opt = pieOption(rows);
+    const s = series(opt)[0];
+    // 22 fatias não se comparam por ângulo: a função decide sozinha pela barra.
+    expect(s.type).toBe('bar');
+    // Top 8 + "Outros" agregando a cauda, com a contagem no próprio rótulo.
+    expect(s.data).toHaveLength(9);
+    expect(eixoY(opt).data[0]).toBe('Outros (14 categorias)');
+    // Sem legenda: ela repetiria o rótulo que já está no eixo.
+    expect((opt as { legend?: unknown }).legend).toBeUndefined();
+  });
+
+  it('pieOption mantém a rosca dentro do limiar e descarta valor zerado', () => {
+    const rows = [
+      { label: 'PIX', total: 60 },
+      { label: 'Crédito', total: 40 },
+      { label: 'Vale', total: 0 },
+    ];
+    const s = series(pieOption(rows))[0];
+    expect(s.type).toBe('pie');
+    expect(s.data).toHaveLength(2);
+    expect(LIMIAR_ROSCA).toBe(3);
+  });
+
+  it('sankeyOption repassa nós e links, colorindo apenas a origem', () => {
+    const flow = {
+      nodes: [{ name: 'Armação' }, { name: 'Loja A' }],
+      links: [{ source: 'Armação', target: 'Loja A', value: 5 }],
+    };
     const s = series(sankeyOption(flow))[0];
     expect(s.type).toBe('sankey');
-    expect(s.data).toEqual(flow.nodes);
+    // Os nós agora carregam cor e posição de rótulo (a origem recebe slot da
+    // escala categórica; o destino fica no tom neutro e rotula à esquerda,
+    // senão o nome da última coluna é cortado pela borda do card).
+    expect(s.data.map((n: { name: string }) => n.name)).toEqual(['Armação', 'Loja A']);
+    expect(s.data[0].label.position).toBe('right');
+    expect(s.data[1].label.position).toBe('left');
+    expect(s.data[0].itemStyle.color).not.toBe(s.data[1].itemStyle.color);
     expect(s.links).toEqual(flow.links);
   });
 
@@ -62,7 +115,105 @@ describe('transforms do BI', () => {
     };
     const opt = heatmapOption(data);
     expect((opt as any).visualMap.max).toBe(70);
-    expect((opt as any).yAxis.data).toEqual(['Loja A']);
+    expect(eixoY(opt).data).toEqual(['Loja A']);
     expect(series(opt)[0].type).toBe('heatmap');
+  });
+
+  it('formata número no padrão brasileiro', () => {
+    expect(formatarValor(1234.5, 'moeda')).toContain('1.234,50');
+    expect(formatarValor(12.75, 'percentual')).toBe('12,8%');
+    expect(formatarValor(1234, 'unidades')).toBe('1.234 un.');
+    // O separador aqui é ESPAÇO INSEPARÁVEL (U+00A0), não espaço comum: é o
+    // que o Intl compacto do pt-BR produz, e é o certo — impede que "1,5" e
+    // "mil" caiam em linhas diferentes num rótulo de gráfico. Escrito com
+    // escape para ninguém "consertar" de volta olhando duas strings idênticas.
+    expect(formatarValorCurto(1500, 'unidades')).toBe('1,5\u00A0mil');
+  });
+
+  /*
+     ONDA 6 · A DOSAGEM DA MONOESPAÇADA DENTRO DO CANVAS.
+
+     Estes testes existem porque a regra é fácil de reverter sem querer: basta
+     alguém "padronizar" um eixo de volta para mono caixa alta, achando que
+     assim fica mais parecido com o manual. O que o manual pede é a mono no
+     PAPEL dela — valor, escala, carimbo de unidade, identificador —, e o que a
+     tornava ruído era emprestá-la a nome próprio.
+
+     Medido antes da correção: 19 de 34 slots tipográficos dos oito gráficos em
+     mono (56%), com "ÓTICA A GRACIOSA CENT…", "CASA AMARELA" e "UN. VENDIDAS /
+     ESTOQUE" entre os rótulos afetados.
+  */
+  const rotuloDoEixo = (opt: any, eixo: 'xAxis' | 'yAxis') => {
+    const a = opt[eixo];
+    return { fonte: a.axisLabel.fontFamily as string, escreve: (v: string) => String(a.axisLabel.formatter(v)) };
+  };
+
+  it('nome de loja no eixo sai em Inter e em caixa normal', () => {
+    // Duas lojas reais da rede: uma longa e uma CURTA. A curta é o caso que a
+    // contagem de caracteres sozinha erraria ("Casa Amarela" tem 12), e é por
+    // isso que a dimensão declara `papel: 'nome'` em vez de deixar contar.
+    const opt = barOption(
+      [
+        { label: 'Ótica A Graciosa Boa Viagem', total: 98700 },
+        { label: 'Casa Amarela', total: 41100 },
+      ],
+      undefined,
+      { tema: 'claro', unidade: 'moeda' },
+    );
+    const eixo = rotuloDoEixo(opt as any, 'yAxis');
+    expect(eixo.fonte).toContain('Inter');
+    expect(eixo.escreve('Casa Amarela')).toBe('Casa Amarela');
+    expect(eixo.escreve('Ótica A Graciosa Boa Viagem')).not.toMatch(/GRACIOSA/);
+  });
+
+  it('nome de loja no heatmap também, e o dia da semana continua carimbado', () => {
+    const opt: any = heatmapOption(
+      {
+        xLabels: ['Seg', 'Ter'],
+        yLabels: ['Casa Amarela', 'Centro'],
+        cells: [[0, 0, 10]] as [number, number, number][],
+      },
+      { tema: 'claro' },
+    );
+    // Eixo Y: nome próprio → Inter, caixa preservada.
+    expect(rotuloDoEixo(opt, 'yAxis').fonte).toContain('Inter');
+    expect(rotuloDoEixo(opt, 'yAxis').escreve('Casa Amarela')).toBe('Casa Amarela');
+    // Eixo X: etiqueta de 3 letras → mono caixa alta. A mono no lugar dela.
+    expect(rotuloDoEixo(opt, 'xAxis').fonte).toContain('JetBrains');
+    expect(rotuloDoEixo(opt, 'xAxis').escreve('Seg')).toBe('SEG');
+  });
+
+  it('o eixo de VALOR permanece inteiramente em mono', () => {
+    // Aqui a largura fixa é função: é o que alinha "1.111" com "9.999" na
+    // mesma coluna. Nada nesta onda toca no eixo de valor.
+    const opt: any = barOption([{ label: 'SOL', total: 12 }], undefined, { tema: 'claro', unidade: 'moeda' });
+    expect(opt.yAxis.axisLabel.fontFamily).toContain('JetBrains');
+    expect(opt.yAxis.name).toBe('R$'); // carimbo de unidade — o uso exato
+    expect(opt.yAxis.nameTextStyle.fontFamily).toContain('JetBrains');
+  });
+
+  it('o nome do arco do medidor segue o tamanho: carimbo curto em mono, frase em Inter', () => {
+    const curto: any = gaugeOption(12, 100, '% em falta', undefined, '%', { tema: 'claro' });
+    expect(curto.series[0].title.fontFamily).toContain('JetBrains');
+    expect(curto.series[0].data[0].name).toBe('% EM FALTA');
+
+    const frase: any = gaugeOption(1.3, 2, 'un. vendidas / estoque', undefined, '', { tema: 'claro' });
+    expect(frase.series[0].title.fontFamily).toContain('Inter');
+    // 22 caracteres: caixa alta aqui era o defeito, e não pode voltar.
+    expect(frase.series[0].data[0].name).toBe('un. vendidas / estoque');
+  });
+
+  it('o topo do tooltip não carimba nome próprio', () => {
+    const opt: any = pieOption(
+      [
+        { label: 'OCULOS DE SOL', total: 60 },
+        { label: 'ARMACAO', total: 40 },
+      ],
+      { tema: 'claro', unidade: 'moeda' },
+    );
+    const html = String(opt.tooltip.formatter({ name: 'OCULOS DE SOL', value: 60, percent: 60, color: '#000' }));
+    // Nome próprio → Inter, sem text-transform e sem entreletras de carimbo.
+    expect(html).toContain('Inter');
+    expect(html.split('</div>')[0]).not.toContain('uppercase');
   });
 });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getArAsset, recordTryOn, type ArAsset } from '../api/client';
 import type { FaceBox, FaceTracker } from './tracker';
 import type { GlassesRenderer } from './glassesRenderer';
+import { Modal } from '../components/ui';
 
 type Step = 'consent' | 'starting' | 'live' | 'error';
 type Mode = 'mediapipe' | 'placeholder';
@@ -124,16 +125,17 @@ export function VirtualTryOn({
       : undefined;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="card modal" style={{ width: 560 }} onClick={(e) => e.stopPropagation()}>
-        <div className="row-between" style={{ marginBottom: 8 }}>
-          <h3 className="section-title" style={{ margin: 0 }}>
-            Provar {asset ? `— ${asset.product.description}` : ''}
-          </h3>
-          <button className="btn ghost sm" onClick={onClose}>
-            Fechar
-          </button>
-        </div>
+    <Modal
+      titulo={`Provar ${asset ? `— ${asset.product.description}` : ''}`}
+      onClose={onClose}
+      largura={560}
+    >
+      <div className="row-between" style={{ marginBottom: 8 }}>
+        <span />
+        <button className="btn ghost sm" onClick={onClose}>
+          Fechar
+        </button>
+      </div>
 
         {step === 'consent' && (
           <div>
@@ -213,8 +215,7 @@ export function VirtualTryOn({
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }
 

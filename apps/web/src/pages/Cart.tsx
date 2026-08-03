@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -11,9 +12,18 @@ import {
   formatBRL,
   type OrderView,
 } from '../api/client';
-import { PageHeader, Loading } from '../components/ui';
+import { PageHeader, Loading, Codigo } from '../components/ui';
+import { Icon } from '../brand/Icon';
+import { useTemaDaVitrine } from '../hooks/useTemaDaVitrine';
+
+/** `.btn` não é flex no CSS; sem isto o ícone empurra a linha de base do rótulo. */
+const botaoComIcone: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 7 };
+/** `.badge` é inline-block; o chip só acomoda ícone + palavra em inline-flex. */
+const chipComIcone: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6 };
 
 export function Cart() {
+  useTemaDaVitrine();
+
   const qc = useQueryClient();
   const [order, setOrder] = useState<OrderView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,33 +61,68 @@ export function Cart() {
     const paid = order.status === 'PAID';
     return (
       <>
-        <PageHeader title={`Pedido ${order.number}`} subtitle={paid ? 'Pagamento confirmado.' : 'Aguardando pagamento.'} />
+        {/* O número do pedido é IDENTIFICADOR — é o que o cliente dita ao
+            balconista. Como título ele saía em Fraunces, que é a fonte do que
+            se LÊ, não do que se COMPARA. O título passa a nomear a tela e o
+            número desce para `.codigo`, em mono caixa normal e tabular. */}
+        <PageHeader
+          eyebrow="Pedido"
+          title="Pedido registrado"
+          subtitle={paid ? 'Pagamento confirmado.' : 'Aguardando pagamento.'}
+        />
+        <p style={{ margin: '-2px 0 0' }}>
+          <Codigo>{order.number}</Codigo>
+        </p>
+        <hr className="rule-section" />
         <div className="card" style={{ maxWidth: 520 }}>
           <div className="row-between">
-            <span>Status</span>
-            <span className={`badge ${paid ? 'green' : 'amber'}`}>{paid ? 'Pago' : 'Aguardando pagamento'}</span>
+            <span className="label">Status</span>
+            {/*
+              O selo carrega ícone E palavra. Sob deuteranopia o verde de
+              "saudável" e os tons quentes vizinhos colapsam quase no mesmo tom,
+              então a cor aqui é reforço: quem decide é o rótulo escrito e a
+              forma do desenho (visto x relógio).
+            */}
+            <span className={`badge ${paid ? 'green' : 'amber'}`} style={chipComIcone}>
+              <Icon name={paid ? 'check' : 'prazo'} size={14} />
+              {paid ? 'Pago' : 'Aguardando pagamento'}
+            </span>
           </div>
-          <div className="row-between" style={{ marginTop: 8 }}>
-            <span>Total</span>
-            <strong>{formatBRL(order.total)}</strong>
+          <hr className="rule" />
+          <div className="row-between" style={{ alignItems: 'baseline' }}>
+            <span className="label">Total</span>
+            <span className="kpi">{formatBRL(order.total)}</span>
           </div>
           {!paid && order.payment?.qrCode && (
             <div className="card" style={{ marginTop: 12, background: 'var(--panel-2)' }}>
-              <div className="muted" style={{ fontSize: 12 }}>PIX (código de demonstração)</div>
-              <code style={{ wordBreak: 'break-all', fontSize: 12 }}>{order.payment.qrCode}</code>
+              <div className="label">PIX · código de demonstração</div>
+              {/* Mono aqui é o uso legítimo do manual: isto é código, não frase.
+                  Explicitado com `.codigo` para que o tratamento venha da mesma
+                  regra que atende SKU e número de pedido, e não da folha de
+                  estilo padrão do <code> do navegador. */}
+              <code className="codigo" style={{ wordBreak: 'break-all' }}>{order.payment.qrCode}</code>
             </div>
           )}
-          <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+          <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {/*
+              Um `.btn.solid` por tela — e os dois ramos abaixo são excludentes,
+              então a regra continua valendo: enquanto há pagamento pendente o
+              primário é confirmá-lo; depois de pago, o primário é a volta à
+              vitrine, que é o próximo passo da jornada.
+            */}
             {!paid ? (
-              <button className="btn" disabled={pay.isPending} onClick={() => pay.mutate(order.id)}>
+              <button className="btn solid" style={botaoComIcone} disabled={pay.isPending} onClick={() => pay.mutate(order.id)}>
+                <Icon name="aprovar" size={17} />
                 {pay.isPending ? 'Confirmando…' : 'Confirmar pagamento (simular gateway)'}
               </button>
             ) : (
-              <Link to="/loja" className="btn">
+              <Link to="/loja" className="btn solid" style={botaoComIcone}>
+                <Icon name="seta-esquerda" size={17} />
                 Voltar à loja
               </Link>
             )}
-            <button className="btn ghost" onClick={() => setOrder(null)}>
+            <button className="btn ghost" style={botaoComIcone} onClick={() => setOrder(null)}>
+              <Icon name="compras" size={17} />
               Novo carrinho
             </button>
           </div>
@@ -87,22 +132,57 @@ export function Cart() {
   }
 
   const items = cart.data?.items ?? [];
+  const unidades = items.reduce((s, i) => s + i.quantity, 0);
 
   return (
     <>
       <div className="row-between">
-        <PageHeader title="Carrinho" subtitle={cart.data?.storeName ? `Loja: ${cart.data.storeName}` : 'Seu carrinho'} />
-        <Link to="/loja" className="btn ghost">
-          Continuar comprando
-        </Link>
+        <PageHeader
+          title="Carrinho"
+          subtitle={cart.data?.storeName ? `Retirada em ${cart.data.storeName}` : 'Seu carrinho'}
+        />
+        {/* Só aparece com item dentro: no carrinho vazio esta ação e o CTA do
+            estado vazio diriam a mesma coisa duas vezes, e a segunda é o
+            primário da tela. Botão repetido não é reforço, é ruído. */}
+        {items.length > 0 && (
+          <Link to="/loja" className="btn ghost" style={botaoComIcone}>
+            <Icon name="seta-esquerda" size={17} />
+            Continuar comprando
+          </Link>
+        )}
       </div>
 
-      {error && <div className="badge red" style={{ display: 'block', padding: 10, marginBottom: 12 }}>{error}</div>}
+      <hr className="rule-section" />
+
+      {/*
+        O erro era um `.badge red` esticado para virar bloco — chip de 9,5px em
+        mono não é feito para carregar frase. Agora é banner: filete de estado à
+        esquerda, ícone de atenção e o texto em --terra (7.3:1 sobre o papel).
+        `role="alert"` porque a mensagem aparece depois de uma ação do usuário e
+        precisa ser anunciada sem ele ir procurá-la.
+      */}
+      {error && (
+        <div className="banner" role="alert" style={{ borderLeftColor: 'var(--terra)', color: 'var(--terra)' }}>
+          <Icon name="atencao" size={18} />
+          {error}
+        </div>
+      )}
 
       {cart.isLoading ? (
         <Loading />
       ) : items.length === 0 ? (
-        <div className="empty">Seu carrinho está vazio. <Link to="/loja" style={{ color: 'var(--accent)' }}>Ir à loja →</Link></div>
+        <div className="empty">
+          <p style={{ margin: '0 0 16px' }}>Seu carrinho está vazio.</p>
+          {/*
+            O ÚNICO `.btn.solid` deste ramo. Uma tela vazia tem exatamente uma
+            ação possível, e é esta — deixá-la como link de texto entregava a
+            única saída no elemento mais fraco da página.
+          */}
+          <Link to="/loja" className="btn solid" style={{ ...botaoComIcone, display: 'inline-flex' }}>
+            <Icon name="loja" size={17} />
+            Ver os óculos
+          </Link>
+        </div>
       ) : (
         <div className="card" style={{ padding: 0 }}>
           <table>
@@ -116,38 +196,97 @@ export function Cart() {
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => (
-                <tr key={it.productId}>
-                  <td>{it.description}</td>
-                  <td className="num">{formatBRL(it.unitPrice)}</td>
-                  <td className="num">
-                    <input
-                      type="number"
-                      min={1}
-                      max={it.available}
-                      value={it.quantity}
-                      onChange={(e) => qty.mutate({ productId: it.productId, quantity: Number(e.target.value) })}
-                      style={{ width: 64, padding: '4px 8px' }}
-                    />
-                  </td>
-                  <td className="num">{formatBRL(it.total)}</td>
-                  <td className="right">
-                    <button className="btn ghost sm" onClick={() => remove.mutate(it.productId)}>
-                      Remover
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {items.map((it) => {
+                const noLimite = it.quantity >= it.available;
+                return (
+                  <tr key={it.productId}>
+                    <td>{it.description}</td>
+                    <td className="num">{formatBRL(it.unitPrice)}</td>
+                    <td className="num">
+                      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                        <input
+                          type="number"
+                          min={1}
+                          max={it.available}
+                          value={it.quantity}
+                          aria-label={`Quantidade de ${it.description}`}
+                          /*
+                            O `onChange` mandava `Number(e.target.value)` direto.
+                            Apagar o campo para digitar outro número produz ''
+                            por um instante, `Number('')` é 0, e o backend trata
+                            quantidade 0 como remoção: a linha sumia do carrinho
+                            no meio da digitação. A guarda mantém o item e deixa
+                            a remoção onde ela está escrita, no botão "Remover".
+                          */
+                          onChange={(e) => {
+                            const q = Number(e.target.value);
+                            if (!Number.isFinite(q) || q < 1) return;
+                            qty.mutate({ productId: it.productId, quantity: Math.min(q, it.available) });
+                          }}
+                          style={{ width: 64, padding: '4px 8px' }}
+                        />
+                        {/*
+                          Teto de saldo dito por ESCRITO, e não por cor: sem
+                          isto o campo recusa o número em silêncio (o `max` do
+                          input e o Math.min acima cortam sem avisar) e o
+                          cliente não sabe por quê.
+
+                          Sem chip âmbar aqui, de propósito. No catálogo real a
+                          maioria das linhas tem 1 unidade na loja, ou seja
+                          quase toda linha do carrinho nasce no teto: um selo de
+                          atenção em todas elas gritaria por algo que não pede
+                          ação nenhuma — dá para fechar a compra do mesmo jeito.
+                          O âmbar fica reservado ao que exige reação, e a
+                          tentativa de passar do saldo já tem o banner de erro.
+                          TIPOGRAFIA (onda 6): isto NÃO é rótulo de dado, é
+                          frase de apoio a um campo — "12 disponíveis" explica o
+                          que o campo aceita. Rótulo nomeia; apoio explica, e
+                          apoio vai de `.hint` (Inter 12/400), não de `.label`
+                          (Inter 12/600), que aqui competia em peso com o próprio
+                          número dentro do campo.
+                        */}
+                        <span className="hint" style={{ whiteSpace: 'nowrap', marginTop: 0 }}>
+                          {noLimite ? `Máximo: ${it.available}` : `${it.available} disponíveis`}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="num">{formatBRL(it.total)}</td>
+                    <td className="right">
+                      <button className="btn ghost sm" style={botaoComIcone} onClick={() => remove.mutate(it.productId)}>
+                        <Icon name="lixeira" size={15} />
+                        Remover
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          <div className="row-between" style={{ padding: 16 }}>
-            <button className="btn ghost sm" onClick={() => empty.mutate()}>
+          <div className="row-between" style={{ padding: 16, gap: 16, flexWrap: 'wrap' }}>
+            <button className="btn ghost sm" style={botaoComIcone} onClick={() => empty.mutate()}>
+              <Icon name="limpar" size={15} />
               Esvaziar
             </button>
             <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-              <strong>Total: {formatBRL(cart.data?.total ?? 0)}</strong>
-              <button className="btn" disabled={doCheckout.isPending} onClick={() => doCheckout.mutate()}>
+              <div style={{ textAlign: 'right' }}>
+                {/* NÚMERO É HERÓI, RÓTULO É SERVIÇO. A contagem de peças fica no
+                    rótulo porque é o serviço; o valor é que precisa ser lido de
+                    longe, e é o que decide o clique ao lado. */}
+                <div className="label">
+                  Total · {unidades} {unidades === 1 ? 'peça' : 'peças'}
+                </div>
+                <div className="kpi">{formatBRL(cart.data?.total ?? 0)}</div>
+              </div>
+              {/*
+                O ÚNICO `.btn.solid` desta tela: fechar a compra. Todo o resto
+                do carrinho (esvaziar, remover, continuar comprando) é ação
+                comum e fica em contornado ou terciário — é isso que mantém o
+                ouro abaixo dos 5% de área e faz o preenchimento significar
+                decisão.
+              */}
+              <button className="btn solid" style={botaoComIcone} disabled={doCheckout.isPending} onClick={() => doCheckout.mutate()}>
                 {doCheckout.isPending ? 'Processando…' : 'Finalizar compra'}
+                <Icon name="seta-direita" size={17} />
               </button>
             </div>
           </div>

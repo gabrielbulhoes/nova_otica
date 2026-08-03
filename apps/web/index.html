@@ -4,6 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nova Ótica — Gestão de Estoque</title>
+
+    <!--
+      Fontes NANOFLOW pré-carregadas (as @font-face moram em src/fonts.css).
+      Sem preload, o navegador só descobre a fonte depois de baixar e interpretar
+      o CSS: a primeira pintura sai em fonte de sistema e a marca "pisca". O
+      preload antecipa a busca para o parse do HTML e mata esse flash.
+
+      Só os arquivos `latin`, e só as três faces presentes em toda tela (título,
+      corpo, rótulo). O `latin-ext` e o itálico ficam de fora de propósito: em
+      pt-BR o latin-ext nunca chega a ser requisitado (o unicode-range o dispensa)
+      e pré-carregar 188 KB que ninguém usa atrasaria o que importa.
+
+      `crossorigin` é obrigatório mesmo na mesma origem — fonte é sempre buscada
+      em modo CORS anônimo; sem o atributo o navegador baixaria o arquivo duas
+      vezes. As URLs /fonts/... são reescritas pelo Vite conforme VITE_BASE.
+    -->
+    <link rel="preload" href="/fonts/inter-var-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/fraunces-var-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/jetbrains-mono-var-latin.woff2" as="font" type="font/woff2" crossorigin />
   </head>
   <body>
     <div id="root"></div>

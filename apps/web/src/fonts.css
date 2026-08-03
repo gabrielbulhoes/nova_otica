@@ -1,0 +1,153 @@
+/* ============================================================================
+   NANOFLOW · Entrega tipográfica auto-hospedada
+   ----------------------------------------------------------------------------
+   As três famílias do manual (docs/marca/nanoflow-manual.html, seção 04) com
+   papéis fixos e sem sobreposição:
+
+     Fraunces        títulos, números-herói, manifesto   · NUNCA abaixo de 18px
+     Inter           corpo, interface, botões de produto
+     JetBrains Mono  rótulos, dados, código, carimbo     · NUNCA em texto corrido
+
+   POR QUE AUTO-HOSPEDAR, E NÃO USAR O CDN DO GOOGLE
+   O produto é entregue como demonstração estática num zip que o cliente
+   descompacta numa hospedagem compartilhada. Um <link> para fonts.googleapis.com
+   é um ponto único de falha fora do nosso controle: rede corporativa que bloqueia
+   o domínio, cliente sem internet na hora de apresentar, ou CDN indisponível
+   derrubam a marca inteira para fonte de sistema na frente do cliente. Com os
+   .woff2 dentro do pacote, a tipografia é uma garantia, não uma aposta.
+
+   POR QUE VARIÁVEL EM VEZ DE ESTÁTICAS
+   O Google serve o MESMO arquivo variável mesmo quando se pede um peso único
+   (verificado por hash: os arquivos de Inter 400, 500 e 600 são byte a byte
+   idênticos). Pedir estáticas separadas duplicaria o mesmo binário três vezes.
+   Um arquivo variável por família cobre toda a faixa de pesos do manual:
+     Inter estático 400+500+600 = 390,6 KB  ·  Inter variável = 130,2 KB
+     Fraunces estático 300+400+500 = 371,2 KB  ·  Fraunces variável = 123,7 KB
+
+   POR QUE OS INTERVALOS DE PESO SÃO FECHADOS E NÃO 100..900
+   Os arquivos variáveis trazem a faixa inteira (Inter 100..900), mas o manual só
+   tem quatro pesos de Inter, três de Fraunces e dois de mono. Declarar a faixa
+   do MANUAL em vez da faixa do ARQUIVO transforma o @font-face em guarda-corpo:
+   um <strong> (peso 700 por padrão do navegador) é limitado a 600 em Inter e a
+   500 em mono, que é exatamente o mais pesado que o sistema admite. Fora da
+   faixa o navegador aproxima para a borda mais próxima — não sintetiza negrito
+   falso, porque o peso continua sendo atendido por uma face real.
+
+   POR QUE O ITÁLICO DE FRAUNCES É UM ARQUIVO SÓ, NO PESO 300
+   O próprio manual pede apenas `1,9..144,300` no seu <link>. O itálico variável
+   custaria 149,4 KB contra 77,3 KB do peso fixo — 72 KB a mais por uma variação
+   que a marca não especifica. Pedidos de itálico em 400/500 caem neste arquivo
+   (única face itálica declarada), sem oblíquo sintético.
+
+   ACENTUAÇÃO PT-BR — CONFERIDO, NÃO PRESUMIDO
+   Todo o pt-BR (á â ã à é ê í ó ô õ ú ü ç e as maiúsculas) vive em U+00C0–U+00FF,
+   dentro do bloco `latin`. Os quatro arquivos `latin` foram inspecionados com
+   fontTools: 64/64 pontos de código de U+00C0–U+00FF presentes em cada um, zero
+   glifos faltando. O bloco `latin-ext` acompanha para nomes estrangeiros de
+   fornecedor e marca; graças ao unicode-range ele só é baixado se a página de
+   fato usar um caractere de lá — em pt-BR puro, custo de rede zero.
+
+   CAMINHOS E BASE RELATIVA
+   As URLs são absolutas (/fonts/...) de propósito. O Vite reescreve URLs do
+   diretório public/ dentro do CSS conforme a base do build — com VITE_BASE=./
+   elas viram ../fonts/..., relativas ao CSS emitido em assets/. Verificado com
+   build real e servidor HTTP numa subpasta: resolve nos dois modos.
+
+   Licenças SIL OFL 1.1 das três famílias em public/fonts/licencas/ — a OFL exige
+   que o texto acompanhe o software redistribuído, e o zip é redistribuição.
+   ========================================================================== */
+
+/* --- Fraunces · romano · variável (opsz 9..144, wght 100..900) -------------
+   Um arquivo cobre 300/400/500. O eixo opsz fica no arquivo: com o padrão
+   `font-optical-sizing: auto` o navegador ajusta o desenho ao corpo do texto
+   sozinho — é o que sustenta a regra de nunca usar Fraunces abaixo de 18px. */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 300 500;
+  font-display: swap;
+  src: url('/fonts/fraunces-var-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 300 500;
+  font-display: swap;
+  src: url('/fonts/fraunces-var-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* --- Fraunces · itálico · peso 300 (mantém o eixo opsz) ------------------- */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+  src: url('/fonts/fraunces-italic-300-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Fraunces';
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+  src: url('/fonts/fraunces-italic-300-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* --- Inter · variável (wght 100..900), declarado 300..600 ----------------- */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300 600;
+  font-display: swap;
+  src: url('/fonts/inter-var-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300 600;
+  font-display: swap;
+  src: url('/fonts/inter-var-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* --- JetBrains Mono · variável (wght 400..800), declarado 400..500 -------- */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-var-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-var-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}

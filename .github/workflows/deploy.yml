@@ -1,0 +1,76 @@
+name: Deploy (produção)
+
+# Só no merge para main, e só por push. `pull_request` NÃO dispara aqui: um
+# workflow com segredos rodando em código que veio de fora é como entregar a
+# chave da VPS. Vale mesmo com o repositório privado — colaborador com acesso
+# de escrita também abre PR, e a revisão do código do PR aconteceria DEPOIS de
+# ele já ter rodado com os segredos.
+on:
+  push:
+    branches: [main]
+  # Botão manual, para republicar sem precisar de um commit novo.
+  workflow_dispatch:
+
+# Um deploy por vez. Sem isto, dois merges seguidos disputam o mesmo
+# `docker compose up` e o segundo pode subir em cima de um build pela metade.
+concurrency:
+  group: deploy-producao
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # O ambiente `producao` é onde vivem os segredos. Configure nele revisores
+    # obrigatórios se quiser que todo deploy passe por aprovação humana.
+    environment: producao
+    steps:
+      - name: Abrir a sessão SSH com a VPS
+        # A chave é de um usuário `deploy` cujo `authorized_keys` tem
+        # `command="..."` forçado: mesmo que ela vaze, a única coisa que ela
+        # consegue fazer na máquina é rodar o script de deploy. Ver o runbook §5.
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"  || { echo "::error::secret DEPLOY_SSH_KEY ausente"; exit 1; }
+          test -n "$SSH_HOST" || { echo "::error::secret DEPLOY_HOST ausente"; exit 1; }
+          test -n "$SSH_KNOWN_HOSTS" || {
+            echo "::error::secret DEPLOY_KNOWN_HOSTS ausente — sem ele o SSH aceitaria qualquer servidor que responda pelo IP"
+            exit 1
+          }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Publicar
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          # O comando enviado é ignorado pelo forced command do servidor — o que
+          # roda é sempre `deploy.sh`. O SHA vai junto para o log ficar rastreável.
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+              "${SSH_USER}@${SSH_HOST}" "deploy ${GITHUB_SHA}"
+
+      - name: Conferir que o site voltou de pé
+        env:
+          URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          alvo="${URL:-https://app.novaotica.gb.app.br/health}"
+          # O container tem start_period de 40s; damos até 2 minutos antes de
+          # declarar falha, e falhamos alto se não voltar.
+          for i in $(seq 1 24); do
+            if curl -fsS --max-time 10 "$alvo" > /tmp/health.json; then
+              echo "no ar:"; cat /tmp/health.json; exit 0
+            fi
+            echo "tentativa $i — ainda subindo…"; sleep 5
+          done
+          echo "::error::$alvo não respondeu em 2 minutos. A versão anterior pode ter caído — verifique na VPS: docker compose -f docker-compose.prod.yml logs --tail=100 app"
+          exit 1

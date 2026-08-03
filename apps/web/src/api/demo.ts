@@ -8,6 +8,7 @@
  *   REAIS da rede, agregados e sem qualquer dado de cliente.
  */
 import {
+  analysisBrand,
   abcFromItems,
   analyzeProduct,
   buildCommercialStrategy,
@@ -16,6 +17,7 @@ import {
   extractBrand,
   isBrandAnalysable,
   matchesProductGroup,
+  PRODUCT_GROUPS,
   buildBrandMix,
   buildFairSplit,
   buildOverview,
@@ -53,7 +55,14 @@ interface RealDataset {
   productSales: { externalId: string; units: number; revenue: number }[];
   weekdayStore: { storeExt: string; weekday: number; total: number }[];
   /** Cobertura por loja (rede inteira) — ausente em datasets antigos. */
-  storeStats?: { externalId: string; stockUnits: number; soldUnits: number; soldRevenue?: number }[];
+  storeStats?: {
+    externalId: string;
+    stockUnits: number;
+    /** SKUs distintos com saldo, da rede inteira. Ausente em datasets antigos. */
+    skuCount?: number;
+    soldUnits: number;
+    soldRevenue?: number;
+  }[];
   /** Top vendedores por receita (equipe própria; site protegido por senha). */
   bySeller?: { label: string; units: number; revenue: number; sales: number }[];
   /** Cobertura por marca (rede inteira; grade sem fornecedor = "Sem marca"). */
@@ -101,6 +110,8 @@ interface Store { id: string; externalId: string; name: string; city: string; st
 interface Product {
   id: string; externalId: string; sku: string; description: string; brand: string;
   category: string; price: number; color: string; size: string; minStock: number;
+  /** Valor de compra do ERP; null quando o catálogo não trouxe. */
+  cost?: number | null;
 }
 
 const STORE_NAMES: [string, string, string][] = [
@@ -143,6 +154,7 @@ const products: Product[] = real
       brand: p.brand || '—',
       category: p.category || 'OUTROS',
       price: p.price,
+      cost: p.cost,
       color: '',
       size: '',
       minStock: 3,
@@ -197,6 +209,16 @@ if (real) {
     soldQty.set(key(st.id, products[2].id), 15);
     stockQty.set(key(st.id, products[2].id), 2);
   }
+  // Estoque morto de armação (products[10] é 'Armação', 10 % 5 === 0): parado
+  // em toda a rede, com uma loja concentrando o saldo. É o que faz a demo
+  // fictícia exercitar o card de LIQUIDAÇÃO e a regra de desconto da rede —
+  // sem ele o caminho só existia no dataset real, que é gitignorado, e a
+  // suíte passava aqui e quebrava no CI.
+  for (const st of stores) {
+    soldQty.set(key(st.id, products[10].id), 0);
+    stockQty.set(key(st.id, products[10].id), 4);
+  }
+  stockQty.set(key(stores[2].id, products[10].id), 40);
 }
 
 // Prazos por fornecedor (marca) editáveis na demo
@@ -224,8 +246,30 @@ const onOrderQty = (productId: string) =>
     .filter((r) => r.status === 'SENT')
     .reduce((s, r) => s + r.items.filter((i) => i.productId === productId).reduce((a, i) => a + i.quantity, 0), 0);
 
-// Produtos com provador (AR) — os de Armação / Óculos de Sol
-const arProductIds = products.filter((p) => p.category === 'Armação' || p.category === 'Óculos de Sol').map((p) => p.id);
+// Produtos com provador (AR) — armações e óculos COM saldo na rede.
+//
+// A comparação era `p.category === 'Armação' || p.category === 'Óculos de Sol'`,
+// que são os rótulos do catálogo FICTÍCIO (a constante CATEGORIAS, no topo deste
+// arquivo). Quando a demo passou a carregar o dataset real da rede, a categoria
+// passou a vir crua do ERP — 'ARMACAO' e 'OCULOS', caixa alta e sem acento — e
+// nenhum produto casou: `/ar/products` devolvia zero linha e a vitrine abria
+// vazia dizendo "cadastre assets de AR", como se fosse falta de conteúdo.
+// Comparar rótulo de ERP por igualdade literal é a armadilha; normalizar (sem
+// acento, caixa alta) e testar o PREFIXO atende os dois catálogos de uma vez e
+// mantém 'PORTA OCULOS' (acessório, não é óculos) de fora.
+// \p{Diacritic} em vez da faixa U+0300–U+036F escrita à mão: acento combinante
+// solto no código-fonte é invisível no editor e some em diff mal configurado.
+const semAcento = (s: string) => (s ?? '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toUpperCase();
+const temProvador = (categoria: string) => {
+  const c = semAcento(categoria);
+  return c.startsWith('ARMACAO') || c.startsWith('OCULOS');
+};
+// Saldo > 0 espelha a regra do backend (seed.ts exige `stockItems some quantity
+// gt 0`): sem isso a vitrine ofereceria "Adicionar" em produto que o carrinho
+// recusa com "saldo insuficiente".
+const arProductIds = products
+  .filter((p) => temProvador(p.category) && stores.some((s) => (stockQty.get(key(s.id, p.id)) ?? 0) > 0))
+  .map((p) => p.id);
 
 // Estado mutável (carrinho, pedidos, movimentações, provas)
 let cart: { storeId: string; items: { productId: string; quantity: number }[] } | null = null;
@@ -251,7 +295,6 @@ const availableAt = (storeId: string, productId: string) =>
 // ─── Derivações de métricas ──────────────────────────────────────────────────
 
 // Com dados reais os totais são da REDE INTEIRA (pré-amostragem do catálogo).
-const stockUnits = real ? real.totals.stockUnitsNetwork : [...stockQty.values()].reduce((a, b) => a + b, 0);
 const salesByStore = real
   ? real.salesByStore.map((s) => ({ storeId: `st_${s.externalId}`, storeName: s.name, count: s.count, total: s.total }))
   : stores.map((s) => ({
@@ -263,104 +306,6 @@ const salesByStore = real
 const revenue = real ? real.totals.revenue30d : round2(salesByStore.reduce((a, b) => a + b.total, 0));
 const salesCount = real ? real.totals.salesCount30d : salesByStore.reduce((a, b) => a + b.count, 0);
 
-// ─── Escopo do BI: janela (dias) e loja ──────────────────────────────────────
-//
-// Os filtros do BI precisam valer para TODOS os gráficos. Com o snapshot real,
-// o que dá para escopar honestamente:
-//  - LOJA: o dataset traz recortes por loja (salesByStore, storeStats,
-//    storeCategory, storeBrand, weekdayStore) — o filtro é aplicado de verdade.
-//  - JANELA: a série diária é real, então a fatia de faturamento do período
-//    escolhido sai dela. O snapshot cobre poucos dias; pedir uma janela maior
-//    do que existe devolve o que existe (nunca inventa), e a janela EFETIVA é
-//    devolvida para a tela poder dizer isso ao usuário.
-// Faturamento/vendas são FLUXO (escalam com a janela); estoque é FOTO (só
-// filtra por loja, nunca escala por dias).
-
-/** Dias realmente cobertos pelo dataset dentro da janela pedida. */
-function effectiveWindowDays(days: number): number {
-  return real ? Math.min(days, real.dailySales.length) : days;
-}
-
-/**
- * Fração do faturamento do snapshot que cai na janela pedida (0–1). Sai da
- * série diária real; janela ≥ dados disponíveis = 1 (tudo).
- */
-function windowShare(days: number): number {
-  if (!real) return 1;
-  const all = real.dailySales;
-  const total = all.reduce((a, d) => a + d.total, 0);
-  if (total <= 0 || days >= all.length) return 1;
-  return all.slice(-days).reduce((a, d) => a + d.total, 0) / total;
-}
-
-/** Loja selecionada no filtro (undefined/id inválido = toda a rede). */
-function scopedStore(storeId?: string): Store | null {
-  if (!storeId) return null;
-  return stores.find((s) => s.id === storeId) ?? null;
-}
-
-/** Lojas no escopo do filtro (a selecionada, ou todas as de varejo). */
-const scopedStores = (storeId?: string): Store[] => {
-  const st = scopedStore(storeId);
-  return st ? [st] : stores;
-};
-
-/** Faturamento e nº de vendas no escopo (loja × janela). */
-function scopedSales(days: number, storeId?: string) {
-  const share = windowShare(days);
-  const ids = new Set(scopedStores(storeId).map((s) => s.id));
-  const rows = salesByStore.filter((s) => ids.has(s.storeId));
-  return {
-    revenue: round2(rows.reduce((a, s) => a + s.total, 0) * share),
-    count: Math.round(rows.reduce((a, s) => a + s.count, 0) * share),
-  };
-}
-
-/** Unidades em estoque no escopo (foto: filtra por loja, não escala por dias). */
-function scopedStockUnits(storeId?: string): number {
-  const st = scopedStore(storeId);
-  if (real?.storeStats) {
-    const stats = st
-      ? real.storeStats.filter((x) => x.externalId === st.externalId)
-      : real.storeStats.filter((x) => stores.some((s) => s.externalId === x.externalId));
-    return stats.reduce((a, x) => a + x.stockUnits, 0);
-  }
-  if (!st) return stockUnits;
-  return products.reduce((a, p) => a + (stockQty.get(key(st.id, p.id)) ?? 0), 0);
-}
-
-/** Unidades vendidas no escopo (loja × janela). */
-function scopedSoldUnits(days: number, storeId?: string): number {
-  const share = windowShare(days);
-  const st = scopedStore(storeId);
-  if (real?.storeStats) {
-    const stats = st
-      ? real.storeStats.filter((x) => x.externalId === st.externalId)
-      : real.storeStats.filter((x) => stores.some((s) => s.externalId === x.externalId));
-    return Math.round(stats.reduce((a, x) => a + x.soldUnits, 0) * share);
-  }
-  const scope = scopedStores(storeId);
-  return Math.round(
-    scope.reduce((a, s) => a + products.reduce((b, p) => b + (soldQty.get(key(s.id, p.id)) ?? 0), 0), 0) * share,
-  );
-}
-
-/**
- * Mix de uma dimensão (categoria/marca) DENTRO de uma loja, em unidades reais
- * do snapshot. Usado para repartir o faturamento conhecido da loja entre os
- * rótulos — a repartição vem de dado real por loja, não de chute.
- */
-function storeMix(source: 'category' | 'brand', externalId: string): Map<string, number> {
-  const src = (source === 'category' ? real?.storeCategory : real?.storeBrand) ?? [];
-  const mix = new Map<string, number>();
-  for (const r of src) {
-    if (r.storeExt !== externalId) continue;
-    const label = r.label === '—' ? 'Sem marca' : r.label;
-    mix.set(label, (mix.get(label) ?? 0) + r.soldUnits);
-  }
-  return mix;
-}
-
 /**
  * Filtro multi-seleção → Set (null = sem filtro). Espelha o parseList da API:
  * array (parâmetro repetido do axios) com valores literais, ou "a,b,c".
@@ -371,14 +316,24 @@ function asSet(v?: string | string[]) {
   return items.length > 0 ? new Set(items) : null;
 }
 
+/** Recorte pedido pela tela; 'todos' é o padrão (compatível com a API). */
+function productGroup(v: string | string[] | undefined): ProductGroup {
+  const g = one(v) as ProductGroup;
+  return PRODUCT_GROUPS.includes(g) ? g : 'todos';
+}
+
 function stockRows(params: Record<string, string | string[] | undefined>) {
   const storeSel = asSet(params.storeId);
   const catSel = asSet(params.category);
+  // Mesmo recorte da API: lente e tratamento saem por padrão das telas de
+  // operação (feedback do Galbe: "ainda continua puxando lentes").
+  const group = productGroup(params.group);
   const rows: Record<string, unknown>[] = [];
   for (const st of stores) {
     if (storeSel && !storeSel.has(st.id)) continue;
     for (const p of products) {
       if (params.productId && params.productId !== p.id) continue;
+      if (!matchesProductGroup(p.category, group)) continue;
       if (catSel && !catSel.has(p.category)) continue;
       const search = one(params.search);
       if (search) {
@@ -401,8 +356,8 @@ function stockRows(params: Record<string, string | string[] | undefined>) {
   return rows;
 }
 
-function alerts(storeId?: string) {
-  const rows = stockRows(storeId ? { storeId } : {}).filter((x) => {
+function alerts(group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
+  const rows = stockRows({ group, category, storeId }).filter((x) => {
     // Com o dataset real (catálogo amostrado), só alerta posições que EXISTEM
     // na loja: linha de estoque presente ou venda no período. Sem isso, cada
     // produto ausente numa filial viraria "ruptura" fantasma.
@@ -431,110 +386,159 @@ function alerts(storeId?: string) {
   };
 }
 
-function timeseries(days: number, storeId?: string) {
+function timeseries(days: number, fatia = 1, aproximado = false) {
   if (real) {
-    // Série diária REAL, recortada à janela pedida. A curva é da rede; com uma
-    // loja filtrada, repartimos pela participação real dela no faturamento.
-    const st = scopedStore(storeId);
-    const netTotal = salesByStore.reduce((a, s) => a + s.total, 0) || 1;
-    const storeRow = st ? salesByStore.find((s) => s.storeId === st.id) : null;
-    const f = st ? (storeRow?.total ?? 0) / netTotal : 1;
-    const points = real.dailySales.slice(-days).map((d) => ({
+    // Série diária REAL (30 dias da sonda), recortada ao período pedido.
+    // A sonda traz o dia a dia em AGREGADO DE REDE, sem quebra por categoria:
+    // com recorte ativo a série é projetada pela fatia que o recorte ocupa no
+    // período, e vai marcada como aproximada. Melhor uma curva declaradamente
+    // proporcional do que a curva da rede inteira fingindo ser a do recorte.
+    const points = real.dailySales.slice(-effectiveDays(days)).map((d) => ({
       date: d.date,
-      total: round2(d.total * f),
-      count: Math.round(d.count * f),
+      total: round2(d.total * fatia),
+      count: Math.round(d.count * fatia),
     }));
-    return { days: effectiveWindowDays(days), requestedDays: days, granularity: 'day', points };
+    // `days` é o que a série COBRE, não o que foi pedido: quem lê a resposta
+    // monta rótulo com ele, e um 30 em cima de 7 pontos é o rótulo mentindo.
+    return { days: points.length, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
   }
-  const points = [];
-  const now = new Date();
-  const f = scopedStore(storeId) ? 1 / Math.max(stores.length, 1) : 1;
-  for (let i = days - 1; i >= 0; i -= 1) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    points.push({ date: d.toISOString().slice(0, 10), total: round2(money(3000, 14000) * f), count: int(2, 9) });
-  }
-  return { days, requestedDays: days, granularity: 'day', points };
+  // Fictício: a MESMA série que o KPI e o recorte por data leem. Era aqui que
+  // ela nascia sorteada a cada chamada, e por isso o KPI e o gráfico ao lado
+  // nunca fechavam.
+  const points = serieDiaria().slice(-effectiveDays(days)).map((d) => ({
+    date: d.date,
+    total: round2(d.total * fatia),
+    count: Math.max(1, Math.round(d.count * fatia)),
+  }));
+  return { days: points.length, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
 }
 
-function byDimension(by: string, days: number, storeId?: string) {
-  const share = windowShare(days);
-  const st = scopedStore(storeId);
-  const scale = (rows: { key: string; label: string; total: number; count: number }[]) =>
-    rows.map((r) => ({ ...r, total: round2(r.total * share), count: Math.round(r.count * share) }));
+/**
+ * ── BI · O RECORTE ────────────────────────────────────────────────────────────
+ *
+ * O módulo inteiro era cego ao recorte: nenhuma das seis rotas lia `group` ou
+ * `category`, e trocar "Óculos" por "Lentes" no topo do console não mexia um
+ * pixel de gráfico nenhum. Pior: metade dos números era sorteada
+ * (`unitsSold: int(400, 700)`) ou era o agregado da REDE mesmo quando havia
+ * uma loja escolhida.
+ *
+ * Agora tudo sai da MESMA base dos relatórios — `soldItemsScoped` ∩
+ * `noRecorte` —, que é o que faz os números baterem entre as telas.
+ *
+ * O que NÃO dá para recortar com a extração atual está marcado como
+ * `aproximado` e a tela diz isso em texto: a forma de pagamento cobre a venda
+ * inteira (uma venda de armação + lente tem um cartão só), e a série diária e
+ * o mapa de calor vêm da sonda em agregado de rede, sem quebra por categoria.
+ */
+function biBase(group: ProductGroup, category: string | string[] | undefined, storeId?: string) {
+  const dentro = noRecorte(group, category);
+  const itens = soldItemsScoped(storeId).filter((x) => dentro(x.p));
+  const receita = round2(itens.reduce((a, x) => a + x.revenue, 0));
+  const unidades = itens.reduce((a, x) => a + x.units, 0);
+  // Quanto o recorte pesa no período — é este fator que projeta o que a sonda
+  // só traz agregado (dia a dia, dia da semana, forma de pagamento).
+  const totalPeriodo = round2(soldItemsScoped(storeId).reduce((a, x) => a + x.revenue, 0));
+  const fatia = totalPeriodo > 0 ? receita / totalPeriodo : 0;
+  const recortando = group !== 'todos' || Boolean(asSet(category)) || Boolean(storeId);
+  return { itens, receita, unidades, fatia, recortando };
+}
 
+function byDimension(
+  by: string,
+  group: ProductGroup = 'todos',
+  category?: string | string[],
+  storeId?: string,
+  days = 0,
+) {
+  const base = biBase(group, category, storeId);
   let rows: { key: string; label: string; total: number; count: number }[] = [];
+  let aproximado = false;
+  /** A dimensão foi recortada por DATA de verdade (só o caso loja sem recorte). */
+  let porDataExata = false;
+
   if (by === 'store') {
-    const ids = new Set(scopedStores(storeId).map((s) => s.id));
-    rows = salesByStore
-      .filter((s) => ids.has(s.storeId))
-      .map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }));
-  } else if (real) {
-    const src = by === 'payment' ? real.byPayment : by === 'brand' ? real.byBrand : real.byCategory;
-    if (st && (by === 'category' || by === 'brand')) {
-      // Reparte o faturamento CONHECIDO da loja pelo mix de unidades DELA
-      // (dado real por loja) — o total da loja continua fechando.
-      const mix = storeMix(by === 'brand' ? 'brand' : 'category', st.externalId);
-      const units = [...mix.values()].reduce((a, b) => a + b, 0);
-      const storeRow = salesByStore.find((s) => s.storeId === st.id);
-      const storeTotal = storeRow?.total ?? 0;
-      const storeCount = storeRow?.count ?? 0;
-      rows =
-        units > 0
-          ? [...mix.entries()].map(([label, u]) => ({
-              key: label,
-              label,
-              total: round2((storeTotal * u) / units),
-              count: Math.round((storeCount * u) / units),
-            }))
-          : [];
-    } else if (st) {
-      // Sem recorte por loja na origem (ex.: forma de pagamento): aplica a
-      // participação real da loja no faturamento da rede.
-      const netTotal = salesByStore.reduce((a, s) => a + s.total, 0) || 1;
-      const f = (salesByStore.find((s) => s.storeId === st.id)?.total ?? 0) / netTotal;
-      rows = src.map((m) => ({
-        key: m.label,
-        label: m.label,
-        total: round2(m.total * f),
-        count: Math.round(m.count * f),
-      }));
+    /*
+       Duas réguas, e a escolha entre elas é a diferença entre medir e estimar:
+
+       · SEM recorte de produto, o faturamento por loja tem DATA na amostra
+         (weekdayStore), então o recorte de dias é exato e é ele que vale — é o
+         que faz a barra por loja acompanhar o filtro em vez de ficar parada.
+       · COM recorte de produto, a sonda não quebra loja × dia × produto. Aí
+         vale a régua do item vendido, que respeita o recorte de produto e
+         cobre a amostra inteira.
+    */
+    const porData = real && !base.recortando && days > 0 ? salesByStoreNaJanela(days) : null;
+    porDataExata = porData !== null;
+    if (porData) {
+      rows = porData
+        .map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }))
+        .filter((r) => r.total > 0);
     } else {
-      rows = src.map((m) => ({ key: m.label, label: m.label, total: m.total, count: m.count }));
+      // Por loja, o valor é a soma dos itens DAQUELA loja dentro do recorte —
+      // não o faturamento inteiro que passou por ela.
+      const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
+      const dentro = noRecorte(group, category);
+      rows = escopo
+        .map((st) => {
+          const itens = soldItemsScoped(st.id).filter((x) => dentro(x.p));
+          return {
+            key: st.id,
+            label: st.name,
+            total: round2(itens.reduce((a, x) => a + x.revenue, 0)),
+            count: itens.reduce((a, x) => a + x.units, 0),
+          };
+        })
+        .filter((r) => r.total > 0);
     }
+  } else if (by === 'payment') {
+    // Não se reparte por produto. Com recorte ativo, o que existe é a fatia do
+    // recorte no período — declarada como aproximação, nunca como medida.
+    const src = real
+      ? real.byPayment.map((m) => ({ key: m.label, label: m.label, total: m.total, count: m.count }))
+      : PAG.map((m) => ({ key: m, label: m, total: money(20000, 70000), count: int(10, 40) }));
+    aproximado = base.recortando;
+    rows = aproximado
+      ? src.map((r) => ({ ...r, total: round2(r.total * base.fatia), count: Math.round(r.count * base.fatia) }))
+      : src;
   } else {
-    // Sabor fictício: deriva das vendas por loja×produto — assim o filtro de
-    // loja vale aqui também, e o valor é determinístico (não sorteia a cada
-    // chamada, senão o gráfico "pula" a cada refetch).
-    const scope = scopedStores(storeId);
+    // Categoria e marca saem do item vendido: aqui o recorte é exato.
     const acc = new Map<string, { total: number; count: number }>();
-    if (by === 'payment') {
-      // Não há forma de pagamento por loja no sabor fictício: reparte o
-      // faturamento do escopo por pesos estáveis (hash do rótulo).
-      const totalScope = scope.reduce(
-        (a, s) => a + products.reduce((b, p) => b + (soldQty.get(key(s.id, p.id)) ?? 0) * p.price, 0),
-        0,
-      );
-      const w = PAG.map((m) => 0.5 + hash01(`pag:${m}`));
-      const wsum = w.reduce((a, b) => a + b, 0) || 1;
-      PAG.forEach((m, i) =>
-        acc.set(m, { total: round2((totalScope * w[i]) / wsum), count: Math.round((40 * w[i]) / wsum) }),
-      );
-    } else {
-      for (const s of scope)
-        for (const p of products) {
-          const units = soldQty.get(key(s.id, p.id)) ?? 0;
-          if (units <= 0) continue;
-          const label = by === 'brand' ? p.brand : p.category;
-          const cur = acc.get(label) ?? { total: 0, count: 0 };
-          cur.total = round2(cur.total + units * p.price);
-          cur.count += units;
-          acc.set(label, cur);
-        }
+    for (const x of base.itens) {
+      const k = by === 'brand' ? brandLabel(x.p) : x.p.category || 'Não classificado';
+      const cur = acc.get(k) ?? { total: 0, count: 0 };
+      cur.total += x.revenue;
+      cur.count += x.units;
+      acc.set(k, cur);
     }
-    rows = [...acc.entries()].map(([label, v]) => ({ key: label, label, ...v }));
+    rows = [...acc.entries()].map(([k, v]) => ({ key: k, label: k, total: round2(v.total), count: v.count }));
   }
-  return { by, days: effectiveWindowDays(days), rows: scale(rows).sort((a, b) => b.total - a.total) };
+
+  /*
+     RECORTE DE DATA NAS QUEBRAS QUE NÃO TÊM DIA.
+
+     Só o caminho `porData` acima é medido dia a dia. Todos os outros saem do
+     item vendido ou do agregado da sonda, que cobrem a AMOSTRA INTEIRA — e sem
+     este passo eles ficavam parados enquanto o KPI ao lado encolhia com a
+     janela. O sintoma era grosseiro: em "Óculos · 1 dia" o total da rede
+     marcava R$ 55.069,69 enquanto A GRACIOSA MIDWAY sozinha mostrava
+     R$ 78.829,04 — uma loja maior que a rede.
+
+     A escala é a fatia MEDIDA que a janela ocupa no faturamento da amostra, a
+     mesma que o KPI usa. Com isso a soma das quebras volta a fechar com o total
+     em qualquer recorte. É projeção, e sai marcada como tal.
+  */
+  const escalaDeData = porDataExata ? 1 : fatiaDaJanela(days);
+  if (escalaDeData !== 1) {
+    aproximado = true;
+    rows = rows.map((r) => ({
+      ...r,
+      total: round2(r.total * escalaDeData),
+      count: Math.round(r.count * escalaDeData),
+    }));
+  }
+
+  rows.sort((a, b) => b.total - a.total);
+  return aproximado ? { by, rows, aproximado } : { by, rows };
 }
 
 const realSalesByProduct = new Map((real?.productSales ?? []).map((x) => [`pr_${x.externalId}`, x]));
@@ -545,6 +549,34 @@ const realSalesByProduct = new Map((real?.productSales ?? []).map((x) => [`pr_${
  * (ABC, análise e giro contam a mesma história).
  */
 let soldItemsCache: { p: Product; revenue: number; units: number }[] | null = null;
+/**
+ * Recorte de produto dos relatórios: grupo do console ∩ tipo escolhido na
+ * tela. Mesma regra pura da API (matchesProductGroup) — e a MESMA para SKU e
+ * para marca, que era o pedido: o filtro não pode sumir ao trocar a dimensão.
+ */
+function noRecorte(group: ProductGroup, category?: string | string[]) {
+  const sel = asSet(category);
+  return (p: { category: string }) => matchesProductGroup(p.category, group) && (!sel || sel.has(p.category));
+}
+
+/**
+ * Itens vendidos, opcionalmente recortados a UMA loja. As unidades saem exatas
+ * do mapa por (loja × produto); a receita é rateada pela participação da loja
+ * nas unidades daquele produto, porque o dataset não traz receita por loja ×
+ * produto. Ratear o que ele traz é melhor que deixar o filtro de loja sem
+ * efeito — e a régua está declarada aqui.
+ */
+function soldItemsScoped(storeId?: string) {
+  if (!storeId) return soldItems();
+  return soldItems()
+    .map((x) => {
+      const un = soldQty.get(key(storeId, x.p.id)) ?? 0;
+      const rede = stores.reduce((a, s) => a + (soldQty.get(key(s.id, x.p.id)) ?? 0), 0);
+      return { p: x.p, units: un, revenue: round2(x.revenue * (rede > 0 ? un / rede : 0)) };
+    })
+    .filter((x) => x.units > 0);
+}
+
 function soldItems() {
   soldItemsCache ??= products
     .map((p) => {
@@ -571,9 +603,9 @@ function brandLabel(p: { description: string; brand: string; category: string })
  * Calculado do catálogo, e não dos agregados prontos do dataset, para bater
  * com o que a API faz — os agregados são por fornecedor e incluem lente.
  */
-function brandSales() {
+function brandSales(itens: { p: { description: string; brand: string; category: string; id: string }; revenue: number; units: number }[] = soldItems()) {
   const acc = new Map<string, { revenue: number; units: number }>();
-  for (const x of soldItems()) {
+  for (const x of itens) {
     if (!isBrandAnalysable(x.p.category)) continue;
     const k = brandLabel(x.p);
     const cur = acc.get(k) ?? { revenue: 0, units: 0 };
@@ -584,44 +616,384 @@ function brandSales() {
   return acc;
 }
 
-function abc(days: number, dimension: 'product' | 'brand') {
+function abc(
+  days: number,
+  dimension: 'product' | 'brand',
+  group: ProductGroup = 'todos',
+  category?: string | string[],
+  storeId?: string,
+) {
+  // Um único recorte para as duas dimensões — trocar SKU por marca não mexe
+  // em filtro nenhum.
+  /*
+     O item vendido não tem dia — cobre a amostra inteira. Sem esta escala a
+     curva mostrava a receita dos 7 dias sob um rótulo de 1 dia, e o total da
+     tela discordava do BI para o mesmo recorte. A fatia é a mesma que o BI usa,
+     medida na série diária; as CLASSES não se movem, porque a classificação
+     ABC é feita sobre participação relativa e escala não muda proporção.
+  */
+  const escalaDeData = fatiaDaJanela(days);
+  const vendidos = soldItemsScoped(storeId)
+    .filter((x) => noRecorte(group, category)(x.p))
+    .map((x) =>
+      escalaDeData === 1
+        ? x
+        : { ...x, revenue: round2(x.revenue * escalaDeData), units: Math.round(x.units * escalaDeData) },
+    );
   let items: AbcItem[];
   if (dimension === 'brand') {
     // Mesmo cálculo nos dois sabores da demo (fictício e real) e igual ao da
     // API: marca extraída da descrição e recorte de produto de moda.
-    const acc = brandSales();
+    const acc = brandSales(vendidos);
     items = [...acc.entries()].map(([label, v]) => ({
       key: label, label: label || 'Sem marca', brand: null, category: null, ...v,
     }));
   } else {
-    items = soldItems().map((x) => ({
+    items = vendidos.map((x) => ({
       key: x.p.id, label: x.p.description, brand: x.p.brand, category: x.p.category,
       revenue: x.revenue, units: x.units,
     }));
   }
+  // Receita do período sem recorte: é o denominador que faltava na tela.
+  // Da rede quando o dataset traz o agregado; da amostra quando não traz.
+  const periodRevenue = storeId
+    ? round2(soldItemsScoped(storeId).reduce((a, x) => a + x.revenue, 0) * escalaDeData)
+    : real
+      ? // Da série diária, e não de `totals.revenue30d`: o total gravado é o da
+        // amostra inteira, e este número é o denominador DO RECORTE PEDIDO.
+        vendasNaJanela(days).total
+      : round2(soldItems().reduce((a, x) => a + x.revenue, 0));
+  // Feedbacks 5.0, item 05 ("a curva ABC ainda traz pouco produto"): não é
+  // filtro comendo linha — é a janela. A extração do CDS que alimenta a demo
+  // cobre 7 dias, e só entra na curva quem VENDEU no período. O catálogo tem
+  // 21.683 SKUs e 727 tiveram movimento. A tela precisa desses dois números
+  // para dizer isso ao operador em vez de parecer quebrada.
+  const skusComVenda = new Set(vendidos.map((x) => x.p.id)).size;
   // A classificação (ponto médio, resumo por classe) é a MESMA do backend.
-  return abcFromItems(items, days, dimension);
+  return {
+    ...abcFromItems(items, days, dimension),
+    periodRevenue,
+    skusComVenda,
+    skusNoCatalogo: real?.totals?.productCountNetwork ?? products.length,
+    janelaRealDias: real ? realWindowDays : days,
+  };
 }
 
 /**
- * A fotografia real só tem 30 dias de vendas: qualquer período pedido acima
- * disso usaria os mesmos números como se fossem do período maior e INFLARIA
- * a cobertura (30/days). Em modo real, a janela efetiva é sempre 30.
+ * Janela real de vendas do dataset, MEDIDA na série diária.
+ *
+ * Não confie no rótulo: o arquivo atual se descreve como "30 dias de vendas"
+ * e carrega 7 (07/07 a 13/07) — as fixtures saíram com a janela padrão da
+ * sonda. Dividir 7 dias de venda por 30 faz toda demanda diária sair 4,3x
+ * menor, o que inflou a cobertura para 60–150 meses e fez produto saudável
+ * ser classificado como parado. Medir em vez de acreditar custa três linhas.
  */
-const effectiveDays = (days: number) => (real ? 30 : days);
+function medirJanela(): number {
+  const dias = real?.dailySales?.map((d) => d.date).filter(Boolean).sort() ?? [];
+  if (dias.length === 0) return 30;
+  const ini = Date.parse(dias[0]);
+  const fim = Date.parse(dias[dias.length - 1]);
+  if (!Number.isFinite(ini) || !Number.isFinite(fim)) return 30;
+  return Math.max(1, Math.round((fim - ini) / 86_400_000) + 1);
+}
+const realWindowDays = real ? medirJanela() : 0;
+
+/** Janela do sabor FICTÍCIO — ver `serieFicticia`, mais abaixo. */
+const JANELA_FICTICIA = 180;
+
+/**
+ * Dias que a amostra em uso realmente cobre: 7 na fotografia do CDS, 180 no
+ * sabor fictício. Ter UM número para os dois é o que permite ao recorte por
+ * data funcionar igual nos dois lados — e o CI roda só o fictício.
+ */
+const janelaDaAmostra = real ? realWindowDays : JANELA_FICTICIA;
+
+/** Janela que a amostra estática realmente responde. */
+export interface CoberturaDaAmostra {
+  /** Dias de venda medidos na série diária. */
+  dias: number;
+  /** Primeiro dia com venda (ISO). */
+  de: string;
+  /** Último dia com venda (ISO). */
+  ate: string;
+  /**
+   * O desempenho por loja é recortável DIA A DIA (amostra de até 7 dias, em que
+   * o dia da semana identifica a data) ou só proporcionalmente? A interface usa
+   * isto para não prometer medição onde há projeção.
+   */
+  lojaPorDataExata: boolean;
+}
+
+/**
+ * Cobertura da amostra, para a INTERFACE — o contrário de esconder o limite.
+ *
+ * A matemática já respeitava a janela medida (`effectiveDays`), mas o filtro
+ * continuava oferecendo 30, 90 e 180 dias e devolvendo sempre os mesmos sete:
+ * quem escolhia 30 via o número de 7 com o rótulo de 30 e concluía, com razão,
+ * que o filtro não funcionava. Expondo a cobertura, a tela passa a oferecer só
+ * o que a fotografia responde.
+ *
+ * Devolve `null` quando não há amostra real embarcada (dataset fictício, que é
+ * gerado para a janela inteira) — nesse caso não existe limite a declarar.
+ */
+export function coberturaDoDataset(): CoberturaDaAmostra | null {
+  if (!real) return null;
+  const dias = (real.dailySales ?? []).map((d) => d.date).filter(Boolean).sort();
+  if (dias.length === 0) return null;
+  return {
+    dias: realWindowDays,
+    de: dias[0],
+    ate: dias[dias.length - 1],
+    lojaPorDataExata: lojaPorDataEhExata(),
+  };
+}
+
+/**
+ * Janela que a resposta REALMENTE cobre.
+ *
+ * Pedir mais do que a fotografia tem devolve o que ela tem (senão a cobertura
+ * infla); pedir MENOS é um recorte legítimo, e agora ele é respeitado — era o
+ * que fazia o filtro não mover número nenhum dentro da amostra.
+ */
+const effectiveDays = (days: number) => Math.max(1, Math.min(days, janelaDaAmostra));
+
+
+/* ───────────────────────────────────────────────────────────────────────────
+   RECORTE POR DATA DENTRO DA AMOSTRA
+
+   O que a fotografia mede com data, e portanto responde ao filtro:
+     · dailySales   — faturamento e nº de vendas por DIA;
+     · weekdayStore — faturamento por loja × dia da semana. Como a amostra tem
+       exatamente 7 dias, cada dia da semana aparece uma única vez: o dia da
+       semana é um proxy EXATO da data. Conferido dia a dia contra a série
+       diária — bate ao centavo nos sete.
+
+   O que não tem data e por isso não pode ser recortado: as quebras por marca,
+   categoria, produto, vendedor e forma de pagamento vêm da sonda como total do
+   período. Elas continuam mostrando a amostra inteira, e a interface diz isso
+   (ver LegendaDaAmostra) em vez de deixar o rótulo do filtro mentir.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Janela do sabor FICTÍCIO. O comentário de `coberturaDoDataset` sempre disse
+ * que o dataset fictício "é gerado para a janela inteira" — e não era: o ramo
+ * sem dados reais de `timeseries()` sorteava `money(3000, 14000)` A CADA
+ * CHAMADA, com um RNG que avança de estado, e `vendasNaJanela`/`fatiaDaJanela`
+ * devolviam o total do período inteiro para qualquer janela.
+ *
+ * O efeito era invisível aqui (o desenvolvimento roda com o JSON real) e fatal
+ * no CI, que roda só o fictício: o KPI mostrava R$ 241.644 ao lado de uma série
+ * que somava R$ 3.243, a soma por loja estourava a rede em 8,6% e a análise de
+ * vendas de 1 dia era idêntica à de 7. Três testes vermelhos, uma causa.
+ *
+ * Agora o fictício tem série diária DE VERDADE: 180 dias, gerada uma vez na
+ * carga do módulo e memoizada. Como todo o resto já lê a janela por
+ * `diasNaJanela`/`vendasNaJanela`/`fatiaDaJanela`, os dois sabores passam a
+ * responder ao filtro pelo mesmo caminho.
+ */
+type PontoDiario = { date: string; total: number; count: number };
+let serieCache: PontoDiario[] | null = null;
+
+/**
+ * A série diária do sabor em uso — é ela que define a janela dos dois lados.
+ *
+ * No fictício ela é gerada uma vez e ESCALADA para somar exatamente o
+ * faturamento do catálogo (`soldItems`). Sem isso, série e itens vendidos são
+ * dois universos aleatórios independentes: a fatia de 1 dia calculada na série
+ * multiplicava um total de outra ordem de grandeza, e a soma por loja saía 83%
+ * fora da rede. É a mesma propriedade que a fotografia do CDS tem de graça —
+ * lá o dia a dia e o item vendido vêm da mesma extração.
+ *
+ * Preguiçosa de propósito: `soldItems()` só existe depois deste ponto do módulo.
+ */
+function serieDiaria(): PontoDiario[] {
+  if (real) return (serieCache ??= real.dailySales.map((d) => ({ date: d.date, total: d.total, count: d.count })));
+  if (serieCache) return serieCache;
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const bruta = Array.from({ length: JANELA_FICTICIA }, (_, i) => {
+    const d = new Date(hoje);
+    d.setDate(d.getDate() - (JANELA_FICTICIA - 1 - i));
+    return { date: d.toISOString().slice(0, 10), peso: money(3000, 14000), count: int(2, 9) };
+  });
+  const somaPesos = bruta.reduce((a, x) => a + x.peso, 0) || 1;
+  const alvo = round2(soldItems().reduce((a, x) => a + x.revenue, 0));
+  const somaContagens = bruta.reduce((a, x) => a + x.count, 0) || 1;
+  serieCache = bruta.map((x) => ({
+    date: x.date,
+    total: round2((x.peso / somaPesos) * alvo),
+    count: Math.max(1, Math.round((x.count / somaContagens) * salesCount)),
+  }));
+  return serieCache;
+}
+
+/** Datas medidas, em ordem crescente. */
+const datasDaAmostra = () => serieDiaria().map((d) => d.date).sort();
+
+/** Dia da semana (domingo = 0) de uma data ISO, sem depender do fuso local. */
+const diaDaSemana = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+
+/** Os N últimos dias medidos — o recorte que o filtro pediu. */
+function diasNaJanela(days: number): string[] {
+  return datasDaAmostra().slice(-effectiveDays(days));
+}
+
+/** Faturamento e nº de vendas da rede no recorte, somados da série diária. */
+function vendasNaJanela(days: number): { total: number; count: number } {
+  const dias = new Set(diasNaJanela(days));
+  let total = 0;
+  let count = 0;
+  for (const d of serieDiaria()) {
+    if (!dias.has(d.date)) continue;
+    total += d.total;
+    count += d.count;
+  }
+  return { total: round2(total), count };
+}
+
+/**
+ * Quanto o recorte de datas pesa na amostra inteira.
+ *
+ * É o fator que leva um número medido no período todo para dentro da janela,
+ * quando o dado não tem dia (unidades vendidas do recorte de produto, por
+ * exemplo). Fora da amostra real vale 1 — nada é projetado.
+ */
+function fatiaDaJanela(days: number): number {
+  const total = vendasNaJanela(janelaDaAmostra).total;
+  return total > 0 ? vendasNaJanela(days).total / total : 1;
+}
+
+/** Quantas vezes cada dia da semana aparece numa lista de datas. */
+function ocorrenciasPorDiaDaSemana(datas: string[]): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const d of datas) {
+    const wd = diaDaSemana(d);
+    m.set(wd, (m.get(wd) ?? 0) + 1);
+  }
+  return m;
+}
+
+/**
+ * A reconstrução por loja é EXATA?
+ *
+ * Só quando cada dia da semana aparece no máximo uma vez na amostra — ou seja,
+ * até 7 dias. Aí "quinta-feira" identifica UMA data e o balde de `weekdayStore`
+ * é o faturamento daquele dia.
+ *
+ * Numa amostra de 30 dias, "quinta" acumula ~4 datas no mesmo balde e não há
+ * como separá-las: a reconstrução vira proporcional (ver abaixo). Sem esta
+ * distinção o recorte de 7 dias numa amostra de 30 devolvia o faturamento dos
+ * 30 — medido, R$ 4,53 mi no lugar de R$ 1,08 mi, com o KPI ao lado mostrando o
+ * número certo. Duas respostas para a mesma pergunta, na mesma tela.
+ */
+const lojaPorDataEhExata = () =>
+  real ? [...ocorrenciasPorDiaDaSemana(datasDaAmostra()).values()].every((n) => n <= 1) : false;
+
+/**
+ * Faturamento por loja no recorte, a partir de `weekdayStore`.
+ *
+ * Cada balde entra na proporção das suas ocorrências DENTRO da janela sobre as
+ * ocorrências na amostra inteira. Numa amostra de até 7 dias essa razão é 1 ou
+ * 0, e o resultado é a medição exata; em amostras maiores ela reparte o balde
+ * entre as datas que ele agrega, que é a melhor resposta possível sem uma
+ * quebra por dia que a sonda não traz.
+ *
+ * O nº de VENDAS por loja não tem quebra diária; é rateado pela fatia de
+ * faturamento da loja no recorte e só alimenta rótulos secundários.
+ */
+function salesByStoreNaJanela(days: number): typeof salesByStore {
+  if (!real) return salesByStore;
+  const naJanela = ocorrenciasPorDiaDaSemana(diasNaJanela(days));
+  const naAmostra = ocorrenciasPorDiaDaSemana(datasDaAmostra());
+  const porLoja = new Map<string, number>();
+  for (const w of real.weekdayStore) {
+    const dentro = naJanela.get(w.weekday) ?? 0;
+    const total = naAmostra.get(w.weekday) ?? 0;
+    if (dentro === 0 || total === 0) continue;
+    porLoja.set(w.storeExt, (porLoja.get(w.storeExt) ?? 0) + w.total * (dentro / total));
+  }
+  return real.salesByStore.map((s) => {
+    const total = round2(porLoja.get(s.externalId) ?? 0);
+    const fatia = s.total > 0 ? total / s.total : 0;
+    return {
+      storeId: `st_${s.externalId}`,
+      storeName: s.name,
+      count: Math.round(s.count * fatia),
+      total,
+    };
+  });
+}
 
 /** Cobertura geral e por marca (feedback 06). */
-function brandCoverageReport(rawDays: number) {
+/**
+ * Estoque e venda da REDE no recorte, da MESMA fonte que a cobertura por loja
+ * do dashboard (`storeCategory`). Existe porque as duas telas mostravam
+ * coberturas diferentes: o dashboard lê a rede, e a tabela por marca só
+ * consegue ler a amostra de catálogo da demonstração — 2.144 un. contra
+ * 40.563. Galbe viu 1,5 mês aqui e ~26 meses lá. Agora a linha GERAL sai da
+ * mesma fonte, e as linhas por marca declaram que são a amostra.
+ */
+/**
+ * Estoque da rede no recorte — a MESMA conta no painel e no BI.
+ *
+ * As duas telas respondiam a pergunta "quantas unidades a rede tem neste
+ * recorte" por caminhos diferentes: o painel somava o agregado da sonda
+ * inteiro, o BI somava o catálogo amostrado, e no recorte "Tudo" isso dava
+ * 211.026 contra 112.515 no mesmo instante. Uma função só, para não voltarem a
+ * divergir.
+ *
+ * Sem loja escolhida o número é o da REDE — inclui centro de distribuição e
+ * assistência, que têm estoque de verdade. Com loja escolhida, só aquela loja.
+ */
+function estoqueDaRedeNoRecorte(
+  group: ProductGroup,
+  category?: string | string[],
+  storeId?: string,
+): number | null {
+  const porCategoria = real?.storeCategory;
+  if (!porCategoria || porCategoria.length === 0) return null;
+  const sel = asSet(category);
+  const alvo = storeId ? stores.find((s) => s.id === storeId)?.externalId : null;
+  let unidades = 0;
+  for (const r of porCategoria) {
+    if (!matchesProductGroup(r.label, group)) continue;
+    if (sel && !sel.has(r.label)) continue;
+    if (alvo && r.storeExt !== alvo) continue;
+    unidades += r.stockUnits;
+  }
+  return unidades;
+}
+
+function redeNoRecorte(group: ProductGroup, category?: string | string[], storeId?: string) {
+  const porCategoria = real?.storeCategory;
+  if (!porCategoria || porCategoria.length === 0) return null;
+  const sel = asSet(category);
+  let stockUnits = 0;
+  let unitsSold = 0;
+  for (const r of porCategoria) {
+    if (!matchesProductGroup(r.label, group)) continue;
+    if (sel && !sel.has(r.label)) continue;
+    const s = stores.find((x) => x.externalId === r.storeExt);
+    if (!s || (storeId && s.id !== storeId)) continue;
+    stockUnits += r.stockUnits;
+    unitsSold += r.soldUnits;
+  }
+  return { stockUnits, unitsSold };
+}
+
+function brandCoverageReport(rawDays: number, group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
   const days = effectiveDays(rawDays);
+  const dentro = noRecorte(group, category);
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
   // Do catálogo, não do agregado pronto do dataset: o agregado é por
   // FORNECEDOR e inclui lente. Aqui vale o recorte da análise de marca — o
   // mesmo da API e o mesmo nos dois sabores da demo.
   const acc = new Map<string, { stockUnits: number; unitsSold: number }>();
   for (const p of products) {
-    if (!isBrandAnalysable(p.category)) continue;
+    if (!isBrandAnalysable(p.category) || !dentro(p)) continue;
     const k = brandLabel(p);
     const cur = acc.get(k) ?? { stockUnits: 0, unitsSold: 0 };
-    for (const st of stores) {
+    for (const st of escopo) {
       cur.stockUnits += stockQty.get(key(st.id, p.id)) ?? 0;
       cur.unitsSold += soldQty.get(key(st.id, p.id)) ?? 0;
     }
@@ -629,16 +1001,25 @@ function brandCoverageReport(rawDays: number) {
   }
   const inputs = [...acc.entries()].map(([label, v]) => ({ key: label, label, ...v }));
   const rows = computeCoverage(inputs, days);
+  const naAmostra = {
+    stockUnits: rows.reduce((a, r) => a + r.stockUnits, 0),
+    unitsSold: rows.reduce((a, r) => a + r.unitsSold, 0),
+  };
+  // A linha GERAL vem da REDE, para bater com a cobertura do dashboard.
+  const rede = redeNoRecorte(group, category, storeId);
   const [total] = computeCoverage(
-    [{
-      key: '__total__',
-      label: 'GERAL',
-      stockUnits: rows.reduce((a, r) => a + r.stockUnits, 0),
-      unitsSold: rows.reduce((a, r) => a + r.unitsSold, 0),
-    }],
+    [{ key: '__total__', label: 'GERAL', ...(rede ?? naAmostra) }],
     days,
   );
-  return { days, total, rows };
+  return {
+    days,
+    total,
+    rows,
+    // Quando as linhas cobrem menos que o total, a tela precisa dizer.
+    ...(rede && rede.stockUnits > naAmostra.stockUnits
+      ? { sampled: { stockUnits: naAmostra.stockUnits, networkStockUnits: rede.stockUnits } }
+      : {}),
+  };
 }
 
 /** Vendas por dimensão em unidades E receita (feedback 10). */
@@ -688,112 +1069,143 @@ function salesAnalysisReport(rawDays: number, by: string) {
     }
     rows = [...acc.entries()].map(([label, v]) => ({ key: label, label: label || '—', ...v }));
   }
+
+  // Mesma escala do BI e do ABC: nenhuma destas dimensões tem dia na amostra, e
+  // sem ela a tabela ficava com o total da amostra sob o rótulo do recorte.
+  const escalaDeData = fatiaDaJanela(days);
+  if (escalaDeData !== 1) {
+    rows = rows.map((r) => ({
+      ...r,
+      units: Math.round(r.units * escalaDeData),
+      revenue: round2(r.revenue * escalaDeData),
+    }));
+  }
+
   rows.sort((a, b) => b.units - a.units);
   return { days, by, rows: rows.slice(0, 500) };
 }
 
-function turnover(days: number) {
+function turnover(days: number, group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
+  const dentro = noRecorte(group, category);
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
   return {
     days,
-    rows: products.map((p) => {
-      const unitsSold = real ? realSalesByProduct.get(p.id)?.units ?? 0 : int(0, 60);
-      const currentStock = stores.reduce((a, s) => a + (stockQty.get(key(s.id, p.id)) ?? 0), 0);
+    rows: products.filter(dentro).map((p) => {
+      const unitsSold = storeId
+        ? soldQty.get(key(storeId, p.id)) ?? 0
+        : real
+          ? realSalesByProduct.get(p.id)?.units ?? 0
+          : int(0, 60);
+      const currentStock = escopo.reduce((a, s) => a + (stockQty.get(key(s.id, p.id)) ?? 0), 0);
       return {
         productId: p.id, description: p.description, brand: p.brand, category: p.category,
         unitsSold, currentStock, turnover: round2(unitsSold / Math.max(currentStock, 1)),
-        daysOfInventory: unitsSold > 0 ? round2(currentStock / (unitsSold / days)) : null,
+        // `effectiveDays` e não `days`: a venda deste bloco é a MEDIDA na
+        // amostra (7 dias). Dividindo por 30 a demanda diária saía 4,3x menor e
+        // a cobertura em dias, 4,3x maior — o mesmo erro que `medirJanela`
+        // existe para evitar, e que aqui tinha escapado.
+        daysOfInventory:
+          unitsSold > 0 ? round2(currentStock / (unitsSold / effectiveDays(days))) : null,
       };
     }).sort((a, b) => b.turnover - a.turnover),
   };
 }
 
-function salesFlow(days: number, storeId?: string) {
+function salesFlow(group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
   const links: { source: string; target: string; value: number }[] = [];
   const names = new Set<string>();
-  const share = windowShare(days);
-  const st = scopedStore(storeId);
   if (real) {
-    const scope = scopedStores(storeId);
-    const ids = new Set(scope.map((s) => s.id));
-    const tops = [...salesByStore.filter((s) => ids.has(s.storeId))]
-      .sort((a, b) => b.total - a.total)
-      .slice(0, st ? 1 : 8);
-    if (st) {
-      // Loja filtrada: reparte o faturamento dela pelo mix de categorias DELA.
-      const mix = storeMix('category', st.externalId);
-      const units = [...mix.values()].reduce((a, b) => a + b, 0);
-      const storeTotal = (tops[0]?.total ?? 0) * share;
-      if (units > 0)
-        for (const [label, u] of [...mix.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)) {
-          const v = round2((storeTotal * u) / units);
-          if (v <= 0) continue;
-          links.push({ source: label, target: st.name, value: v });
-          names.add(label);
-          names.add(st.name);
-        }
-      return { days: effectiveWindowDays(days), nodes: [...names].map((name) => ({ name })), links };
-    }
-    // Rede: total real da categoria × participação real da loja no faturamento.
-    const cats = [...real.byCategory].sort((a, b) => b.total - a.total).slice(0, 6);
+    // Alocação proporcional: total real da categoria × participação real da
+    // loja no faturamento (top 6 × top 8 para o sankey respirar). As duas
+    // pontas agora saem do recorte: a categoria vem do item vendido dentro
+    // dele, e a loja, quando escolhida, é a única do fluxo.
+    const porCategoria = byDimension('category', group, category, storeId).rows;
+    const cats = porCategoria.slice(0, 6);
+    const lojas = byDimension('store', group, category, storeId).rows;
+    const tops = lojas.slice(0, 8).map((r) => ({ storeName: r.label, total: r.total }));
     const topTotal = tops.reduce((a, b) => a + b.total, 0) || 1;
     for (const cat of cats)
-      for (const s of tops) {
-        const v = round2((cat.total * s.total * share) / topTotal);
+      for (const st of tops) {
+        const v = round2((cat.total * st.total) / topTotal);
         if (v <= 0) continue;
-        links.push({ source: cat.label, target: s.storeName, value: v });
+        links.push({ source: cat.label, target: st.storeName, value: v });
         names.add(cat.label);
-        names.add(s.storeName);
+        names.add(st.storeName);
       }
-    return { days: effectiveWindowDays(days), nodes: [...names].map((name) => ({ name })), links };
+    return { nodes: [...names].map((name) => ({ name })), links };
   }
-  for (const cat of CATEGORIAS)
-    for (const s of scopedStores(storeId)) {
-      const v = round2(money(2000, 25000) * share);
-      links.push({ source: cat, target: s.name, value: v });
+  // Catálogo fictício: o mesmo recorte, senão o sabor sem dados reais fica
+  // com um sankey da rede inteira enquanto o resto da tela já obedece.
+  const dentro = noRecorte(group, category);
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
+  for (const cat of CATEGORIAS.filter((c) => dentro({ category: c })))
+    for (const st of escopo) {
+      const v = money(2000, 25000);
+      links.push({ source: cat, target: st.name, value: v });
       names.add(cat);
-      names.add(s.name);
+      names.add(st.name);
     }
-  return { days: effectiveWindowDays(days), nodes: [...names].map((name) => ({ name })), links };
-}
-
-function transferFlow(storeId?: string) {
-  // Fluxo derivado das movimentações da própria demo (estado real da sessão),
-  // filtrado pela loja selecionada — origem OU destino.
-  const st = scopedStore(storeId);
-  const agg = new Map<string, number>();
-  for (const mv of movements) {
-    if (mv.type !== 'TRANSFER') continue;
-    const from = mv.fromStore as { id?: string; name?: string } | null;
-    const to = mv.toStore as { id?: string; name?: string } | null;
-    if (!from?.name || !to?.name) continue;
-    if (st && from.id !== st.id && to.id !== st.id) continue;
-    const k = `Origem: ${from.name}|Destino: ${to.name}`;
-    agg.set(k, (agg.get(k) ?? 0) + (Number(mv.quantity) || 0));
-  }
-  const names = new Set<string>();
-  const links = [...agg.entries()].map(([k, value]) => {
-    const [source, target] = k.split('|');
-    names.add(source);
-    names.add(target);
-    return { source, target, value };
-  });
   return { nodes: [...names].map((name) => ({ name })), links };
 }
 
-function heatmap(days: number, storeId?: string) {
-  const scope = scopedStores(storeId);
-  const yLabels = scope.map((s) => s.name);
-  const share = windowShare(days);
+/**
+ * Sankey de transferências. Era um par de setas fixo, escrito à mão, que
+ * ignorava período, loja e recorte — o único gráfico da tela que não respondia
+ * a nada. Agora sai das movimentações que a demo realmente tem (a semente e
+ * tudo que o operador criar na sessão), com o mesmo recorte dos outros.
+ */
+function transferFlow(group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
+  const dentro = noRecorte(group, category);
+  const links: { source: string; target: string; value: number }[] = [];
+  const names = new Set<string>();
+  for (const m of movements) {
+    if (m.type !== 'TRANSFER') continue;
+    const de = (m.fromStore as { id: string; name: string } | null)?.name;
+    const para = (m.toStore as { id: string; name: string } | null)?.name;
+    const deId = (m.fromStore as { id: string } | null)?.id;
+    const paraId = (m.toStore as { id: string } | null)?.id;
+    if (!de || !para) continue;
+    if (storeId && deId !== storeId && paraId !== storeId) continue;
+    const prod = prodById((m.product as { id: string }).id);
+    if (prod && !dentro(prod)) continue;
+    // Prefixo evita ciclo no sankey (A→B e B→A viram nós distintos).
+    const origem = `Origem: ${de}`;
+    const destino = `Destino: ${para}`;
+    const existente = links.find((l) => l.source === origem && l.target === destino);
+    if (existente) existente.value += Number(m.quantity) || 0;
+    else links.push({ source: origem, target: destino, value: Number(m.quantity) || 0 });
+    names.add(origem);
+    names.add(destino);
+  }
+  return { nodes: [...names].map((name) => ({ name })), links };
+}
+
+function heatmap(fatia = 1, aproximado = false, storeId?: string, days = 0) {
+  // A sonda traz loja × dia da semana sem quebra por categoria: mesma regra da
+  // série diária — projeta pela fatia do recorte de PRODUTO e declara a
+  // aproximação. Já o recorte de DATA é exato: o dia da semana fora da janela
+  // sai do mapa em vez de aparecer como se tivesse sido medido nela.
+  const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
+  const yLabels = escopo.map((s) => s.name);
   const cells: [number, number, number][] = [];
   if (real) {
+    const naJanela = days > 0 ? new Set(diasNaJanela(days).map(diaDaSemana)) : null;
     const byKey = new Map(real.weekdayStore.map((w) => [`${w.storeExt}|${w.weekday}`, w.total]));
-    scope.forEach((s, yi) =>
-      WEEK.forEach((_, wd) => cells.push([wd, yi, Math.round((byKey.get(`${s.externalId}|${wd}`) ?? 0) * share)])),
+    escopo.forEach((s, yi) =>
+      WEEK.forEach((_, wd) =>
+        cells.push([
+          wd,
+          yi,
+          naJanela && !naJanela.has(wd)
+            ? 0
+            : Math.round((byKey.get(`${s.externalId}|${wd}`) ?? 0) * fatia),
+        ]),
+      ),
     );
   } else {
-    yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000) * share)])));
+    yLabels.forEach((_, yi) => WEEK.forEach((__, wd) => cells.push([wd, yi, Math.round(money(500, 9000) * fatia)])));
   }
-  return { xLabels: WEEK, yLabels, cells };
+  return { xLabels: WEEK, yLabels, cells, ...(aproximado ? { aproximado: true } : {}) };
 }
 
 function cartView() {
@@ -875,6 +1287,11 @@ function lastSixAm(): Date {
 }
 
 const demoBatchAt = lastSixAm();
+
+/** Semente estável por produto, para a idade não mudar entre recargas. */
+function cardIdParaProduto(productId: string): string {
+  return `LIQUIDACAO|${productId}`;
+}
 
 /** Hash estável do id do card → 0..99. */
 function cardSeed(cardId: string): number {
@@ -965,33 +1382,109 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   }
 
   // Dashboard
-  if (url === '/dashboard/summary')
+  if (url === '/dashboard/summary') {
+    // Feedback 01 do Galbe: "mostram 211.026 unidades, sendo que temos algo em
+    // torno de 35k". Os 211 mil são a rede INTEIRA: tratamento (55k), lentes
+    // (48k) e outros (28k) respondem por 170 mil deles. O KPI passa a respeitar
+    // o recorte, como as demais telas — no recorte de óculos dá 40.563.
+    const g = productGroup(params.group);
+    const unidades =
+      estoqueDaRedeNoRecorte(g) ??
+      // Sem o agregado da rede, soma o catálogo local — e soma do MESMO jeito
+        // em todo recorte. O atalho que 'todos' tinha aqui lia `stockQty`
+      // inteiro, incluindo CD e assistência, que `stores` exclui: os quatro
+      // recortes não fechavam com o total por causa de loja, não de produto.
+      products.reduce(
+        (a, p) =>
+          a +
+          (matchesProductGroup(p.category, g)
+            ? stores.reduce((b, st) => b + (stockQty.get(key(st.id, p.id)) ?? 0), 0)
+            : 0),
+        0,
+      );
+    // SKUs: o número da REDE, não o do catálogo amostrado que a demo carrega.
+    // "Não temos só 1631 SKU's" — correto: a rede tem 21.683.
+    //
+    // Feedbacks 5.0, item 01: "a quantidade total de produtos permanece 21683
+    // independente da categoria que escolho em cima". Era verdade, e a culpa
+    // era desta linha — o total da rede entrava cru, sem passar pelo recorte.
+    // A rede só nos manda a CONTAGEM de SKUs, não o catálogo inteiro, então o
+    // recorte é aplicado pela fatia que o grupo ocupa na amostra e o número
+    // vai à tela marcado como estimado. Estimar e dizer que estimou é honesto;
+    // repetir o total da rede em todo recorte não é.
+    const skusNaRede = real?.totals?.productCountNetwork;
+    const skusNoRecorte = products.filter((p) => matchesProductGroup(p.category, g)).length;
+    const fatia = products.length > 0 ? skusNoRecorte / products.length : 0;
+    const skus =
+      skusNaRede == null
+        ? skusNoRecorte
+        : g === 'todos'
+          ? skusNaRede
+          : Math.round(skusNaRede * fatia);
     return {
-      stores: stores.length, products: products.length, customers: 40, stockUnits,
+      stores: stores.length,
+      products: skus,
+      productsEstimated: skusNaRede != null && g !== 'todos',
+      productsNetwork: skusNaRede,
+      productsSampled: real ? skusNoRecorte : undefined,
+      customers: 40,
+      stockUnits: unidades,
       pendingMovements: movements.filter((x) => ['REQUESTED', 'PENDING'].includes(x.status as string)).length,
       sales30d: { count: salesCount, total: revenue },
       lastSync: { status: 'SUCCESS', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), recordsWritten: 982, window: '06:00-07:00' },
     };
+  }
   if (url === '/dashboard/sales-by-store') return { rows: salesByStore };
   if (url === '/dashboard/coverage') {
     // Com dados reais, usa os totais POR LOJA da rede inteira (storeStats);
     // sem eles (dataset antigo ou fictício), soma o catálogo local.
-    const inputs: StoreCoverageInput[] = real?.storeStats
-      ? real.storeStats.flatMap((st) => {
-          // `stores` já exclui centro de distribuição, assistência e estoque de
-          // compras. Sem este filtro elas voltavam pelo agregado, sem nome
-          // ("Loja 12") e sempre no topo como excesso — não são ponto de venda.
-          const s = stores.find((x) => x.externalId === st.externalId);
-          if (!s) return [];
-          return [{ storeId: s.id, storeName: s.name, stockUnits: st.stockUnits, unitsSold: st.soldUnits }];
-        })
-      : stores.map((s) => ({
-          storeId: s.id,
-          storeName: s.name,
-          stockUnits: products.reduce((a, prod) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
-          unitsSold: products.reduce((a, prod) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
-        }));
-    return { days, rows: computeStoreCoverage(inputs, days) };
+    const grupo = productGroup(params.group);
+    // `storeCategory` traz estoque e venda por loja E por categoria, da rede
+    // inteira — é o que permite aplicar o recorte sem subcontar pela amostra
+    // do catálogo. `storeStats` é o total COM lente, e usá-lo aqui era metade
+    // da cobertura defasada que o Galbe apontou: lente é estoque em volume e
+    // venda sob encomenda, então empurra a cobertura para anos.
+    const porCategoria = real?.storeCategory;
+    const inputs: StoreCoverageInput[] =
+      porCategoria && porCategoria.length > 0
+        ? (() => {
+            const acc = new Map<string, StoreCoverageInput>();
+            for (const r of porCategoria) {
+              if (!matchesProductGroup(r.label, grupo)) continue;
+              // `stores` já exclui CD, assistência e estoque de compras — sem
+              // isto elas voltavam pelo agregado, sem nome e sempre no topo.
+              const s = stores.find((x) => x.externalId === r.storeExt);
+              if (!s) continue;
+              const cur = acc.get(s.id) ?? { storeId: s.id, storeName: s.name, stockUnits: 0, unitsSold: 0 };
+              cur.stockUnits += r.stockUnits;
+              cur.unitsSold += r.soldUnits;
+              acc.set(s.id, cur);
+            }
+            return [...acc.values()];
+          })()
+        : real?.storeStats
+          ? real.storeStats.flatMap((st) => {
+              const s = stores.find((x) => x.externalId === st.externalId);
+              if (!s) return [];
+              return [{ storeId: s.id, storeName: s.name, stockUnits: st.stockUnits, unitsSold: st.soldUnits }];
+            })
+          : // Sem agregado da rede, soma o catálogo local — DENTRO DO RECORTE.
+            // O recorte faltava só aqui, e era por isso que a cobertura do
+            // dashboard e a do relatório divergiam no dataset fictício: uma
+            // contava lente e acessório, a outra não.
+            (() => {
+              const noGrupo = products.filter((prod) => matchesProductGroup(prod.category, grupo));
+              return stores.map((s) => ({
+                storeId: s.id,
+                storeName: s.name,
+                stockUnits: noGrupo.reduce((a, prod) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
+                unitsSold: noGrupo.reduce((a, prod) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
+              }));
+            })();
+    // A janela é a MEDIDA no dataset, não a pedida: dividir 7 dias de venda
+    // por 30 é exatamente o que inflava a cobertura para 60–150 meses.
+    const dias = effectiveDays(days);
+    return { days: dias, windowDays: dias, rows: computeStoreCoverage(inputs, dias) };
   }
 
   // Sync
@@ -1003,10 +1496,16 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
 
   // Produtos — categorias derivadas do catálogo carregado (com dados reais,
   // são os grupos do CDS; a lista fixa fictícia mostrava rótulos sem match).
-  if (url === '/products/categories')
-    return [...new Set(products.map((x) => x.category))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  if (url === '/products/categories') {
+    // Feedback 02: categoria de lente continuava na lista e devolvia 0 linhas.
+    // Oferecer um filtro que não filtra nada é pior que não oferecer.
+    const g = productGroup(params.group);
+    return [...new Set(products.filter((x) => matchesProductGroup(x.category, g)).map((x) => x.category))]
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }
   if (url === '/products') {
-    let rows = products;
+    const g = productGroup(params.group);
+    let rows = products.filter((x) => matchesProductGroup(x.category, g));
     const cat = one(params.category);
     if (cat) rows = rows.filter((x) => x.category === cat);
     const q0 = one(params.search);
@@ -1023,8 +1522,36 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     };
   }
 
-  if (url === '/stores')
-    return { total: stores.length, rows: stores.map((s) => ({ ...s, _count: { stockItems: products.length, sales: int(15, 30) } })) };
+  if (url === '/stores') {
+    // ANTES: stockItems = products.length (o catálogo inteiro, igual para toda
+    // loja) e sales = int(15,30), um número INVENTADO. O Galbe viu: "estoque
+    // por SKU e loja tá uniforme". Agora os dois vêm do dataset.
+    //
+    // `skuCount` é da rede inteira; datasets antigos não o trazem, e aí
+    // contamos os SKUs com saldo dentro da AMOSTRA do catálogo — número menor
+    // que o real, por isso a tela avisa que é amostra.
+    const amostrado = !real?.storeStats?.some((st) => typeof st.skuCount === 'number');
+    const skusDaAmostra = (storeId: string) =>
+      products.reduce((a, p) => a + ((stockQty.get(key(storeId, p.id)) ?? 0) > 0 ? 1 : 0), 0);
+
+    return {
+      total: stores.length,
+      sampled: real ? amostrado : false,
+      catalogSampled: real?.totals?.catalogSampled,
+      productCountNetwork: real?.totals?.productCountNetwork,
+      rows: stores.map((s) => {
+        const st = real?.storeStats?.find((x) => x.externalId === s.externalId);
+        const vendas = real?.salesByStore?.find((x) => x.externalId === s.externalId)?.count;
+        return {
+          ...s,
+          _count: {
+            stockItems: st?.skuCount ?? skusDaAmostra(s.id),
+            sales: vendas ?? 0,
+          },
+        };
+      }),
+    };
+  }
 
   if (url === '/sales') {
     const rows = Array.from({ length: 20 }, (_, i) => {
@@ -1038,49 +1565,94 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     return { total: rows.length, page: 1, limit: 100, rows };
   }
 
-  // BI — todos os recortes respeitam os filtros de janela (days) e de loja.
-  const biStoreId = one(params.storeId);
-  if (url === '/bi/kpis') {
-    const scope = scopedStores(biStoreId);
-    const positions = scope.length * products.length;
-    const al = alerts(biStoreId);
-    const sales = scopedSales(days, biStoreId);
-    const stock = scopedStockUnits(biStoreId);
-    const sold = scopedSoldUnits(days, biStoreId);
-    const st = scopedStore(biStoreId);
-    return {
-      days: effectiveWindowDays(days),
-      requestedDays: days,
-      revenue: sales.revenue,
-      salesCount: sales.count,
-      avgTicket: sales.count > 0 ? round2(sales.revenue / sales.count) : 0,
-      turnover: stock > 0 ? round2(sold / stock) : 0,
-      rupturaRate: positions > 0 ? round2((al.out / positions) * 100) : 0,
-      lowStockRate: positions > 0 ? round2((al.low / positions) * 100) : 0,
-      stockUnits: stock,
-      unitsSold: sold,
-      stockPositions: positions,
-      outOfStock: al.out,
-      lowStock: al.low,
-      pendingTransfers: movements.filter(
-        (x) =>
-          ['REQUESTED', 'PENDING'].includes(x.status as string) &&
-          (!st ||
-            (x.fromStore as { id?: string } | null)?.id === st.id ||
-            (x.toStore as { id?: string } | null)?.id === st.id),
-      ).length,
-    };
+  // ── BI ────────────────────────────────────────────────────────────────────
+  // O recorte do console (group) e o tipo de produto (category) valem aqui como
+  // valem em Alertas e Relatórios. Antes desta linha o BI inteiro os ignorava.
+  const grupoBi = productGroup(params.group);
+  const tipoBi = params.category;
+  const lojaBi = one(params.storeId);
+  if (url.startsWith('/bi/')) {
+    const base = biBase(grupoBi, tipoBi, lojaBi);
+    if (url === '/bi/kpis') {
+      const al = alerts(grupoBi, tipoBi, lojaBi);
+      const escopo = lojaBi ? stores.filter((s) => s.id === lojaBi) : stores;
+      const dentro = noRecorte(grupoBi, tipoBi);
+      const noGrupo = products.filter((p) => dentro(p));
+      const positions = escopo.length * Math.max(1, noGrupo.length);
+      // MESMA base do painel: quando o dataset traz o agregado da rede, o
+      // estoque vem dele. Somar só o catálogo amostrado daria 112.515 no BI
+      // contra 211.026 no painel, para o mesmo recorte e no mesmo instante —
+      // e duas telas com números diferentes destroem as duas.
+      const unidadesEmEstoque =
+        estoqueDaRedeNoRecorte(grupoBi, tipoBi, lojaBi) ??
+        escopo.reduce(
+          (a, st) => a + noGrupo.reduce((b, p) => b + (stockQty.get(key(st.id, p.id)) ?? 0), 0),
+          0,
+        );
+      // Faturamento e nº de vendas do RECORTE DE DATA, somados da série diária
+      // — é a parte da amostra que tem dia, e portanto responde ao filtro.
+      const janela = vendasNaJanela(days);
+      // `salesCount` proporcional e declarado: uma venda mistura armação e
+      // lente, então "quantas vendas do recorte de produto" não existe no dado
+      // da sonda. A proporção incide sobre o nº de vendas DA JANELA.
+      const vendas = Math.max(1, Math.round(janela.count * base.fatia));
+      /*
+         Faturamento do recorte DENTRO da janela.
+
+         Sem recorte de produto o número é medido: soma da série diária no
+         período. Com recorte, a sonda não quebra produto × dia, então vale a
+         mesma regra que a série, o mapa de calor e a forma de pagamento já
+         usam — o total MEDIDO da janela vezes a fatia MEDIDA que o recorte
+         ocupa no período. É projeção, e a tela declara isso em
+         `vendasAproximadas`. O que não podia continuar é o que havia antes:
+         o total dos 7 dias parado embaixo de um rótulo de 1 dia.
+      */
+      const receitaDaJanela = base.recortando ? round2(janela.total * base.fatia) : janela.total;
+      return {
+        days,
+        revenue: receitaDaJanela,
+        salesCount: base.recortando ? vendas : janela.count,
+        avgTicket: round2(receitaDaJanela / (base.recortando ? vendas : janela.count)),
+        // O que o recorte de fato move: R$/peça. Ver o comentário em bi.math.
+        avgUnitPrice: base.unidades > 0 ? round2(base.receita / base.unidades) : 0,
+        // Giro MENSAL, e não "unidades do período ÷ estoque": a janela real da
+        // sonda é de 7 dias, e a razão crua dava 0,01 em todo recorte — o
+        // medidor ficava parado enquanto o resto da tela reagia. Normalizado
+        // para 30 dias, ele é o inverso da cobertura em meses que o painel
+        // mostra, e as duas telas passam a contar a mesma história.
+        turnover: round2(((base.unidades / Math.max(1, effectiveDays(days))) * 30) / Math.max(1, unidadesEmEstoque)),
+        rupturaRate: round2((al.out / Math.max(1, positions)) * 100),
+        lowStockRate: round2((al.low / Math.max(1, positions)) * 100),
+        stockUnits: unidadesEmEstoque,
+        // "Unidades vendidas no período" ficava parado ao lado de um
+        // faturamento que se movia — dois números vizinhos contando histórias
+        // diferentes sobre a mesma janela. A unidade não tem dia na sonda, então
+        // acompanha pela mesma fatia declarada em `vendasAproximadas`.
+        unitsSold: Math.round(base.unidades * fatiaDaJanela(days)),
+        stockPositions: positions,
+        outOfStock: al.out,
+        lowStock: al.low,
+        pendingTransfers: movements.filter((x) => ['REQUESTED', 'PENDING'].includes(x.status as string)).length,
+        vendasAproximadas: base.recortando,
+      };
+    }
+    if (url === '/bi/sales-timeseries') return timeseries(days, base.recortando ? base.fatia : 1, base.recortando);
+    if (url === '/bi/sales-by-dimension')
+      return byDimension(one(params.by) ?? 'store', grupoBi, tipoBi, lojaBi, days);
+    if (url === '/bi/sales-flow') return salesFlow(grupoBi, tipoBi, lojaBi);
+    if (url === '/bi/transfer-flow') return transferFlow(grupoBi, tipoBi, lojaBi);
+    if (url === '/bi/heatmap')
+      return heatmap(base.recortando ? base.fatia : 1, base.recortando, lojaBi, days);
   }
-  if (url === '/bi/sales-timeseries') return timeseries(days, biStoreId);
-  if (url === '/bi/sales-by-dimension') return byDimension(one(params.by) ?? 'store', days, biStoreId);
-  if (url === '/bi/sales-flow') return salesFlow(days, biStoreId);
-  if (url === '/bi/transfer-flow') return transferFlow(biStoreId);
-  if (url === '/bi/heatmap') return heatmap(days, biStoreId);
 
   // Relatórios
-  if (url === '/reports/abc') return abc(days, one(params.dimension) === 'brand' ? 'brand' : 'product');
-  if (url === '/reports/turnover') return turnover(days);
-  if (url === '/reports/coverage') return brandCoverageReport(days);
+  const grupoRel = productGroup(params.group);
+  const tipoRel = params.category;
+  const lojaRel = one(params.storeId) || undefined;
+  if (url === '/reports/abc')
+    return abc(days, one(params.dimension) === 'brand' ? 'brand' : 'product', grupoRel, tipoRel, lojaRel);
+  if (url === '/reports/turnover') return turnover(days, grupoRel, tipoRel, lojaRel);
+  if (url === '/reports/coverage') return brandCoverageReport(days, grupoRel, tipoRel, lojaRel);
   if (url === '/reports/sales-analysis') return salesAnalysisReport(days, one(params.by) ?? 'brand');
 
   // Planejamento & Compras (reusa a matemática do backend via @planning)
@@ -1131,8 +1703,11 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           category: prod.category,
           unitsSold: scope.reduce((a, s) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0),
           currentStock: scope.reduce((a, s) => a + (stockQty.get(key(s.id, prod.id)) ?? 0), 0),
-          unitCost: round2(prod.price * 0.55),
+          // Mesmo critério da API: custo do ERP quando existe, estimado quando
+          // falta — e o card diz qual dos dois é, porque o teto depende disso.
+          unitCost: prod.cost ?? round2(prod.price * 0.55),
           unitPrice: prod.price,
+          costEstimated: prod.cost == null,
           onOrderQty: onOrderQty(prod.id),
           demandHistory: demoDemandHistory(prod, scope, period),
         },
@@ -1141,15 +1716,32 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       ),
     );
   };
-  const planDays = Number(one(params.days)) || 90;
+  // Feedbacks 5.0, item 04 ("poucas sugestões de reposição"): a tela pede 90
+  // dias, mas a fotografia do CDS cobre 7 — dividir a venda de 7 dias por 90
+  // achatava a demanda diária ~13× e quase nada cruzava o ponto de pedido. A
+  // cobertura já corrigia isso com `effectiveDays`; o planejamento, não.
+  const planDays = effectiveDays(Number(one(params.days)) || 90);
   const rawGroup = one(params.group);
-  // Padrão operacional: 'principal' (óculos de grau/sol + relógio). Lentes só
-  // entram quando pedidas explicitamente (faturamento/consolidado).
-  const planGroup: ProductGroup = rawGroup === 'lentes' || rawGroup === 'todos' ? rawGroup : 'principal';
+  // Padrão operacional: 'principal' (óculos de grau e sol). Os demais recortes
+  // entram quando pedidos explicitamente.
+  const planGroup: ProductGroup = PRODUCT_GROUPS.includes(rawGroup as ProductGroup)
+    ? (rawGroup as ProductGroup)
+    : 'principal';
   if (url === '/planning/overview')
     return buildOverview(planningPlans(planDays, one(params.storeId), planGroup), planDays);
-  if (url === '/planning/purchase-suggestions')
-    return buildSuggestions(planningPlans(planDays, one(params.storeId), planGroup), planDays);
+  if (url === '/planning/purchase-suggestions') {
+    const r = buildSuggestions(planningPlans(planDays, one(params.storeId), planGroup), planDays);
+    // Feedbacks 6.0, item 02: a demo carrega uma AMOSTRA do catálogo (1.631 de
+    // 21.683 SKUs). O motor analisa o que existe aqui; o universo do recorte na
+    // rede é maior, e a tela precisa dizer os dois para a contagem de sugestões
+    // ter referência.
+    const naRede = real?.totals?.productCountNetwork;
+    if (naRede != null && products.length > 0) {
+      const noRecorte = products.filter((p) => matchesProductGroup(p.category, planGroup)).length;
+      r.summary.universo = Math.round(naRede * (noRecorte / products.length));
+    }
+    return r;
+  }
   if (url === '/planning/purchase-orders' && m === 'GET')
     return buildPurchaseOrders(planningPlans(planDays, one(params.storeId), planGroup), planDays);
   if (url === '/planning/purchase-orders' && m === 'POST') {
@@ -1196,7 +1788,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const inputs: StoreProductInput[] = [];
     for (const s of stores)
       for (const prod of products.filter(
-        (x) => matchesProductGroup(x.category, planGroup) && !matchesProductGroup(x.category, 'lentes'),
+        // O recorte já é uma partição: quem está em `planGroup` não está em
+        // lentes. A exclusão extra que existia aqui era de quando 'principal'
+        // ainda podia deixar lente passar.
+        (x) => matchesProductGroup(x.category, planGroup),
       ))
         inputs.push({
           storeId: s.id,
@@ -1274,10 +1869,59 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   if (url === '/planning/decisions') {
     // Mesmo comportamento do backend: card decidido sai do board (e é contado
     // em summary.decididos), senão ele reaparece a cada recarga da página.
+    // Posições por loja de cada produto: alimentam o destino de escoamento dos
+    // cards de liquidação ("remanejar para onde?" — feedback 05).
+    const posicoes = new Map<
+      string,
+      { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+    >();
+    for (const prod of products) {
+      const lista = stores
+        .map((st) => ({
+          storeId: st.id,
+          storeName: st.name,
+          unitsSold: soldQty.get(key(st.id, prod.id)) ?? 0,
+          currentStock: stockQty.get(key(st.id, prod.id)) ?? 0,
+        }))
+        .filter((x) => x.unitsSold > 0 || x.currentStock > 0);
+      if (lista.length > 0) posicoes.set(prod.id, lista);
+    }
+    // Reserva por MARCA: a maioria dos cards de liquidação é estoque morto,
+    // sem venda própria em loja nenhuma. A rede não sabe onde ESTA peça sai,
+    // mas sabe onde a marca sai.
+    const porMarca = new Map<
+      string,
+      { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+    >();
+    for (const prod of products) {
+      // MESMA regra do backend: agrupa pela marca de ANÁLISE (grife extraída da
+      // descrição), não pelo campo de fornecedor — que vem vazio na maior parte
+      // do catálogo real e jogaria produtos de marcas diferentes num só balde.
+      const marca = analysisBrand(prod.description, prod.category, prod.brand);
+      if (!marca) continue;
+      const lista = porMarca.get(marca) ?? stores.map((st) => ({
+        storeId: st.id, storeName: st.name, unitsSold: 0, currentStock: 0,
+      }));
+      lista.forEach((x, i) => {
+        x.unitsSold += soldQty.get(key(stores[i].id, prod.id)) ?? 0;
+        x.currentStock += stockQty.get(key(stores[i].id, prod.id)) ?? 0;
+      });
+      porMarca.set(marca, lista);
+    }
+    // Dias parados por produto: a MESMA base que dá idade ao card no lote de
+    // geração. É o sinal de tempo que faz o desconto variar por peça.
+    const paradoPor = new Map<string, number>();
+    for (const prod of products) {
+      const idade = demoCardAge(cardIdParaProduto(prod.id));
+      paradoPor.set(prod.id, Math.round((demoBatchAt.getTime() - idade.firstSeenAt.getTime()) / 86_400_000));
+    }
     const board = buildDecisionCards(
       planningPlans(planDays, one(params.storeId), planGroup),
       rebalanceRows().rows,
       new Set(demoDecisions.map((r) => r.cardId)),
+      posicoes,
+      porMarca,
+      paradoPor,
     );
     const history = new Map(
       board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),
@@ -1414,7 +2058,8 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   }
 
   // Alertas
-  if (url === '/alerts') return alerts();
+  if (url === '/alerts')
+    return alerts(productGroup(params.group), params.category, one(params.storeId) || undefined);
   if (url === '/alerts/min-stock' && m === 'PUT') {
     const prod = prodById(body.productId as string);
     if (!prod) return { __status: 404, error: 'Produto não encontrado' };

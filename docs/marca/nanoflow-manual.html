@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NANOFLOW — Manual de Identidade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --preto:#0D0B08; --carvao:#17140F; --grafite:#221D15;
+  --branco:#F6F2E9; --branco2:#E4DCC9;
+  --ouro:#C9A227; --ouro-lux:#F0D482; --ouro-dark:#8A6914;
+  --linha:rgba(201,162,39,.32); --linha2:rgba(246,242,233,.10);
+  --tinta:#2A2416; --tinta-suave:#5C543E; --linha-clara:rgba(13,11,8,.13);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--branco);color:var(--tinta);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+section{padding:126px 7vw;border-bottom:1px solid var(--linha);position:relative}
+.eyebrow{font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.3em;text-transform:uppercase;color:var(--ouro);display:flex;align-items:center;gap:14px;margin-bottom:30px}
+.eyebrow::before{content:"";width:30px;height:1px;background:var(--ouro)}
+.eyebrow .idx{color:var(--ouro-dark);margin-left:auto;letter-spacing:.15em}
+h2.title{font-family:'Fraunces',serif;font-size:clamp(29px,3.2vw,42px);line-height:1.2;font-weight:400;max-width:17ch}
+.lead{font-size:17px;line-height:1.75;color:var(--tinta-suave);margin-top:24px;max-width:64ch}
+.lead em{font-style:italic;color:var(--ouro-dark)}
+.small{font-size:13px;line-height:1.65;color:var(--tinta-suave);opacity:.85}
+
+/* HERO */
+.hero{min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;
+  background:radial-gradient(ellipse at 50% 25%,rgba(201,162,39,.14),transparent 62%),var(--branco);border:none}
+.hero .mark{width:104px;height:104px;margin-bottom:50px;opacity:0;animation:fu 1.1s ease forwards .15s}
+.hero .wm{width:min(74vw,820px);height:auto;opacity:0;animation:fu 1.1s ease forwards .55s}
+.hero .tag{margin-top:34px;font-family:'Fraunces',serif;font-style:italic;font-weight:300;font-size:19px;color:var(--tinta-suave);opacity:0;animation:fu 1.1s ease forwards .95s}
+@keyframes fu{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.hero .vol{position:absolute;bottom:44px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:var(--ouro-dark)}
+
+/* PROVA */
+.proof{margin-top:56px;border:1px solid var(--linha);background:var(--carvao);padding:56px 5vw 44px}
+.proof svg{width:100%;height:auto;display:block}
+.proof .legend{display:flex;gap:36px;margin-top:34px;flex-wrap:wrap}
+.proof .legend div{display:flex;align-items:center;gap:10px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--branco2);opacity:.7}
+.proof .legend i{width:22px;height:1px;display:block}
+
+/* O = SÍMBOLO */
+.equal{display:grid;grid-template-columns:1fr auto 1fr;gap:40px;align-items:center;margin-top:64px;border:1px solid var(--linha);background:var(--carvao);padding:56px 5vw}
+.equal .side{display:flex;flex-direction:column;align-items:center;gap:20px}
+.equal .side svg{width:min(26vw,180px);height:auto}
+.equal .side span{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--branco2);opacity:.65}
+.equal .eq{font-family:'Fraunces',serif;font-size:44px;color:var(--ouro);line-height:1}
+
+.changes{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--linha);border:1px solid var(--linha);margin-top:64px}
+.chg{background:var(--preto);padding:34px 30px 30px}
+.chg .lt{display:flex;align-items:flex-end;gap:18px;margin-bottom:24px;height:80px}
+.chg .lt svg{height:80px;width:auto}
+.chg .n{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ouro)}
+.chg h4{font-family:'Fraunces',serif;font-size:19px;font-weight:400;margin:10px 0 10px;color:#F6F2E9}
+.chg p{font-size:13.5px;line-height:1.65;color:var(--branco2);opacity:.78}
+
+.specs{display:grid;grid-template-columns:1fr 1fr;gap:0 60px;margin-top:56px}
+.spec{display:flex;justify-content:space-between;align-items:baseline;padding:18px 0;border-bottom:1px solid var(--linha-clara)}
+.spec .k{font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--tinta-suave)}
+.spec .v{font-family:'Fraunces',serif;font-size:18px;color:var(--ouro-dark)}
+
+/* LOCKUPS */
+.locks{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--linha);border:1px solid var(--linha);margin-top:54px}
+.lock{background:var(--preto);aspect-ratio:4/3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;padding:34px}
+.lock.inv{background:var(--branco)}
+.lock.gold{background:var(--ouro)}
+.lock .cap{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;opacity:.6}
+.lock.inv .cap,.lock.gold .cap{color:var(--preto)}
+.lock:not(.inv):not(.gold) .cap{color:var(--branco2)}
+
+/* CORES */
+.palette{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid var(--linha);margin-top:54px}
+.sw{height:280px;display:flex;flex-direction:column;justify-content:space-between;padding:22px;border-right:1px solid var(--linha)}
+.sw:last-child{border-right:none}
+.sw .pct{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.15em;opacity:.6}
+.sw .name{font-family:'Fraunces',serif;font-size:15px;margin-bottom:5px}
+.sw .hex{font-family:'JetBrains Mono',monospace;font-size:11px;opacity:.75}
+.sw .use{font-size:10px;margin-top:9px;opacity:.6;line-height:1.5}
+.ratio{display:flex;height:52px;margin-top:32px;border:1px solid var(--linha)}
+.ratio div{display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.15em}
+
+/* TIPOGRAFIA */
+.type-row{display:flex;justify-content:space-between;align-items:baseline;padding:32px 0;border-bottom:1px solid var(--linha-clara)}
+.type-row:first-of-type{border-top:1px solid var(--linha-clara);margin-top:54px}
+.type-row .sample{font-size:50px}
+.type-row .meta{text-align:right;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--tinta-suave);line-height:1.9}
+
+/* ELEMENTOS */
+.elems{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--linha);border:1px solid var(--linha);margin-top:54px}
+.elem{background:var(--preto)}
+.elem .canvas{height:230px;position:relative;overflow:hidden;background:var(--carvao);display:flex;align-items:center;justify-content:center}
+.elem .info{padding:28px 32px 32px}
+.elem .info .t{font-family:'Fraunces',serif;font-size:19px;margin-bottom:9px;color:#F6F2E9}
+.elem .info p{font-size:13.5px;line-height:1.65;color:var(--branco2);opacity:.75}
+.elem .info .code{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--ouro);letter-spacing:.1em;margin-top:14px;display:block}
+.mesh{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(201,162,39,.42) 1px,transparent 1px);background-size:18px 18px;
+  -webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 18%,transparent 72%);mask-image:radial-gradient(ellipse at 50% 50%,#000 18%,transparent 72%)}
+.rulebar{width:74%}
+.rulebar .r{height:1px;background:linear-gradient(90deg,transparent,var(--ouro),transparent);margin:16px 0}
+.rulebar .r2{height:1px;background:var(--linha);margin:16px 0}
+.rulebar .lab{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.22em;color:var(--ouro);text-transform:uppercase}
+
+/* ICONES */
+.icons{display:grid;grid-template-columns:repeat(8,1fr);gap:1px;background:var(--linha);border:1px solid var(--linha);margin-top:54px}
+.ico{background:var(--carvao);aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:12px}
+.ico svg{width:32px;height:32px;fill:none;stroke:var(--ouro);stroke-width:1.3;stroke-linecap:butt;stroke-linejoin:miter}
+.ico span{font-family:'JetBrains Mono',monospace;font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--branco2);opacity:.55;text-align:center}
+
+/* COMPONENTES */
+.comps{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:54px}
+.comp{border:1px solid var(--linha);background:var(--carvao);padding:32px}
+.comp .h{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ouro);margin-bottom:24px;display:block}
+.comp .small{color:var(--branco2);opacity:.78}
+.btn{font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;padding:14px 26px;border:1px solid var(--ouro);background:none;color:var(--ouro);cursor:pointer;display:inline-block;transition:.25s;border-top-left-radius:16px;border-bottom-right-radius:16px}
+.btn:hover{background:var(--ouro);color:var(--preto)}
+.btn.solid{background:var(--ouro);color:var(--preto)}
+.btn.ghost{border-color:var(--linha2);color:var(--branco2)}
+.field{background:var(--preto);border:1px solid var(--linha2);padding:15px 18px;font-size:13.5px;color:var(--branco2)}
+.field .lb{display:block;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ouro-dark);margin-bottom:7px}
+.tagchip{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;padding:7px 13px;border:1px solid var(--linha);color:var(--ouro-lux);margin:0 6px 8px 0}
+.stat{padding:20px 0;border-top:1px solid var(--linha2)}
+.stat .num{font-family:'Fraunces',serif;font-size:36px;color:var(--ouro-lux);line-height:1}
+.stat .lb{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--branco2);opacity:.6;margin-top:8px;display:block}
+
+/* WEB */
+.web{margin-top:54px;border:1px solid var(--linha);background:var(--preto);overflow:hidden}
+.wbar{display:flex;gap:7px;padding:16px 20px;border-bottom:1px solid var(--linha2)}
+.wbar span{width:9px;height:9px;border-radius:50%;background:rgba(246,242,233,.15)}
+.wnav{display:flex;align-items:center;justify-content:space-between;padding:24px 44px;border-bottom:1px solid var(--linha2)}
+.wnav .l{display:flex;align-items:center;gap:14px}
+.wnav .l svg.m{width:24px;height:24px}
+.wnav .l svg.w{width:150px;height:auto}
+.wnav .links{display:flex;gap:30px;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--branco2);opacity:.65}
+.whero{padding:92px 44px 104px;position:relative;overflow:hidden}
+.whero .bgmesh{position:absolute;inset:0;background-image:radial-gradient(circle,rgba(201,162,39,.20) 1px,transparent 1px);background-size:22px 22px;
+  -webkit-mask-image:radial-gradient(ellipse at 80% 28%,#000 5%,transparent 55%);mask-image:radial-gradient(ellipse at 80% 28%,#000 5%,transparent 55%)}
+.whero .inner{position:relative;max-width:64%}
+.whero .eb{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.28em;text-transform:uppercase;color:var(--ouro);margin-bottom:24px;display:block}
+.whero h3{font-family:'Fraunces',serif;font-size:clamp(25px,3.4vw,46px);font-weight:400;line-height:1.18;color:#F6F2E9}
+.whero h3 i{font-style:italic;color:var(--ouro-lux)}
+.whero p{margin-top:22px;font-size:15px;line-height:1.7;color:var(--branco2);opacity:.8;max-width:46ch}
+.whero .acts{margin-top:36px;display:flex;gap:14px;flex-wrap:wrap}
+.wstats{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--linha2)}
+.wstats div{padding:32px 44px;border-right:1px solid var(--linha2)}
+.wstats div:last-child{border:none}
+
+/* SOCIAL */
+.socials{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:54px}
+.post{aspect-ratio:4/5;border:1px solid var(--linha);position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:32px}
+.post.p1{background:var(--preto)}
+.post.p1 .pmid h5,.post.p1 .pbot{color:#F6F2E9}
+.post.p2{background:var(--branco);color:var(--preto)}
+.post.p3{background:linear-gradient(150deg,#F6F2E9,#EDE7D8);color:var(--tinta)}
+.post.p3 .pmid h5{color:var(--tinta)}
+.post.p3 .pmid i{color:var(--ouro-dark)}
+.post.p3 .pbot{color:var(--tinta)}
+.post .ptop{display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:2}
+.post .ptop svg{width:24px;height:24px}
+.post .ptop .num{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.2em;color:var(--ouro)}
+.post .pmid{position:relative;z-index:2}
+.post .pmid .kick{font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.24em;text-transform:uppercase;color:var(--ouro);display:block;margin-bottom:14px}
+.post .pmid h5{font-family:'Fraunces',serif;font-size:24px;font-weight:400;line-height:1.24}
+.post.p2 .pmid h5{color:var(--preto)}
+.post .pmid i{font-style:italic;color:var(--ouro-lux)}
+.post.p2 .pmid i{color:var(--ouro-dark)}
+.post .pbot{position:relative;z-index:2;display:flex;justify-content:space-between;align-items:flex-end;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:.15em;text-transform:uppercase;opacity:.6}
+.post .pbot svg{width:104px;height:auto}
+.post .deco{position:absolute;inset:0;z-index:1}
+
+/* PAPELARIA */
+.papelaria{display:grid;grid-template-columns:1.15fr 1fr;gap:26px;margin-top:54px}
+.card-face{aspect-ratio:1.75/1;border:1px solid var(--linha);padding:32px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.card-face.front{background:var(--preto);color:#F6F2E9}
+.card-face.back{background:var(--branco);color:var(--preto)}
+.card-face .nm{font-family:'Fraunces',serif;font-size:18px}
+.card-face .rl{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;opacity:.6;margin-top:6px}
+.card-face .ct{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.08em;opacity:.6;line-height:1.9}
+.sig{border:1px solid var(--linha);background:var(--branco);color:var(--preto);padding:30px;margin-top:26px;display:flex;gap:24px;align-items:center}
+.sig .bar{width:1px;align-self:stretch;background:rgba(13,11,8,.15)}
+.sig .nm{font-family:'Fraunces',serif;font-size:17px}
+.sig .rl{font-family:'JetBrains Mono',monospace;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;opacity:.6;margin-top:5px}
+.sig .ct{font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.65;line-height:1.9;margin-top:12px}
+
+footer{padding:62px 7vw;display:flex;justify-content:space-between;align-items:center;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.1em;color:var(--tinta-suave);opacity:.7}
+
+@media(max-width:1000px){
+  section{padding:78px 6vw}
+  .elems,.socials,.papelaria,.comps,.locks,.changes,.specs{grid-template-columns:1fr}
+  .equal{grid-template-columns:1fr;gap:24px}
+  .equal .eq{transform:rotate(90deg)}
+  .palette{grid-template-columns:repeat(3,1fr)}
+  .icons{grid-template-columns:repeat(4,1fr)}
+  .wstats{grid-template-columns:repeat(2,1fr)}
+  .whero .inner{max-width:100%}
+}
+</style>
+</head>
+<body>
+
+<!-- ======= DEFINIÇÕES ======= -->
+<svg width="0" height="0" style="position:absolute">
+<defs>
+  <linearGradient id="gg" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#F0D482"/><stop offset="55%" stop-color="#C9A227"/><stop offset="100%" stop-color="#8A6914"/>
+  </linearGradient>
+  <linearGradient id="gg2" x1="0%" y1="0%" x2="100%" y2="0%">
+    <stop offset="0%" stop-color="#F0D482"/><stop offset="100%" stop-color="#C9A227"/>
+  </linearGradient>
+
+  <!-- SÍMBOLO — quadrado 100×100, anel 10 (idêntico à letra O) -->
+  <path id="markSolid" d="M50,0 L100,0 L100,50 A50,50 0 0,1 50,100 L0,100 L0,50 A50,50 0 0,1 50,0 Z
+                          M50,10 L90,10 L90,50 A40,40 0 0,1 50,90 L10,90 L10,50 A40,40 0 0,1 50,10 Z"/>
+  <!-- SÍMBOLO variante fina (grandes formatos) -->
+  <path id="markLine" d="M50,0 L100,0 L100,50 A50,50 0 0,1 50,100 L0,100 L0,50 A50,50 0 0,1 50,0 Z"/>
+
+  <!-- ALFABETO — topo y=0 · base y=100 · haste 10 · proporção alargada -->
+  <path id="gN" d="M0,0 L10,0 L90,86 L90,0 L100,0 L100,100 L90,100 L10,14 L10,100 L0,100 Z"/>
+  <path id="gA" d="M0,100 L36,0 L64,0 L100,100 L89,100 L80.4,76 L19.6,76 L11,100 Z
+                   M43.4,10 L56.6,10 L76.8,66 L23.2,66 Z"/>
+  <path id="gO" d="M50,0 L100,0 L100,50 A50,50 0 0,1 50,100 L0,100 L0,50 A50,50 0 0,1 50,0 Z
+                   M50,10 L90,10 L90,50 A40,40 0 0,1 50,90 L10,90 L10,50 A40,40 0 0,1 50,10 Z"/>
+  <path id="gF" d="M0,0 L80,0 L80,10 L10,10 L10,45 L62,45 L62,55 L10,55 L10,100 L0,100 Z"/>
+  <path id="gL" d="M0,0 L10,0 L10,90 L72,90 L72,100 L0,100 Z"/>
+  <path id="gW" d="M0,0 L10.5,0 L37.25,83.6 L64,0 L74.5,0 L101.25,83.6 L128,0 L138.5,0 L106.5,100 L96,100 L69.25,16.4 L42.5,100 L32,100 Z"/>
+
+  <!-- WORDMARK -->
+  <g id="wm-mono" fill-rule="evenodd">
+    <use href="#gN" x="0"/><use href="#gA" x="106"/><use href="#gN" x="212"/><use href="#gO" x="322"/>
+    <use href="#gF" x="432"/><use href="#gL" x="514"/><use href="#gO" x="590"/><use href="#gW" x="694"/>
+  </g>
+</defs>
+</svg>
+
+<!-- ======= HERO ======= -->
+<section class="hero">
+  <svg class="mark" viewBox="-6 -6 112 112"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+
+  <svg class="wm" viewBox="0 0 833 100">
+    <g fill-rule="evenodd">
+      <g fill="#2A2416"><use href="#gN" x="0"/><use href="#gA" x="106"/><use href="#gN" x="212"/><use href="#gO" x="322"/></g>
+      <g fill="url(#gg2)"><use href="#gF" x="432"/><use href="#gL" x="514"/><use href="#gO" x="590"/><use href="#gW" x="694"/></g>
+    </g>
+  </svg>
+
+  <p class="tag">Onde ideias viram sistemas.</p>
+  <span class="vol">Manual de Identidade</span>
+</section>
+
+<!-- ======= 01 · LOGOTIPO ======= -->
+<section>
+  <div class="eyebrow">Logotipo<span class="idx">01</span></div>
+  <h2 class="title">Traço mais fino, proporção alargada — e o "O" virou o símbolo, ao pé da letra.</h2>
+  <p class="lead">A haste caiu de 13 para <em>10 unidades</em> em uma altura de 100: o desenho ficou mais leve, mais preciso, mais adequado ao dourado (traços grossos em ouro parecem pesados; traços finos parecem caros). E as letras foram alargadas até que o "O" se tornasse <em>exatamente quadrado</em> — a mesma proporção 1:1 do símbolo da marca.</p>
+
+  <!-- O = SÍMBOLO -->
+  <div class="equal">
+    <div class="side">
+      <svg viewBox="-6 -6 112 112"><use href="#markLine" fill="none" stroke="url(#gg)" stroke-width="10"/></svg>
+      <span>Símbolo · 100 × 100</span>
+    </div>
+    <div class="eq">=</div>
+    <div class="side">
+      <svg viewBox="-6 -6 112 112"><use href="#gO" fill="url(#gg)" fill-rule="evenodd"/></svg>
+      <span>Letra O · 100 × 100</span>
+    </div>
+  </div>
+  <p class="small" style="margin-top:18px">Não é uma referência ao símbolo — é o mesmo desenho, mesma medida, mesma espessura de anel. Isso permite que o símbolo <strong>substitua o "O"</strong> em usos especiais (carimbo, favicon animado, abertura de vídeo) sem nenhum ajuste.</p>
+
+  <!-- PROVA DE ALINHAMENTO -->
+  <div class="proof">
+    <svg viewBox="-12 -34 857 168">
+      <line x1="-12" y1="0" x2="845" y2="0" stroke="#C9A227" stroke-width="1" opacity=".8"/>
+      <line x1="-12" y1="100" x2="845" y2="100" stroke="#C9A227" stroke-width="1" opacity=".8"/>
+      <line x1="-12" y1="50" x2="845" y2="50" stroke="rgba(246,242,233,.13)" stroke-width="1" stroke-dasharray="6 6"/>
+      <text x="-12" y="-11" fill="#C9A227" font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="1.8">LINHA DE TOPO · 100</text>
+      <text x="-12" y="124" fill="#C9A227" font-family="JetBrains Mono, monospace" font-size="11" letter-spacing="1.8">LINHA DE BASE · 0</text>
+
+      <g stroke="rgba(246,242,233,.09)" stroke-width="1">
+        <line x1="103" y1="-8" x2="103" y2="108"/><line x1="209" y1="-8" x2="209" y2="108"/>
+        <line x1="317" y1="-8" x2="317" y2="108"/><line x1="427" y1="-8" x2="427" y2="108"/>
+        <line x1="513" y1="-8" x2="513" y2="108"/><line x1="588" y1="-8" x2="588" y2="108"/>
+        <line x1="692" y1="-8" x2="692" y2="108"/>
+      </g>
+
+      <g fill-rule="evenodd">
+        <g fill="#F6F2E9" opacity=".92"><use href="#gN" x="0"/><use href="#gA" x="106"/><use href="#gN" x="212"/></g>
+        <g fill="url(#gg)"><use href="#gO" x="322"/></g>
+        <g fill="#F6F2E9" opacity=".92"><use href="#gF" x="432"/><use href="#gL" x="514"/></g>
+        <g fill="url(#gg)"><use href="#gO" x="590"/></g>
+        <g fill="#F6F2E9" opacity=".92"><use href="#gW" x="694"/></g>
+      </g>
+    </svg>
+
+    <div class="legend">
+      <div><i style="background:#C9A227"></i> Topo e base compartilhados pelas 8 letras</div>
+      <div><i style="background:rgba(246,242,233,.4)"></i> Separadores de avanço · espaçamento óptico</div>
+      <div><i style="background:linear-gradient(90deg,#F0D482,#8A6914)"></i> Letras customizadas</div>
+    </div>
+  </div>
+  <p class="small" style="margin-top:18px">Nenhuma letra ultrapassa o topo nem desce abaixo da base — nem mesmo os dois "O". <strong>Sem overshoot óptico:</strong> o alinhamento matemático absoluto é coerente com uma marca de engenharia e reforça a leitura de precisão.</p>
+
+  <div class="changes">
+    <div class="chg">
+      <div class="lt"><svg viewBox="-4 -4 108 108"><use href="#gO" fill="url(#gg)" fill-rule="evenodd"/></svg></div>
+      <span class="n">Alteração 01 · principal</span>
+      <h4>O "O" é o símbolo</h4>
+      <p>Quadrado perfeito de 100 × 100 com anel de 10: cantos superior-direito e inferior-esquerdo em 90° exatos, superior-esquerdo e inferior-direito em arco de raio 50. Idêntico ao ícone da marca, em dobro.</p>
+    </div>
+
+    <div class="chg">
+      <div class="lt"><svg viewBox="-4 -4 108 108"><use href="#gA" fill="url(#gg)" fill-rule="evenodd"/></svg></div>
+      <span class="n">Alteração 02 · sutil</span>
+      <h4>O "A" tem ápice cortado</h4>
+      <p>O vértice é aparado na horizontal, com a espessura da haste. Ecoa o corte reto do símbolo e resolve a ponta afiada que ficaria opticamente desalinhada com a linha de topo.</p>
+    </div>
+
+    <div class="chg">
+      <div class="lt">
+        <svg viewBox="-4 -4 108 108"><use href="#gN" fill="#F6F2E9" fill-rule="evenodd"/></svg>
+        <svg viewBox="-4 -4 146 108"><use href="#gW" fill="#F6F2E9" fill-rule="evenodd"/></svg>
+      </div>
+      <span class="n">Sem alteração</span>
+      <h4>N, W, F, L permanecem neutras</h4>
+      <p>Haste cheia, diagonal reta, junções em ângulo vivo, todas as diagonais na mesma inclinação. São a estabilidade que faz as duas customizações lerem como intenção, não como maneirismo.</p>
+    </div>
+  </div>
+
+  <div class="specs">
+    <div>
+      <div class="spec"><span class="k">Altura de caixa alta</span><span class="v">100 un.</span></div>
+      <div class="spec"><span class="k">Espessura da haste</span><span class="v">10 un.</span></div>
+      <div class="spec"><span class="k">Proporção da letra O</span><span class="v">1 : 1 (quadrado)</span></div>
+      <div class="spec"><span class="k">Raio dos arcos</span><span class="v">50 un.</span></div>
+    </div>
+    <div>
+      <div class="spec"><span class="k">Largura total do wordmark</span><span class="v">833 un.</span></div>
+      <div class="spec"><span class="k">Área de respiro</span><span class="v">30 un. (3 hastes)</span></div>
+      <div class="spec"><span class="k">Mínimo · wordmark</span><span class="v">130 px / 38 mm</span></div>
+      <div class="spec"><span class="k">Mínimo · símbolo</span><span class="v">16 px / 6 mm</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 02 · ASSINATURAS ======= -->
+<section>
+  <div class="eyebrow">Assinaturas<span class="idx">02</span></div>
+  <h2 class="title">Uma única estrutura horizontal, seis tratamentos de cor.</h2>
+  <p class="lead">A assinatura é sempre horizontal — símbolo à esquerda, wordmark à direita. O que muda é o tratamento cromático conforme a superfície: colorida sobre preto ou branco, monocromática positiva ou negativa, e o símbolo isolado nas versões sólida (dourado) e fina (traço, para grandes formatos).</p>
+
+  <div class="locks">
+    <div class="lock">
+      <div style="display:flex;align-items:center;gap:24px">
+        <svg viewBox="-4 -4 108 108" style="width:44px;height:44px"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+        <svg viewBox="0 0 833 100" style="width:210px;height:auto">
+          <g fill-rule="evenodd">
+            <g fill="#F6F2E9"><use href="#gN" x="0"/><use href="#gA" x="106"/><use href="#gN" x="212"/><use href="#gO" x="322"/></g>
+            <g fill="url(#gg2)"><use href="#gF" x="432"/><use href="#gL" x="514"/><use href="#gO" x="590"/><use href="#gW" x="694"/></g>
+          </g>
+        </svg>
+      </div>
+      <span class="cap">Horizontal · principal · fundo preto</span>
+    </div>
+
+    <div class="lock inv">
+      <div style="display:flex;align-items:center;gap:24px">
+        <svg viewBox="-4 -4 108 108" style="width:44px;height:44px"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+        <svg viewBox="0 0 833 100" style="width:210px;height:auto">
+          <g fill-rule="evenodd">
+            <g fill="#2A2416"><use href="#gN" x="0"/><use href="#gA" x="106"/><use href="#gN" x="212"/><use href="#gO" x="322"/></g>
+            <g fill="url(#gg2)"><use href="#gF" x="432"/><use href="#gL" x="514"/><use href="#gO" x="590"/><use href="#gW" x="694"/></g>
+          </g>
+        </svg>
+      </div>
+      <span class="cap">Horizontal · principal · fundo branco</span>
+    </div>
+
+    <div class="lock inv">
+      <div style="display:flex;align-items:center;gap:24px">
+        <svg viewBox="-4 -4 108 108" style="width:44px;height:44px"><use href="#markSolid" fill="#0D0B08" fill-rule="evenodd"/></svg>
+        <svg viewBox="0 0 833 100" style="width:210px;height:auto"><use href="#wm-mono" fill="#0D0B08"/></svg>
+      </div>
+      <span class="cap">Horizontal · monocromática positiva</span>
+    </div>
+
+    <div class="lock">
+      <div style="display:flex;align-items:center;gap:24px">
+        <svg viewBox="-4 -4 108 108" style="width:44px;height:44px"><use href="#markSolid" fill="#F6F2E9" fill-rule="evenodd"/></svg>
+        <svg viewBox="0 0 833 100" style="width:210px;height:auto"><use href="#wm-mono" fill="#F6F2E9"/></svg>
+      </div>
+      <span class="cap">Horizontal · monocromática negativa</span>
+    </div>
+
+    <div class="lock gold">
+      <svg viewBox="-4 -4 108 108" style="width:70px;height:70px"><use href="#markSolid" fill="#0D0B08" fill-rule="evenodd"/></svg>
+      <span class="cap">Símbolo · sólido sobre dourado</span>
+    </div>
+
+    <div class="lock">
+      <svg viewBox="-4 -4 108 108" style="width:70px;height:70px"><use href="#markLine" fill="none" stroke="url(#gg)" stroke-width="5"/></svg>
+      <span class="cap">Símbolo · fino, grandes formatos</span>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 03 · CORES ======= -->
+<section>
+  <div class="eyebrow">Sistema cromático<span class="idx">03</span></div>
+  <h2 class="title">Fundo branco por padrão. Preto reservado a momentos específicos.</h2>
+  <p class="lead">O branco-papel é a superfície preferencial da marca — é onde ela opera no dia a dia: site, produto, documentos, redes sociais. O preto entra apenas em <em>aplicações pontuais e de maior densidade</em>: papelaria física, posts editoriais de impacto, telas de produto em modo escuro e peças institucionais (capa de apresentação, abertura de vídeo). O dourado, nos dois casos, marca apenas pontos de decisão.</p>
+
+  <div class="palette">
+    <div class="sw" style="background:#F6F2E9"><span class="pct" style="color:#0D0B08">01</span><div><div class="name" style="color:#0D0B08">Branco Papel</div><div class="hex" style="color:#0D0B08">#F6F2E9</div><div class="use" style="color:#0D0B08">Fundo preferencial · uso padrão</div></div></div>
+    <div class="sw" style="background:#0D0B08"><span class="pct" style="color:#F6F2E9">02</span><div><div class="name" style="color:#F6F2E9">Preto Nano</div><div class="hex" style="color:#F6F2E9">#0D0B08</div><div class="use" style="color:#F6F2E9">Casos específicos · ver ao lado</div></div></div>
+    <div class="sw" style="background:#17140F"><span class="pct" style="color:#F6F2E9">03</span><div><div class="name" style="color:#F6F2E9">Carvão</div><div class="hex" style="color:#F6F2E9">#17140F</div><div class="use" style="color:#F6F2E9">Cards sobre preto, elevação 1</div></div></div>
+    <div class="sw" style="background:#221D15"><span class="pct" style="color:#F6F2E9">04</span><div><div class="name" style="color:#F6F2E9">Grafite</div><div class="hex" style="color:#F6F2E9">#221D15</div><div class="use" style="color:#F6F2E9">Elevação 2, bordas sobre preto</div></div></div>
+    <div class="sw" style="background:#8A6914"><span class="pct" style="color:#0D0B08">05</span><div><div class="name" style="color:#0D0B08">Ouro Fosco</div><div class="hex" style="color:#0D0B08">#8A6914</div><div class="use" style="color:#0D0B08">Hover, texto de ênfase sobre branco</div></div></div>
+    <div class="sw" style="background:#C9A227"><span class="pct" style="color:#0D0B08">06</span><div><div class="name" style="color:#0D0B08">Ouro NANOFLOW</div><div class="hex" style="color:#0D0B08">#C9A227</div><div class="use" style="color:#0D0B08">Marca, CTA, decisão</div></div></div>
+  </div>
+
+  <div class="ratio">
+    <div style="flex:80;background:#F6F2E9;color:#0D0B08">80 · BRANCO</div>
+    <div style="flex:15;background:#0D0B08;color:#F6F2E9">15 · TINTA / PRETO</div>
+    <div style="flex:5;background:#C9A227;color:#0D0B08">5 · OURO</div>
+  </div>
+  <p class="small" style="margin-top:18px">Proporção padrão para site, produto e documentos. O dourado nunca ultrapassa 5% da área — acima disso, deixa de ser destaque e vira ruído.</p>
+
+  <div class="changes" style="margin-top:64px">
+    <div class="chg">
+      <span class="n">USAR PRETO 01</span>
+      <h4>Papelaria e objetos físicos</h4>
+      <p>Cartão de visita, convite, embalagem, relevo seco. O preto dá o peso material que o papel branco não sustenta sozinho — reservado a peças tocadas, não roladas na tela.</p>
+    </div>
+    <div class="chg">
+      <span class="n">USAR PRETO 02</span>
+      <h4>Posts editoriais de impacto</h4>
+      <p>Manifesto, anúncio institucional, abertura de vídeo, capa de apresentação para investidor. Um a cada três ou quatro posts, nunca a maioria do feed.</p>
+    </div>
+    <div class="chg">
+      <span class="n">USAR PRETO 03</span>
+      <h4>Produto em modo escuro</h4>
+      <p>Painéis técnicos de alta densidade de dados (motor de IA, logs, monitoramento). O branco continua sendo o tema padrão da interface; o escuro é opção do usuário ou tela de operação crítica.</p>
+    </div>
+  </div>
+  <p class="small" style="margin-top:22px">Fora desses três casos, o padrão é sempre o fundo branco-papel. Nunca alternar preto e branco na mesma peça sem motivo funcional — a alternância é decisão de aplicação, não de estilo.</p>
+</section>
+
+<!-- ======= 04 · TIPOGRAFIA ======= -->
+<section>
+  <div class="eyebrow">Tipografia de apoio<span class="idx">04</span></div>
+  <h2 class="title">Uma serifa para pensar. Uma sans para operar. Uma mono para os dados.</h2>
+  <p class="lead">O logotipo é desenhado — não é fonte. Fora dele, o sistema usa três famílias com papéis fixos e sem sobreposição.</p>
+
+  <div class="type-row">
+    <span class="sample" style="font-family:'Fraunces',serif">Aa</span>
+    <span class="meta">FRAUNCES · 300 / 400 / 500 / italic<br>Títulos, números-herói, frases de manifesto</span>
+  </div>
+  <div class="type-row">
+    <span class="sample" style="font-family:'Inter';font-weight:500">Aa</span>
+    <span class="meta">INTER · 300 / 400 / 500 / 600<br>Corpo de texto, interface, botões de produto</span>
+  </div>
+  <div class="type-row">
+    <span class="sample" style="font-family:'JetBrains Mono',monospace;font-size:40px">Aa</span>
+    <span class="meta">JETBRAINS MONO · 400 / 500<br>Rótulos, dados, código, carimbos de data</span>
+  </div>
+  <p class="small" style="margin-top:26px">Regra de ouro: <strong>nunca use Fraunces abaixo de 18px</strong> e <strong>nunca use JetBrains Mono em texto corrido</strong>. Rótulos em mono sempre em caixa alta com entreletras de 0,18em.</p>
+</section>
+
+<!-- ======= 05 · ELEMENTOS ======= -->
+<section>
+  <div class="eyebrow">Elementos gráficos<span class="idx">05</span></div>
+  <h2 class="title">Dois recursos de apoio. Nenhum decorativo.</h2>
+  <p class="lead">Elementos gráficos existem para <em>estruturar informação</em>, nunca para preencher vazio. Área de respiro é parte do design, não erro de diagramação.</p>
+
+  <div class="elems">
+    <div class="elem">
+      <div class="canvas"><div class="mesh"></div></div>
+      <div class="info">
+        <div class="t">Malha Nano</div>
+        <p>Grade de pontos de 1px espaçados em 18–24px, sempre com máscara radial que a dissolve nas bordas. Representa o dado bruto antes de virar sistema. Usada atrás de heros e áreas de respiro — nunca sob texto corrido.</p>
+        <span class="code">opacidade ≤ 20% · máscara radial obrigatória</span>
+      </div>
+    </div>
+
+    <div class="elem">
+      <div class="canvas">
+        <div class="rulebar">
+          <span class="lab">Camada de dados</span>
+          <div class="r"></div><div class="r2"></div><div class="r2"></div><div class="r"></div>
+        </div>
+      </div>
+      <div class="info">
+        <div class="t">Régua Hierárquica</div>
+        <p>Filetes de 1px que separam blocos de informação. O filete com gradiente dourado, esmaecendo nas pontas, abre e fecha uma seção; os filetes neutros separam itens internos. A hierarquia é lida antes do texto.</p>
+        <span class="code">gradiente = seção · sólido = item</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 06 · ICONOGRAFIA ======= -->
+<section>
+  <div class="eyebrow">Iconografia<span class="idx">06</span></div>
+  <h2 class="title">Traço fino, grade de 24, terminais retos.</h2>
+  <p class="lead">Traço de 1,3px em grade de 24px, sem preenchimento e sem cantos arredondados — exceto quando o ícone reproduz a forma da marca. A consistência do traço com o logotipo é o que dá família ao conjunto.</p>
+
+  <div class="icons">
+    <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3h9v9a9 9 0 0 1-9 9H3v-9a9 9 0 0 1 9-9z"/></svg><span>Marca</span></div>
+    <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 17l5-6 4 3 4-7 5 5"/><path d="M3 21h18"/></svg><span>Indicadores</span></div>
+    <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg><span>Motor IA</span></div>
+    <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 8h6a4 4 0 0 1 4 4v8"/><path d="M20 16h-6a4 4 0 0 1-4-4V4"/></svg><span>Integração</span></div>
+    <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3h9v9a9 9 0 0 1-9 9H3"/><path d="M7 12l3 3 6-6"/></svg><span>Aprovado</span></div>
+    <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16"/><path d="M3 9h18M9 9v11"/></svg><span>Governança</span></div>
+    <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h13"/><circle cx="19" cy="12" r="2"/></svg><span>Fluxo</span></div>
+    <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 4v8l5 3"/><path d="M12 3h9v9a9 9 0 0 1-9 9H3v-9a9 9 0 0 1 9-9z"/></svg><span>Prazo</span></div>
+  </div>
+</section>
+
+<!-- ======= 07 · COMPONENTES ======= -->
+<section>
+  <div class="eyebrow">Componentes de interface<span class="idx">07</span></div>
+  <h2 class="title">O corte assimétrico do símbolo chega aos botões.</h2>
+  <p class="lead">Botões carregam o mesmo corte do símbolo: canto superior-esquerdo e inferior-direito arredondados (raio 16px), superior-direito e inferior-esquerdo a 90°. Campos e chips permanecem retos — o contraste entre os dois é o que torna o botão reconhecível como ação, mesmo sem cor.</p>
+
+  <div class="comps">
+    <div class="comp">
+      <span class="h">Botões</span>
+      <div style="display:flex;flex-direction:column;gap:14px;align-items:flex-start">
+        <button class="btn solid">Solicitar diagnóstico</button>
+        <button class="btn">Ver sistemas</button>
+        <button class="btn ghost">Documentação</button>
+      </div>
+      <p class="small" style="margin-top:22px">Primário sólido: uma única ocorrência por tela. Contornado: navegação. Fantasma: ações terciárias. Todos com o corte assimétrico do símbolo.</p>
+    </div>
+
+    <div class="comp">
+      <span class="h">Campos e chips</span>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="field"><span class="lb">Empresa</span>Nome da operação</div>
+        <div class="field"><span class="lb">Processo a automatizar</span>Descreva o fluxo atual</div>
+      </div>
+      <div style="margin-top:18px">
+        <span class="tagchip">Sob medida</span><span class="tagchip">Integração</span><span class="tagchip">IA aplicada</span>
+      </div>
+    </div>
+
+    <div class="comp">
+      <span class="h">Indicadores</span>
+      <div class="stat"><div class="num">340h</div><span class="lb">Economizadas por mês</span></div>
+      <div class="stat"><div class="num">1 : 1</div><span class="lb">Sistema por operação</span></div>
+      <div class="stat"><div class="num">12</div><span class="lb">Integrações ativas</span></div>
+      <p class="small" style="margin-top:18px">Número sempre em Fraunces; rótulo sempre em mono caixa alta. O número é o herói, o rótulo é o serviço.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 08 · WEB ======= -->
+<section>
+  <div class="eyebrow">Aplicação · web<span class="idx">08</span></div>
+  <h2 class="title">A home aplicando o sistema inteiro.</h2>
+
+  <div class="web">
+    <div class="wbar"><span></span><span></span><span></span></div>
+    <div class="wnav">
+      <div class="l">
+        <svg class="m" viewBox="-4 -4 108 108"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+        <svg class="w" viewBox="0 0 833 100">
+          <g fill-rule="evenodd">
+            <g fill="#F6F2E9"><use href="#gN" x="0"/><use href="#gA" x="106"/><use href="#gN" x="212"/><use href="#gO" x="322"/></g>
+            <g fill="url(#gg2)"><use href="#gF" x="432"/><use href="#gL" x="514"/><use href="#gO" x="590"/><use href="#gW" x="694"/></g>
+          </g>
+        </svg>
+      </div>
+      <div class="links"><span>Sistemas</span><span>Método</span><span>Casos</span><span>Contato</span></div>
+    </div>
+
+    <div class="whero">
+      <div class="bgmesh"></div>
+      <div class="inner">
+        <span class="eb">Sistemas sob medida com IA</span>
+        <h3>Sua operação não cabe num software de prateleira.<br><i>Construímos o que ela precisa.</i></h3>
+        <p>Mapeamos o processo real da sua empresa e entregamos um sistema desenhado sobre ele — com IA operando no núcleo, não colada por cima.</p>
+        <div class="acts">
+          <button class="btn solid">Solicitar diagnóstico</button>
+          <button class="btn">Ver casos</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="wstats">
+      <div class="stat" style="border-top:none;padding:0"><div class="num">340h</div><span class="lb">Horas devolvidas / mês</span></div>
+      <div class="stat" style="border-top:none;padding:0"><div class="num">6 sem</div><span class="lb">Do diagnóstico ao ar</span></div>
+      <div class="stat" style="border-top:none;padding:0"><div class="num">100%</div><span class="lb">Código proprietário</span></div>
+      <div class="stat" style="border-top:none;padding:0"><div class="num">24/7</div><span class="lb">Operação monitorada</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 09 · SOCIAL ======= -->
+<section>
+  <div class="eyebrow">Aplicação · redes sociais<span class="idx">09</span></div>
+  <h2 class="title">Três modelos cobrem 90% das publicações.</h2>
+  <p class="lead">Formato 4:5. Branco-papel é o modelo padrão; o preto (como no editorial abaixo) aparece só de vez em quando — nunca a maioria do feed. A marca fica sempre no rodapé, nunca no topo, onde competiria com a mensagem.</p>
+
+  <div class="socials">
+    <div class="post p1">
+      <div class="ptop">
+        <svg viewBox="-4 -4 108 108"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+        <span class="num">01 / 05</span>
+      </div>
+      <div class="pmid">
+        <span class="kick">Método</span>
+        <h5>Antes de escrever qualquer linha de código, <i>desenhamos o seu processo.</i></h5>
+      </div>
+      <div class="pbot">
+        <svg viewBox="0 0 833 100"><use href="#wm-mono" fill="#F6F2E9" opacity=".85"/></svg>
+        <span>Editorial</span>
+      </div>
+    </div>
+
+    <div class="post p2">
+      <div class="ptop">
+        <svg viewBox="-4 -4 108 108"><use href="#markSolid" fill="#0D0B08" fill-rule="evenodd"/></svg>
+        <span class="num" style="color:#8A6914">DADO</span>
+      </div>
+      <div class="pmid">
+        <div style="font-family:'Fraunces',serif;font-size:62px;color:#8A6914;line-height:1">340h</div>
+        <div style="height:1px;background:linear-gradient(90deg,#C9A227,transparent);margin:18px 0"></div>
+        <h5 style="font-size:18px">Devolvidas por mês a uma operação de 40 pessoas.</h5>
+      </div>
+      <div class="pbot" style="color:#0D0B08;opacity:.55">
+        <svg viewBox="0 0 833 100"><use href="#wm-mono" fill="#0D0B08"/></svg>
+        <span>Resultado</span>
+      </div>
+    </div>
+
+    <div class="post p3">
+      <div class="deco">
+        <div style="position:absolute;inset:0;background-image:radial-gradient(circle,rgba(201,162,39,.32) 1px,transparent 1px);background-size:20px 20px;-webkit-mask-image:radial-gradient(ellipse at 72% 22%,#000 5%,transparent 60%);mask-image:radial-gradient(ellipse at 72% 22%,#000 5%,transparent 60%)"></div>
+      </div>
+      <div class="ptop">
+        <svg viewBox="-4 -4 108 108"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+        <span class="num">CASO</span>
+      </div>
+      <div class="pmid">
+        <span class="kick">Controladoria jurídica</span>
+        <h5>De 9 planilhas paralelas a <i>um painel único de decisão.</i></h5>
+        <div style="margin-top:20px"><span class="tagchip" style="color:var(--ouro-dark)">Integração</span><span class="tagchip" style="color:var(--ouro-dark)">IA aplicada</span></div>
+      </div>
+      <div class="pbot">
+        <svg viewBox="0 0 833 100"><use href="#wm-mono" fill="#2A2416" opacity=".85"/></svg>
+        <span>Estudo de caso</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======= 10 · PAPELARIA ======= -->
+<section style="border-bottom:none">
+  <div class="eyebrow">Aplicação · papelaria<span class="idx">10</span></div>
+  <h2 class="title">Onde a marca é tocada, não só vista.</h2>
+  <p class="lead">Cartão em papel <em>soft-touch preto 350g</em>, marca em hot stamping dourado e o símbolo em relevo seco no verso — a geometria sentida pelo dedo antes de ser lida pelo olho.</p>
+
+  <div class="papelaria">
+    <div class="card-face front">
+      <svg viewBox="-4 -4 108 108" style="width:32px;height:32px"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+      <div>
+        <div class="nm">Rafael Andrade</div>
+        <div class="rl">Diretor de Engenharia</div>
+      </div>
+    </div>
+    <div class="card-face back">
+      <svg viewBox="0 0 833 100" style="width:180px;height:auto"><use href="#wm-mono" fill="#0D0B08"/></svg>
+      <div class="ct">nanoflow.com.br<br>rafael@nanoflow.com.br<br>+55 11 90000-0000</div>
+    </div>
+  </div>
+
+  <div class="sig">
+    <svg viewBox="-4 -4 108 108" style="width:40px;height:40px;flex-shrink:0"><use href="#markSolid" fill="url(#gg)" fill-rule="evenodd"/></svg>
+    <div class="bar"></div>
+    <div>
+      <div class="nm">Rafael Andrade</div>
+      <div class="rl">Diretor de Engenharia · NANOFLOW</div>
+      <div class="ct">nanoflow.com.br · +55 11 90000-0000</div>
+    </div>
+  </div>
+  <p class="small" style="margin-top:16px">Assinatura de e-mail: fundo branco-papel, símbolo em dourado, filete vertical de 1px separando marca e dados. Máximo de 3 linhas de contato.</p>
+</section>
+
+<footer>
+  <span>NANOFLOW © Manual de Identidade — Edição Consolidada</span>
+  <span>Logotipo · Design System</span>
+</footer>
+
+</body>
+</html>

@@ -1,8 +1,24 @@
 import axios from 'axios';
-import { demoHandle } from './demo';
+import { coberturaDoDataset, demoHandle } from './demo';
+import type { CoberturaDaAmostra } from './demo';
 
 /** Modo demonstração: o app roda sem backend, com dados fictícios no navegador. */
 export const DEMO = import.meta.env.VITE_DEMO === '1';
+
+export type { CoberturaDaAmostra };
+
+/**
+ * Janela que a amostra estática responde de verdade, ou `null` quando não há
+ * limite a declarar (backend ao vivo, ou demonstração com dados fictícios).
+ *
+ * A porta é aqui, e não em `demo.ts`, por causa do gate: o dataset real é
+ * embarcado por `import.meta.glob` sempre que o arquivo existe na árvore, mesmo
+ * num build ligado ao backend. Sem checar DEMO, um build ao vivo herdaria o
+ * limite de uma fotografia que ele nem usa.
+ */
+export function coberturaDaAmostra(): CoberturaDaAmostra | null {
+  return DEMO ? coberturaDoDataset() : null;
+}
 
 export const api = axios.create({ baseURL: '/api' });
 
@@ -78,6 +94,12 @@ export interface Paged<T> {
 export interface DashboardSummary {
   stores: number;
   products: number;
+  /** Na demo, quantos SKUs a amostra carrega (o total é da rede). */
+  productsSampled?: number;
+  /** `products` é uma projeção do total da rede sobre o recorte, não uma contagem. */
+  productsEstimated?: boolean;
+  /** O total de SKUs da rede, sem recorte — o denominador da projeção. */
+  productsNetwork?: number;
   customers: number;
   stockUnits: number;
   pendingMovements: number;
@@ -254,19 +276,38 @@ export interface Sale {
 
 // ─── Chamadas ────────────────────────────────────────────────────────────────
 
-export const getSummary = () => api.get<DashboardSummary>('/dashboard/summary').then((r) => r.data);
+export const getSummary = (params?: Record<string, string | undefined>) =>
+  api.get<DashboardSummary>('/dashboard/summary', { params }).then((r) => r.data);
 export const getStoreCoverage = (params?: Record<string, string | undefined>) =>
-  api.get<{ days: number; rows: StoreCoverageRow[] }>('/dashboard/coverage', { params }).then((r) => r.data);
+  api
+    .get<{
+      days: number;
+      /** Janela REAL medida nos dados; pode ser menor que `days`. */
+      windowDays?: number;
+      rows: StoreCoverageRow[];
+    }>('/dashboard/coverage', { params })
+    .then((r) => r.data);
 
 // Arrays viram parâmetro repetido (?storeId=a&storeId=b) — cada valor segue
 // literal, então categorias com vírgula não quebram o filtro multi-seleção.
 export const getStock = (params: Record<string, string | string[] | boolean | undefined>) =>
   api.get<Paged<StockRow>>('/stock', { params }).then((r) => r.data);
 
-export const getStores = () => api.get<Paged<Store>>('/stores').then((r) => r.data);
+/**
+ * Lista de lojas. Na demo estática o catálogo vem amostrado, e a resposta
+ * marca isso para a tela poder avisar em vez de exibir um número menor sem
+ * explicação.
+ */
+export interface StoresResponse extends Paged<Store> {
+  sampled?: boolean;
+  catalogSampled?: number;
+  productCountNetwork?: number;
+}
+export const getStores = () => api.get<StoresResponse>('/stores').then((r) => r.data);
 export const getProducts = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Product>>('/products', { params }).then((r) => r.data);
-export const getCategories = () => api.get<string[]>('/products/categories').then((r) => r.data);
+export const getCategories = (params?: Record<string, string | undefined>) =>
+  api.get<string[]>('/products/categories', { params }).then((r) => r.data);
 
 export const getSales = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Sale>>('/sales', { params }).then((r) => r.data);
@@ -313,6 +354,14 @@ export const getAbc = (params: Record<string, string | number | undefined>) =>
       days: number;
       dimension: AbcDimension;
       totalRevenue: number;
+      /** Receita do período sem o recorte de produto — para reconciliar. */
+      periodRevenue?: number;
+      /** Quantos SKUs tiveram VENDA na janela (só eles entram na curva). */
+      skusComVenda?: number;
+      /** Quantos SKUs o catálogo tem — o contraste que explica a curva curta. */
+      skusNoCatalogo?: number;
+      /** Dias que a extração realmente cobre, que podem ser menos que `days`. */
+      janelaRealDias?: number;
       summary: Record<'A' | 'B' | 'C', { items: number; revenue: number }>;
       rows: AbcRow[];
     }>('/reports/abc', { params })
@@ -321,7 +370,13 @@ export const getTurnover = (params: Record<string, string | number | undefined>)
   api.get<{ days: number; rows: TurnoverRow[] }>('/reports/turnover', { params }).then((r) => r.data);
 export const getBrandCoverage = (params: Record<string, string | number | undefined>) =>
   api
-    .get<{ days: number; total: CoverageReportRow; rows: CoverageReportRow[] }>('/reports/coverage', { params })
+    .get<{
+      days: number;
+      total: CoverageReportRow;
+      rows: CoverageReportRow[];
+      /** Só na demo: as linhas por marca cobrem menos que o total da rede. */
+      sampled?: { stockUnits: number; networkStockUnits: number };
+    }>('/reports/coverage', { params })
     .then((r) => r.data);
 export const getSalesAnalysis = (params: Record<string, string | number | undefined>) =>
   api
@@ -378,7 +433,7 @@ export const setMinStock = (productId: string, minStock: number | null, storeId?
 export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
 /** Recorte de cobertura: principal (óculos+grau+relógio), lentes ou tudo. */
-export type ProductGroup = 'principal' | 'lentes' | 'todos';
+export type ProductGroup = 'principal' | 'relogios' | 'lentes' | 'outros' | 'todos';
 
 export interface ProductPlan {
   productId: string;
@@ -442,7 +497,18 @@ export interface PlanningOverview {
 
 export interface PurchaseSuggestions {
   days: number;
-  summary: { buy: number; hold: number; dontBuy: number; liquidate: number; buyCapital: number; avoidedCapital: number };
+  summary: {
+    buy: number;
+    hold: number;
+    dontBuy: number;
+    liquidate: number;
+    buyCapital: number;
+    avoidedCapital: number;
+    /** Quantos SKUs o motor analisou — o denominador de `buy`. */
+    analisados?: number;
+    /** Quantos SKUs o recorte tem na rede, quando a base carregada é amostra. */
+    universo?: number;
+  };
   rows: ProductPlan[];
 }
 
@@ -537,6 +603,29 @@ export interface DecisionCard {
   ageDays?: number;
   isNew?: boolean;
   isOverdue?: boolean;
+  /** Liquidação: desconto sugerido, teto e o porquê. */
+  discountPct?: number;
+  discountMaxPct?: number;
+  discountReason?: string;
+  discountParams?: {
+    basePct: number;
+    priceBand: 'abaixo de R$ 1.000' | 'R$ 1.000 ou mais';
+    stepPct: number;
+    stepDays: number;
+    steps: number;
+    stuckDays: number | null;
+    marginPct: number;
+    ceilingEstimated: boolean;
+    brandUnitsSold: number | null;
+  };
+  /** Liquidação: loja com maior chance de escoar. */
+  outletStoreId?: string;
+  outletStoreName?: string;
+  outletBasis?: 'sku' | 'marca';
+  /** Liquidação: de onde sai e quantas — a transferência já resolvida. */
+  outletFromStoreId?: string;
+  outletFromStoreName?: string;
+  outletQuantity?: number;
 }
 
 /** Lote de geração: a execução do motor que produziu estes cards. */
@@ -699,13 +788,12 @@ export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) 
 // ─── BI ──────────────────────────────────────────────────────────────────────
 
 export interface BiKpis {
-  /** Janela realmente coberta pelos dados (pode ser menor que a pedida). */
   days: number;
-  /** Janela pedida no filtro — presente quando a fonte sabe distinguir. */
-  requestedDays?: number;
   revenue: number;
   salesCount: number;
   avgTicket: number;
+  /** Receita ÷ unidades vendidas. É o que responde ao recorte; o ticket não. */
+  avgUnitPrice?: number;
   turnover: number;
   rupturaRate: number;
   lowStockRate: number;
@@ -715,6 +803,8 @@ export interface BiKpis {
   outOfStock: number;
   lowStock: number;
   pendingTransfers: number;
+  /** No recorte, a contagem de vendas é proporcional (uma venda mistura tipos). */
+  vendasAproximadas?: boolean;
 }
 
 export interface TimeseriesPoint {
@@ -739,6 +829,8 @@ export interface HeatmapData {
   xLabels: string[];
   yLabels: string[];
   cells: [number, number, number][];
+  /** Projetado pela fatia do recorte: o CDS não traz dia da semana por tipo. */
+  aproximado?: boolean;
 }
 
 type BiParams = Record<string, string | number | undefined>;
@@ -747,14 +839,19 @@ export const getBiKpis = (params: BiParams) =>
   api.get<BiKpis>('/bi/kpis', { params }).then((r) => r.data);
 export const getBiTimeseries = (params: BiParams) =>
   api
-    .get<{ days: number; requestedDays?: number; granularity: string; points: TimeseriesPoint[] }>(
-      '/bi/sales-timeseries',
-      { params },
-    )
+    .get<{
+      days: number;
+      granularity: string;
+      points: TimeseriesPoint[];
+      /** A série é projetada pela fatia do recorte (o CDS não a traz por tipo). */
+      aproximado?: boolean;
+    }>('/bi/sales-timeseries', { params })
     .then((r) => r.data);
 export const getBiDimension = (by: string, params: BiParams) =>
   api
-    .get<{ by: string; rows: DimensionRow[] }>('/bi/sales-by-dimension', { params: { ...params, by } })
+    .get<{ by: string; rows: DimensionRow[]; aproximado?: boolean }>('/bi/sales-by-dimension', {
+      params: { ...params, by },
+    })
     .then((r) => r.data);
 export const getBiSalesFlow = (params: BiParams) =>
   api.get<SalesFlow>('/bi/sales-flow', { params }).then((r) => r.data);

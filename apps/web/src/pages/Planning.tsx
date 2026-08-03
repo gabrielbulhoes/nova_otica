@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createMovement,
@@ -22,22 +22,69 @@ import {
   type Recommendation,
   type RebalanceSuggestion,
 } from '../api/client';
-import { PageHeader, Loading, ExportCsv } from '../components/ui';
+import {
+  PageHeader,
+  Loading,
+  ExportCsv,
+  Selo,
+  Botao,
+  BotaoPrimario,
+  AberturaDeSecao,
+  type TomDeSelo,
+} from '../components/ui';
+import { Icon, type IconName } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { downloadCsv, toCsv } from '../bi/csv';
+import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
 
-const recMeta: Record<Recommendation, { label: string; cls: string }> = {
-  BUY: { label: 'Comprar', cls: 'green' },
-  HOLD: { label: 'Manter', cls: 'blue' },
-  DONT_BUY: { label: 'Não comprar', cls: 'amber' },
-  LIQUIDATE: { label: 'Liquidar', cls: 'red' },
+/**
+ * Recortes das duas telas. O rateio de feira pede janela LONGA de propósito —
+ * ele reparte uma compra pela participação histórica de cada loja —, e é por
+ * isso que nenhuma das opções cabe numa amostra de 7 dias. Nesse caso
+ * `opcoesDePeriodo` acrescenta a própria cobertura como primeira opção, para a
+ * tela continuar utilizável com o que a base tem.
+ */
+const PERIODOS_RATEIO = [
+  { dias: 90, label: '90 dias' },
+  { dias: 180, label: '180 dias' },
+  { dias: 365, label: '1 ano' },
+];
+
+const PERIODOS_ANALISE = [
+  { dias: 30, label: 'Últimos 30 dias' },
+  { dias: 90, label: 'Últimos 90 dias' },
+  { dias: 180, label: 'Últimos 180 dias' },
+];
+
+/**
+ * Estado operacional desta tela, no formato que o <Selo> compartilhado consome.
+ *
+ * `tom` é o terceiro canal, nunca o primeiro: quem carrega a decisão é o rótulo
+ * escrito e o ícone da grade 24. O critério é objetivo — com filter:grayscale(1)
+ * "Comprar" e "Liquidar" continuam separáveis, porque diferem em palavra, em
+ * desenho e em espessura do filete do chip, não só em matiz.
+ */
+type EstadoOperacional = { label: string; tom: TomDeSelo; icone: IconName; forte?: boolean };
+
+const recMeta: Record<Recommendation, EstadoOperacional> = {
+  BUY: { label: 'Comprar', tom: 'green', icone: 'compras' },
+  HOLD: { label: 'Manter', tom: 'blue', icone: 'aprovar' },
+  DONT_BUY: { label: 'Não comprar', tom: 'amber', icone: 'recusar' },
+  // forte (peso 600) fica com o que exige mão na massa agora: liquidar é a
+  // única recomendação que manda tirar capital parado da prateleira.
+  LIQUIDATE: { label: 'Liquidar', tom: 'red', icone: 'etiqueta', forte: true },
 };
 
-const moveMeta: Record<MovementClass, { label: string; cls: string }> = {
-  FAST: { label: 'Alto giro', cls: 'green' },
-  HEALTHY: { label: 'Saudável', cls: 'blue' },
-  SLOW: { label: 'Baixo giro', cls: 'amber' },
-  DEAD: { label: 'Parado', cls: 'red' },
+const moveMeta: Record<MovementClass, EstadoOperacional> = {
+  FAST: { label: 'Alto giro', tom: 'green', icone: 'tendencia' },
+  // HEALTHY era 'blue' aqui e 'green' no selo compartilhado (ui.tsx): o MESMO
+  // estado tinha duas cores dependendo da tela em que o usuário estivesse.
+  // Fica verde, que é o valor do componente comum. Alto giro também é verde —
+  // os dois são estados saudáveis, e quem os separa é a palavra e o ícone.
+  HEALTHY: { label: 'Saudável', tom: 'green', icone: 'aprovar' },
+  SLOW: { label: 'Baixo giro', tom: 'amber', icone: 'prazo' },
+  DEAD: { label: 'Parado', tom: 'red', icone: 'estoque', forte: true },
 };
 
 type Filter = 'ALL' | Recommendation;
@@ -46,25 +93,38 @@ type Filter = 'ALL' | Recommendation;
 const GROUP_OPTIONS: { value: ProductGroup; label: string; hint: string }[] = [
   {
     value: 'principal',
-    label: 'Cobertura principal',
-    hint: 'Óculos, óculos de grau (armações) e relógios — o que a rede chama de cobertura no dia a dia.',
+    label: 'Óculos e armações',
+    hint: 'Óculos solares e de grau / armações — o que a rede chama de cobertura no dia a dia.',
+  },
+  {
+    value: 'relogios',
+    label: 'Relógios',
+    hint: 'Somente relógio, separado de óculos a pedido da rede (Feedbacks 5.0).',
   },
   {
     value: 'lentes',
-    label: 'Lentes',
-    hint: 'Somente lentes — a visão usada para programar as reposições de lentes prontas.',
+    label: 'Lentes e tratamentos',
+    hint: 'Lente e tratamento — a visão usada para programar as reposições do laboratório.',
+  },
+  {
+    value: 'outros',
+    label: 'Acessórios e outros',
+    hint: 'Estojo, porta-óculos, cordão, bijuteria, voucher — o que não é óculos, relógio nem lente.',
   },
   {
     value: 'todos',
     label: 'Consolidado',
-    hint: 'Todos os produtos juntos, incluindo estojos, acessórios e demais categorias.',
+    hint: 'Todos os produtos juntos. É exatamente a soma dos quatro recortes acima.',
   },
 ];
 
+/* Sem canto arredondado: a geometria do sistema é reta, e o único arco
+   autorizado é o corte assimétrico do símbolo (que vive no .btn). A barra
+   tinha raio 999 — pílula, vocabulário de outro tema. */
 function Bar({ segments }: { segments: { value: number; color: string; label: string }[] }) {
   const total = segments.reduce((a, s) => a + s.value, 0) || 1;
   return (
-    <div style={{ display: 'flex', height: 14, borderRadius: 999, overflow: 'hidden', background: 'var(--panel-2)' }}>
+    <div style={{ display: 'flex', height: 14, overflow: 'hidden', background: 'var(--panel-2)' }}>
       {segments.map((s, i) => (
         <div
           key={i}
@@ -76,6 +136,24 @@ function Bar({ segments }: { segments: { value: number; color: string; label: st
   );
 }
 
+/**
+ * Estado vazio POSITIVO: aqui "nada a fazer" é boa notícia, e era isso que
+ * o emoji de palmas tentava dizer. Emoji não serve: muda de desenho em cada
+ * sistema e, em escala de cinza, vira mancha sem forma. O ícone de aprovação
+ * diz o mesmo em traço 1,3 e herda a cor do contexto.
+ */
+function TudoCerto({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className="empty"
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+    >
+      <Icon name="aprovar" size={18} />
+      <span>{children}</span>
+    </div>
+  );
+}
+
 /** "Pedir até": urgência do pedido em linguagem do dia a dia. */
 function OrderBy({ inDays, leadTimeDays }: { inDays: number | null; leadTimeDays: number }) {
   if (inDays === null) return <span className="muted">—</span>;
@@ -83,30 +161,60 @@ function OrderBy({ inDays, leadTimeDays }: { inDays: number | null; leadTimeDays
     day: '2-digit',
     month: '2-digit',
   });
-  const label = inDays === 0 ? 'pedir hoje' : `até ${deadline}`;
-  const cls = inDays === 0 ? 'red' : inDays <= 7 ? 'amber' : 'gray';
+  const hoje = inDays === 0;
+  const label = hoje ? 'pedir hoje' : `até ${deadline}`;
+  const tom: TomDeSelo = hoje ? 'red' : inDays <= 7 ? 'amber' : 'gray';
+  // Três ícones, três urgências: triângulo (agora), relógio (esta semana),
+  // calendário (dá tempo). Em P&B o desenho separa o que o tom não separa.
+  const icone: IconName = hoje ? 'atencao' : inDays <= 7 ? 'prazo' : 'calendario';
   return (
-    <span className={`badge ${cls}`} title={`Prazo do fornecedor: ${leadTimeDays} dias. Pedido deve ser feito ${inDays === 0 ? 'hoje' : `em até ${inDays} dias`} para não romper.`}>
+    <Selo
+      tom={tom}
+      icone={icone}
+      forte={hoje}
+      title={`Prazo do fornecedor: ${leadTimeDays} dias. Pedido deve ser feito ${hoje ? 'hoje' : `em até ${inDays} dias`} para não romper.`}
+    >
       {label}
-    </span>
+    </Selo>
   );
 }
 
-/** Selo de confiabilidade da decisão (0–100), com cor por faixa. */
+/**
+ * Confiabilidade da decisão (0–100).
+ *
+ * Aqui a cor não carrega estado sozinha porque o próprio NÚMERO é o rótulo
+ * escrito: 42% e 88% se leem iguais em cinza, em P&B e no daltonismo. O tom e
+ * o ícone existem para dar a faixa de relance, não para substituir o valor.
+ */
 function Confidence({ value }: { value: number }) {
-  const cls = value >= 75 ? 'green' : value >= 50 ? 'amber' : 'gray';
+  const alta = value >= 75;
+  const media = value >= 50;
+  const tom: TomDeSelo = alta ? 'green' : media ? 'amber' : 'gray';
+  const icone: IconName = alta ? 'aprovar' : media ? 'informacao' : 'atencao';
+  const faixa = alta ? 'alta' : media ? 'média' : 'baixa';
   return (
-    <span className={`badge ${cls}`} title="Confiabilidade da recomendação: quanto mais vendas e histórico, mais confiável.">
+    <Selo
+      tom={tom}
+      icone={icone}
+      title={`Confiabilidade ${faixa}: quanto mais vendas e histórico o item tem, mais confiável é a recomendação.`}
+    >
       {value}%
-    </span>
+    </Selo>
   );
 }
 
 /** Explicação curta e amigável do porquê da decisão. */
 function WhyNote({ text }: { text: string }) {
   return (
-    <div className="muted" style={{ fontSize: 11.5, marginTop: 3, lineHeight: 1.35 }}>
-      💡 {text}
+    <div
+      className="muted"
+      style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 11.5, marginTop: 3, lineHeight: 1.35 }}
+    >
+      {/* Substitui o emoji de lâmpada. `ideia` é o desenho que o manual
+          reservou para "porquê da recomendação"; marginTop alinha o traço
+          à primeira linha do texto. */}
+      <Icon name="ideia" size={14} style={{ marginTop: 1 }} />
+      <span>{text}</span>
     </div>
   );
 }
@@ -136,13 +244,16 @@ function TwoStepButton({
 }) {
   const [state, setState] = useState<'idle' | 'armed' | 'loading' | 'done' | 'error'>('idle');
 
-  if (state === 'done') return <span className="badge green">{doneLabel}</span>;
+  // O check que vinha colado no rótulo ("Enviado" + glifo) era ícone escrito
+  // como texto: largura variável conforme a fonte instalada e nenhuma garantia
+  // de desenho. O selo já tem um lugar próprio para o ícone.
+  if (state === 'done') return <Selo tom="green" icone="check">{doneLabel}</Selo>;
 
   if (state === 'armed' || state === 'loading') {
     return (
       <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', whiteSpace: 'nowrap' }}>
-        <button
-          className="btn sm"
+        <Botao
+          pequeno
           disabled={state === 'loading'}
           onClick={async () => {
             setState('loading');
@@ -155,20 +266,25 @@ function TwoStepButton({
           }}
         >
           {state === 'loading' ? 'Aguarde…' : confirmLabel}
-        </button>
-        <button className="btn ghost sm" disabled={state === 'loading'} onClick={() => setState('idle')}>
+        </Botao>
+        <Botao variante="discreto" pequeno disabled={state === 'loading'} onClick={() => setState('idle')}>
           Voltar
-        </button>
+        </Botao>
       </span>
     );
   }
 
   return (
     <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-      <button className={`btn ${ghost ? 'ghost ' : ''}sm`} onClick={() => setState('armed')}>
+      <Botao variante={ghost ? 'discreto' : 'comum'} pequeno onClick={() => setState('armed')}>
         {label}
-      </button>
-      {state === 'error' && <span style={{ fontSize: 11, color: 'var(--red)' }}>Falhou — tente de novo</span>}
+      </Botao>
+      {state === 'error' && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--red)' }}>
+          <Icon name="atencao" size={12} />
+          Falhou — tente de novo
+        </span>
+      )}
     </span>
   );
 }
@@ -223,6 +339,11 @@ function orderCsv(order: PurchaseOrder): string {
 
 const slug = (s: string) => s.toLowerCase().normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
 
+/* Mesmo respiro que o `.stat .value` do indicador compartilhado usa entre o
+   rótulo em mono e o número em Fraunces. Fica aqui porque styles.css é de
+   outro dono nesta onda e a regra .action-card .action-count não o traz. */
+const contadorHeroi = { marginTop: 6 } as const;
+
 /** Rascunho de ordem de compra de um fornecedor, com export CSV e envio. */
 function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
   const qc = useQueryClient();
@@ -266,7 +387,14 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
           cursor: 'pointer',
         }}
       >
-        <span style={{ fontSize: 12, color: 'var(--muted)', width: 14 }}>{open ? '▾' : '▸'}</span>
+        {/* Este glifo era ÍCONE DE ESTADO (aberto/fechado), não pontuação: vira
+            desenho da grade 24. Quem anuncia o estado ao leitor de tela é o
+            aria-expanded do contêiner, então aqui o ícone é decorativo. */}
+        <Icon
+          name={open ? 'chevron-baixo' : 'chevron-direita'}
+          size={16}
+          style={{ color: 'var(--muted)' }}
+        />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 600 }}>
             <span className="muted" style={{ fontWeight: 500, fontSize: 12 }}>Fornecedor:</span> {order.supplier}
@@ -276,31 +404,38 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
             {order.items.length} {order.items.length === 1 ? 'item' : 'itens'} · {order.units} un. · entrega em{' '}
             {order.leadTimeDays} dias
             {order.stockoutInDays !== null && (
-              <span style={{ color: 'var(--red)' }}> · ruptura em ~{order.stockoutInDays}d se não pedir</span>
+              <span style={{ color: 'var(--red)' }}> · vai faltar em ~{order.stockoutInDays}d se não pedir</span>
             )}
           </div>
         </div>
         {urgency && (
-          <span className={`badge ${order.orderByInDays === 0 ? 'red' : order.orderByInDays! <= 7 ? 'amber' : 'gray'}`}>
+          <Selo
+            tom={order.orderByInDays === 0 ? 'red' : order.orderByInDays! <= 7 ? 'amber' : 'gray'}
+            icone={order.orderByInDays === 0 ? 'atencao' : order.orderByInDays! <= 7 ? 'prazo' : 'calendario'}
+            forte={order.orderByInDays === 0}
+          >
             enviar {urgency}
-          </span>
+          </Selo>
         )}
         <strong style={{ whiteSpace: 'nowrap' }}>{formatBRL(order.total)}</strong>
-        <span
-          className="btn ghost sm"
-          role="button"
+        {/* Era um <span role="button"> sem tabIndex e sem tecla: aparência de
+            botão, nenhum comportamento de botão para quem navega por teclado. */}
+        <Botao
+          variante="discreto"
+          pequeno
+          icone="exportar"
           onClick={(e) => {
             e.stopPropagation();
             downloadCsv(`pedido-${slug(order.supplier)}`, orderCsv(order));
           }}
         >
           Exportar CSV
-        </span>
+        </Botao>
         <span onClick={(e) => e.stopPropagation()}>
           <TwoStepButton
             label="Registrar envio"
             confirmLabel={`Confirmar envio (${formatBRL(order.total)})`}
-            doneLabel="Enviado ✓"
+            doneLabel="Enviado"
             onConfirm={send}
           />
         </span>
@@ -343,10 +478,12 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
   );
 }
 
-const recordStatusMeta: Record<PurchaseOrderRecord['status'], { label: string; cls: string }> = {
-  SENT: { label: 'Em trânsito', cls: 'blue' },
-  RECEIVED: { label: 'Recebido', cls: 'green' },
-  CANCELLED: { label: 'Cancelado', cls: 'gray' },
+const recordStatusMeta: Record<PurchaseOrderRecord['status'], EstadoOperacional> = {
+  SENT: { label: 'Em trânsito', tom: 'blue', icone: 'entrega' },
+  RECEIVED: { label: 'Recebido', tom: 'green', icone: 'aprovar' },
+  // `limpar` (X no círculo) é o mesmo desenho que o selo compartilhado usa para
+  // CANCELLED — encerrado por quem pediu, não recusado por governança.
+  CANCELLED: { label: 'Cancelado', tom: 'gray', icone: 'limpar' },
 };
 
 /** Histórico do ciclo de compras: enviado → recebido (ou cancelado). */
@@ -363,12 +500,13 @@ function OrderHistory() {
   };
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="section-title" style={{ marginBottom: 2 }}>Histórico de pedidos (enviado → recebido)</div>
-      <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
-        Pedidos em trânsito são abatidos das sugestões (não compra duas vezes). Confirme o recebimento quando a
-        mercadoria chegar e for conferida.
-      </div>
+    <>
+    <AberturaDeSecao
+      eyebrow="Trilha"
+      titulo="Histórico de pedidos (enviado → recebido)"
+      descricao="Pedidos em trânsito são abatidos das sugestões (não compra duas vezes). Confirme o recebimento quando a mercadoria chegar e for conferida."
+    />
+    <div className="card">
       {history.isLoading ? (
         <Loading />
       ) : (history.data?.rows.length ?? 0) === 0 ? (
@@ -397,10 +535,10 @@ function OrderHistory() {
                 <td>{shortDate(r.sentAt)}</td>
                 <td>{shortDate(r.expectedAt)}</td>
                 <td>
-                  <span className={`badge ${recordStatusMeta[r.status].cls}`}>
+                  <Selo tom={recordStatusMeta[r.status].tom} icone={recordStatusMeta[r.status].icone}>
                     {recordStatusMeta[r.status].label}
                     {r.status === 'RECEIVED' && r.receivedAt ? ` · ${shortDate(r.receivedAt)}` : ''}
-                  </span>
+                  </Selo>
                 </td>
                 <td className="right" style={{ whiteSpace: 'nowrap' }}>
                   {r.status === 'SENT' ? (
@@ -408,7 +546,7 @@ function OrderHistory() {
                       <TwoStepButton
                         label="Confirmar recebimento"
                         confirmLabel="Mercadoria conferida?"
-                        doneLabel="Recebido ✓"
+                        doneLabel="Recebido"
                         onConfirm={() => settle(r.id, 'receive')}
                       />
                       <TwoStepButton
@@ -429,6 +567,7 @@ function OrderHistory() {
         </table>
       )}
     </div>
+    </>
   );
 }
 
@@ -477,18 +616,27 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
       <td className="num">
         {s.toCoverageDays === null ? '—' : `${s.toCoverageDays}d`}
         {s.stockoutInDays !== null && (
-          <div style={{ fontSize: 11, color: 'var(--red)' }}>ruptura ~{s.stockoutInDays}d</div>
+          <div style={{ fontSize: 11, color: 'var(--red)' }}>
+                          {s.stockoutInDays === 0 ? 'já em falta' : `falta em ~${s.stockoutInDays}d`}
+                        </div>
         )}
       </td>
       <td className="right" style={{ whiteSpace: 'nowrap' }}>
         {state === 'done' ? (
-          <span className="badge green">Solicitada ✓</span>
+          <Selo tom="green" icone="check">Solicitada</Selo>
         ) : (
-          <button className="btn sm" onClick={request} disabled={state === 'loading'}>
+          <Botao pequeno icone="transferencias" onClick={request} disabled={state === 'loading'}>
             {state === 'loading' ? 'Solicitando…' : 'Solicitar transferência'}
-          </button>
+          </Botao>
         )}
-        {state === 'error' && <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>{error}</div>}
+        {state === 'error' && (
+          <div
+            style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--red)', marginTop: 4 }}
+          >
+            <Icon name="atencao" size={12} />
+            {error}
+          </div>
+        )}
       </td>
     </tr>
   );
@@ -550,10 +698,23 @@ function SupplierRow({
       </td>
       {canEdit && (
         <td className="right">
-          <button className="btn ghost sm" onClick={save} disabled={state === 'saving'}>
-            {state === 'saving' ? 'Salvando…' : state === 'saved' ? 'Salvo ✓' : 'Salvar'}
-          </button>
-          {state === 'error' && <div style={{ fontSize: 11, color: 'var(--red)' }}>Erro ao salvar</div>}
+          <Botao
+            variante="discreto"
+            pequeno
+            icone={state === 'saved' ? 'check' : undefined}
+            onClick={save}
+            disabled={state === 'saving'}
+          >
+            {state === 'saving' ? 'Salvando…' : state === 'saved' ? 'Salvo' : 'Salvar'}
+          </Botao>
+          {state === 'error' && (
+            <div
+              style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--red)' }}
+            >
+              <Icon name="atencao" size={12} />
+              Erro ao salvar
+            </div>
+          )}
         </td>
       )}
     </tr>
@@ -567,12 +728,12 @@ function SupplierRow({
  */
 function FairSplit() {
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
-  const categories = useQuery({ queryKey: ['categories'], queryFn: getCategories });
+  const categories = useQuery({ queryKey: ['categories'], queryFn: () => getCategories() });
   const [mode, setMode] = useState<'brand' | 'category'>('brand');
   const [brand, setBrand] = useState('');
   const [category, setCategory] = useState('');
   const [qty, setQty] = useState('100');
-  const [days, setDays] = useState('180');
+  const [days, setDays] = useState(() => periodoInicial(PERIODOS_RATEIO, 180));
   const [submitted, setSubmitted] = useState<{ brand?: string; category?: string; qty: string; days: string } | null>(null);
 
   const split = useQuery({
@@ -591,17 +752,17 @@ function FairSplit() {
   };
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="section-title" style={{ marginBottom: 2 }}>Modo Feira — como distribuir uma compra nova</div>
-      <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
-        Lançamentos de feira não têm histórico. Escolha a marca ou o grupo, a quantidade comprada, e o sistema
-        rateia entre as lojas pela participação de cada uma nas vendas desse recorte (a soma bate exatamente com o
-        total).
-      </div>
+    <>
+    <AberturaDeSecao
+      eyebrow="Feira"
+      titulo="Modo Feira — como distribuir uma compra nova"
+      descricao="Lançamentos de feira não têm histórico. Escolha a marca ou o grupo, a quantidade comprada, e o sistema rateia entre as lojas pela participação de cada uma nas vendas desse recorte (a soma bate exatamente com o total)."
+    />
+    <div className="card">
       <div className="toolbar" style={{ marginBottom: 0 }}>
         <div className="segmented">
-          <button className={mode === 'brand' ? 'active' : ''} onClick={() => setMode('brand')}>Por marca</button>
-          <button className={mode === 'category' ? 'active' : ''} onClick={() => setMode('category')}>Por grupo</button>
+          <button type="button" className={mode === 'brand' ? 'active' : ''} onClick={() => setMode('brand')}>Por marca</button>
+          <button type="button" className={mode === 'category' ? 'active' : ''} onClick={() => setMode('category')}>Por grupo</button>
         </div>
         {mode === 'brand' ? (
           <select value={brand} onChange={(e) => setBrand(e.target.value)} aria-label="Marca">
@@ -629,12 +790,26 @@ function FairSplit() {
         />
         <label className="muted">un., histórico</label>
         <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Janela de histórico">
-          <option value="90">90 dias</option>
-          <option value="180">180 dias</option>
-          <option value="365">1 ano</option>
+          {opcoesDePeriodo(PERIODOS_RATEIO).map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
         </select>
-        <button className="btn" disabled={!canRun} onClick={run}>Distribuir</button>
+        {/* O ÚNICO sólido da tela.
+            Planejamento & Compras é uma tela de muitas ações, mas todas as
+            outras são de LINHA e se repetem N vezes (solicitar transferência
+            por sugestão, registrar envio por fornecedor, salvar prazo por
+            marca) — nenhuma delas pode carregar o ouro preenchido sem virar
+            uma parede de ouro. "Distribuir" é a única ação que existe uma vez
+            só na página e que produz uma decisão nova: quanto de uma compra de
+            feira vai para cada uma das 19 lojas. Por isso o primário é ele. */}
+        <BotaoPrimario icone="transferencias" disabled={!canRun} aria-disabled={!canRun} onClick={run}>
+          Distribuir
+        </BotaoPrimario>
       </div>
+
+      <LegendaDaAmostra days={days} />
 
       {submitted && (
         split.isLoading ? (
@@ -690,12 +865,13 @@ function FairSplit() {
         ) : null
       )}
     </div>
+    </>
   );
 }
 
 export function Planning() {
   const { isAdmin } = useAuth();
-  const [days, setDays] = useState('90');
+  const [days, setDays] = useState(() => periodoInicial(PERIODOS_ANALISE, 90));
   const [storeId, setStoreId] = useState('');
   // Recorte de cobertura: a operação fala de "cobertura" como óculos + grau +
   // relógio (principal); lentes são acompanhadas à parte; consolidado é tudo.
@@ -744,6 +920,7 @@ export function Planning() {
           {GROUP_OPTIONS.map((g) => (
             <button
               key={g.value}
+              type="button"
               className={group === g.value ? 'active' : ''}
               aria-pressed={group === g.value}
               onClick={() => setGroup(g.value)}
@@ -753,9 +930,11 @@ export function Planning() {
           ))}
         </div>
         <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período de análise">
-          <option value="30">Últimos 30 dias</option>
-          <option value="90">Últimos 90 dias</option>
-          <option value="180">Últimos 180 dias</option>
+          {opcoesDePeriodo(PERIODOS_ANALISE).map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
         </select>
         {isAdmin && (
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Escopo de loja">
@@ -773,55 +952,82 @@ export function Planning() {
         {GROUP_OPTIONS.find((g) => g.value === group)!.hint}
       </div>
 
-      {/* ── O que fazer hoje: prioridades em 1 olhada, ação em 1 clique ── */}
+      <LegendaDaAmostra days={days} />
+
+      {/* ── O que fazer hoje: prioridades em 1 olhada, ação em 1 clique ──
+          É o painel de decisão da tela, e por isso ganha a abertura completa do
+          manual: régua dourada abrindo a seção, sobretítulo em mono e, dentro
+          de cada cartão, a gramática única do indicador — RÓTULO em mono caixa
+          alta, NÚMERO herói em Fraunces, frase de apoio em Inter. O rótulo
+          subiu para cima do número (era .action-label, em Inter semibold,
+          embaixo): é a ordem do <StatCard> e a única que impede a frase de 12px
+          pesar mais que o nome do cartão. */}
+      {/* ONDA 5 · A régua e o sobretítulo estavam soltos, sem título — e o
+          sobretítulo tinha 16 caracteres em mono CAIXA ALTA a 0.18em, acima do
+          limite de ~14 em que a entreletras deixa de separar letras e passa a
+          desmanchar a palavra. O nome inteiro desceu para o título, em Fraunces,
+          onde ele se LÊ; o sobretítulo ficou com uma palavra, que é a dose que o
+          de-para pede. É a mesma abertura que as outras seis seções desta tela
+          passaram a usar — e é o que faz esta ser reconhecível como a primeira
+          entre iguais, em vez de flutuar. */}
+      <AberturaDeSecao
+        eyebrow="Hoje"
+        titulo="O que fazer hoje"
+        descricao="As quatro frentes do dia. Clique em uma para pular direto para o bloco que a resolve."
+      />
       <div className="grid grid-4 action-center">
-        <button className="card action-card red" onClick={() => goTo(purchaseRef, 'BUY')}>
-          <div className="action-count">{urgentCount}</div>
-          <div className="action-label">Risco de ruptura</div>
+        <button type="button" className="card action-card red" onClick={() => goTo(purchaseRef, 'BUY')}>
+          <div className="label">Risco de faltar</div>
+          <div className="action-count" style={contadorHeroi}>{urgentCount}</div>
           <div className="hint">
-            {urgentCount > 0 ? 'sem estoque na rede para a demanda — pedir já' : 'nenhum item em risco na rede 👏'}
+            {urgentCount > 0 ? 'sem estoque na rede para a demanda — pedir já' : 'nenhum item em risco na rede'}
           </div>
         </button>
-        <button className="card action-card blue" onClick={() => goTo(rebalanceRef)}>
-          <div className="action-count">{reb?.summary.suggestions ?? '…'}</div>
-          <div className="action-label">Transferências sugeridas</div>
+        <button type="button" className="card action-card blue" onClick={() => goTo(rebalanceRef)}>
+          <div className="label">Transferências sugeridas</div>
+          <div className="action-count" style={contadorHeroi}>{reb?.summary.suggestions ?? '…'}</div>
           <div className="hint">{reb ? `${reb.summary.units} un. já existem na rede — sem gastar nada` : 'cruzando vendas × estoque'}</div>
         </button>
-        <button className="card action-card green" onClick={() => goTo(ordersRef)}>
-          <div className="action-count">{summary?.buy ?? '…'}</div>
-          <div className="action-label">Pedidos a fazer</div>
+        <button type="button" className="card action-card green" onClick={() => goTo(ordersRef)}>
+          <div className="label">Pedidos a fazer</div>
+          <div className="action-count" style={contadorHeroi}>{summary?.buy ?? '…'}</div>
           <div className="hint">
             {!summary
               ? ''
               : summary.buy > 0
                 ? `${formatBRL(summary.buyCapital)} no prazo de cada fornecedor`
-                : 'nada a comprar agora 👏'}
+                : 'nada a comprar agora'}
           </div>
         </button>
-        <button className="card action-card amber" onClick={() => goTo(purchaseRef, 'LIQUIDATE')}>
-          <div className="action-count">{summary ? summary.liquidate + summary.dontBuy : '…'}</div>
-          <div className="action-label">Excesso & parados</div>
+        <button type="button" className="card action-card amber" onClick={() => goTo(purchaseRef, 'LIQUIDATE')}>
+          <div className="label">Excesso &amp; parados</div>
+          <div className="action-count" style={contadorHeroi}>{summary ? summary.liquidate + summary.dontBuy : '…'}</div>
           <div className="hint">{summary ? `${formatBRL(summary.avoidedCapital)} para não repor / liberar` : ''}</div>
         </button>
       </div>
 
-      {/* ── 1º: redistribuir o que já existe (não custa nada) ── */}
-      <div className="card" style={{ marginTop: 16 }} ref={rebalanceRef}>
-        <div className="row-between">
-          <div>
-            <div className="section-title" style={{ marginBottom: 2 }}>Redistribuir entre lojas (antes de comprar)</div>
-            <div className="muted" style={{ fontSize: 12.5 }}>
-              Onde o produto vende e está acabando ← recebe de onde está sobrando ou parado. Visão de toda a rede.
-            </div>
-          </div>
-          {reb && reb.rows.length > 0 && (
-            <span className="badge blue">{reb.summary.units} un. em {reb.summary.storesInvolved} lojas</span>
-          )}
-        </div>
+      {/* ── 1º: redistribuir o que já existe (não custa nada) ──
+          A frase da descrição trazia um ← apontando para trás no meio do texto:
+          seta como pontuação até funciona ("De → Para"), mas invertida ela
+          obriga a ler a linha de trás para frente. Reescrita no sentido da
+          leitura, sem glifo nenhum. */}
+      <AberturaDeSecao
+        eyebrow="Remanejar"
+        titulo="Redistribuir entre lojas (antes de comprar)"
+        descricao="O produto sai de onde está parado ou sobrando e vai para onde ele vende e está acabando. Visão de toda a rede."
+        acoes={
+          reb && reb.rows.length > 0 ? (
+            <Selo tom="blue" icone="transferencias" title="Total do plano de redistribuição desta visão.">
+              {reb.summary.units} un. em {reb.summary.storesInvolved} lojas
+            </Selo>
+          ) : undefined
+        }
+      />
+      <div className="card" ref={rebalanceRef}>
         {rebalance.isLoading ? (
           <Loading />
         ) : (reb?.rows.length ?? 0) === 0 ? (
-          <div className="empty">Estoque bem distribuído entre as lojas — nenhuma transferência necessária. 👏</div>
+          <TudoCerto>Estoque bem distribuído entre as lojas — nenhuma transferência necessária.</TudoCerto>
         ) : (
           <table style={{ marginTop: 10 }}>
             <thead>
@@ -843,28 +1049,28 @@ export function Planning() {
       </div>
 
       {/* ── 2º: pedidos prontos por fornecedor, com total e data-limite ── */}
-      <div className="card" style={{ marginTop: 16 }} ref={ordersRef}>
-        <div className="row-between">
-          <div>
-            <div className="section-title" style={{ marginBottom: 2 }}>Pedidos por fornecedor (rascunho)</div>
-            <div className="muted" style={{ fontSize: 12.5 }}>
-              Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item
-              mais urgente define o prazo do pedido. Exporte e envie.
-            </div>
-          </div>
-          {orders.data && orders.data.orders.length > 0 && (
-            <button
-              className="btn ghost sm"
+      <AberturaDeSecao
+        eyebrow="Comprar"
+        titulo="Pedidos por fornecedor (rascunho)"
+        descricao="Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item mais urgente define o prazo do pedido. Exporte e envie."
+        acoes={
+          orders.data && orders.data.orders.length > 0 ? (
+            <Botao
+              variante="discreto"
+              pequeno
+              icone="exportar"
               onClick={() => downloadCsv('pedidos-fornecedores', orders.data!.orders.map(orderCsv).join('\n\n'))}
             >
               Exportar tudo (CSV)
-            </button>
-          )}
-        </div>
+            </Botao>
+          ) : undefined
+        }
+      />
+      <div className="card" ref={ordersRef}>
         {orders.isLoading ? (
           <Loading />
         ) : (orders.data?.orders.length ?? 0) === 0 ? (
-          <div className="empty">Nenhum pedido a fazer agora — estoque coberto para a demanda atual. 👏</div>
+          <TudoCerto>Nenhum pedido a fazer agora — estoque coberto para a demanda atual.</TudoCerto>
         ) : (
           <>
             <div className="muted" style={{ fontSize: 12.5, margin: '10px 0' }}>
@@ -886,8 +1092,11 @@ export function Planning() {
 
       {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>
-        <div className="row-between" style={{ marginTop: 22, marginBottom: 12 }}>
-          <div className="section-title" style={{ margin: 0 }}>O que comprar (e o que não)</div>
+        <AberturaDeSecao
+          eyebrow="Item a item"
+          titulo="O que comprar (e o que não)"
+          descricao="A análise completa por SKU, com o giro, a cobertura e o veredito do motor para cada um."
+          acoes={
           <div className="segmented">
             {([
               ['ALL', 'Todos'],
@@ -895,12 +1104,41 @@ export function Planning() {
               ['DONT_BUY', 'Não comprar'],
               ['LIQUIDATE', 'Liquidar'],
             ] as [Filter, string][]).map(([k, label]) => (
-              <button key={k} className={filter === k ? 'active' : ''} onClick={() => setFilter(k)} aria-pressed={filter === k}>
+              <button
+                key={k}
+                type="button"
+                className={filter === k ? 'active' : ''}
+                onClick={() => setFilter(k)}
+                aria-pressed={filter === k}
+              >
                 {label}
               </button>
             ))}
           </div>
-        </div>
+          }
+        />
+
+        {/* Feedbacks 6.0, item 02 ("ainda estou achando o número de sugestão de
+            pedidos baixo"): o que faltava era o denominador. O motor não está
+            calado — ele analisou os SKUs que a base carregada tem, e a base
+            atual é uma AMOSTRA da grade do CDS. Dizer "126 de 440 analisados,
+            num recorte que tem 5.849 na rede" transforma "está baixo" numa
+            pergunta respondível. */}
+        {suggestions.data?.summary.analisados ? (
+          <p className="muted" style={{ fontSize: 12.5, margin: '-6px 0 12px' }}>
+            <strong>{suggestions.data.summary.buy}</strong> sugestões de compra entre{' '}
+            <strong>{suggestions.data.summary.analisados.toLocaleString('pt-BR')}</strong> SKUs analisados.
+            {suggestions.data.summary.universo &&
+            suggestions.data.summary.universo > suggestions.data.summary.analisados ? (
+              <>
+                {' '}O recorte tem cerca de{' '}
+                <strong>{suggestions.data.summary.universo.toLocaleString('pt-BR')}</strong> SKUs na rede — a
+                extração atual do CDS trouxe uma amostra da grade, e o motor só decide sobre o que
+                enxerga.
+              </>
+            ) : null}
+          </p>
+        ) : null}
 
         {suggestions.isLoading || !suggestions.data ? (
           <Loading />
@@ -931,7 +1169,13 @@ export function Planning() {
                       </div>
                     </td>
                     <td>
-                      <span className={`badge ${moveMeta[r.movementClass].cls}`}>{moveMeta[r.movementClass].label}</span>
+                      <Selo
+                        tom={moveMeta[r.movementClass].tom}
+                        icone={moveMeta[r.movementClass].icone}
+                        forte={moveMeta[r.movementClass].forte}
+                      >
+                        {moveMeta[r.movementClass].label}
+                      </Selo>
                     </td>
                     <td className="num">
                       {r.currentStock}
@@ -948,22 +1192,40 @@ export function Planning() {
                       }
                     >
                       {r.dailyDemand}
+                      {/* O sol e a seta de alta eram glifos fazendo papel de
+                          ícone: mudam de largura e de desenho conforme a fonte
+                          instalada e desalinham a coluna numérica. Aqui o ícone
+                          é o ÚNICO rótulo do método de previsão, então leva
+                          title — vira role="img" com nome acessível. */}
                       {r.forecast && r.forecast.method !== 'media' && (
-                        <span className="muted" style={{ marginLeft: 4, fontSize: 11 }}>
-                          {r.forecast.method === 'sazonal' ? '☀' : '↗'}
-                        </span>
+                        <Icon
+                          name={r.forecast.method === 'sazonal' ? 'calendario' : 'tendencia'}
+                          size={13}
+                          title={r.forecast.method === 'sazonal' ? 'Previsão sazonal' : 'Previsão por tendência'}
+                          style={{ marginLeft: 5, color: 'var(--muted)' }}
+                        />
                       )}
                     </td>
                     <td className="num">
-                      {r.coverageDays === null ? '∞' : `${r.coverageDays}d`}
+                      {/* O infinito dizia "cobertura infinita", que na operação
+                          quer dizer "não vendeu nada no período". A palavra é a
+                          mesma que o selo de cobertura usa no resto do console. */}
+                      {r.coverageDays === null ? <span className="muted">sem venda</span> : `${r.coverageDays}d`}
                       {r.stockoutInDays !== null && (
-                        <div style={{ fontSize: 11, color: 'var(--red)' }}>ruptura ~{r.stockoutInDays}d</div>
+                        <div style={{ fontSize: 11, color: 'var(--red)' }}>
+                          {r.stockoutInDays === 0 ? 'já em falta' : `falta em ~${r.stockoutInDays}d`}
+                        </div>
                       )}
                     </td>
                     <td>
-                      <span className={`badge ${recMeta[r.recommendation].cls}`} title={r.reason}>
+                      <Selo
+                        tom={recMeta[r.recommendation].tom}
+                        icone={recMeta[r.recommendation].icone}
+                        forte={recMeta[r.recommendation].forte}
+                        title={r.reason}
+                      >
                         {recMeta[r.recommendation].label}
-                      </span>
+                      </Selo>
                       <WhyNote text={r.friendlyReason} />
                     </td>
                     <td className="num"><Confidence value={r.confidence} /></td>
@@ -990,12 +1252,12 @@ export function Planning() {
       </div>
 
       {/* ── Prazos por fornecedor: quem entrega rápido, quem demora ── */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="section-title" style={{ marginBottom: 2 }}>Prazos dos fornecedores (lead time)</div>
-        <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>
-          Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo
-          da marca. Sem prazo definido, vale o padrão de {suppliers.data?.defaultLeadTimeDays ?? 14} dias.
-        </div>
+      <AberturaDeSecao
+        eyebrow="Prazos"
+        titulo="Prazos dos fornecedores (lead time)"
+        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias.`}
+      />
+      <div className="card">
         {suppliers.isLoading || !suppliers.data ? (
           <Loading />
         ) : (
@@ -1032,9 +1294,15 @@ export function Planning() {
       {overview.isLoading || !overview.data ? (
         <Loading />
       ) : (
-        <div className="grid grid-2" style={{ marginTop: 16, alignItems: 'start' }}>
+        <>
+        <AberturaDeSecao
+          eyebrow="Panorama"
+          titulo="Onde o capital está parado"
+          descricao="Leitura de fundo, para depois da decisão do dia: como o dinheiro da rede está distribuído e quais itens concentram o que não gira."
+        />
+        <div className="grid grid-2" style={{ alignItems: 'start' }}>
           <div className="card">
-            <div className="section-title">Panorama do capital imobilizado</div>
+            <div className="section-title" style={{ marginTop: 0 }}>Panorama do capital imobilizado</div>
             <Bar
               segments={[
                 { value: overview.data.capital.healthy, color: 'var(--green)', label: 'Saudável' },
@@ -1042,10 +1310,14 @@ export function Planning() {
                 { value: overview.data.capital.parked, color: 'var(--red)', label: 'Parado (sem giro)' },
               ]}
             />
+            {/* Legenda na MESMA ordem da barra. O terceiro item desenhava um
+                .dot com background inline, o que lhe dava o preenchimento mas
+                não a borda — e portanto não a FORMA cheia que separa "crítico"
+                de "atenção" em escala de cinza. Passa a usar a classe. */}
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10, fontSize: 12 }}>
               <span><span className="dot green" /> Saudável {formatBRL(overview.data.capital.healthy)}</span>
               <span><span className="dot amber" /> Excesso {formatBRL(overview.data.capital.excess)}</span>
-              <span><span className="dot" style={{ background: 'var(--red)' }} /> Parado {formatBRL(overview.data.capital.parked)}</span>
+              <span><span className="dot red" /> Parado {formatBRL(overview.data.capital.parked)}</span>
             </div>
 
             <div className="section-title" style={{ marginTop: 20 }}>Por categoria</div>
@@ -1065,7 +1337,13 @@ export function Planning() {
                     <td className="num">{c.units}</td>
                     <td className="num">{formatBRL(c.capital)}</td>
                     <td className="num">
-                      <span className={`badge ${c.idle > 0 ? 'amber' : 'gray'}`}>{formatBRL(c.idle)}</span>
+                      <Selo
+                        tom={c.idle > 0 ? 'amber' : 'gray'}
+                        icone={c.idle > 0 ? 'estoque' : 'aprovar'}
+                        title={c.idle > 0 ? 'Capital ocioso nesta categoria.' : 'Sem capital ocioso nesta categoria.'}
+                      >
+                        {formatBRL(c.idle)}
+                      </Selo>
                     </td>
                   </tr>
                 ))}
@@ -1100,21 +1378,32 @@ export function Planning() {
                   <tr key={x.productId}>
                     <td>{x.description}</td>
                     <td>
-                      <span className={`badge ${moveMeta[x.movementClass].cls}`}>{moveMeta[x.movementClass].label}</span>
+                      <Selo
+                        tom={moveMeta[x.movementClass].tom}
+                        icone={moveMeta[x.movementClass].icone}
+                        forte={moveMeta[x.movementClass].forte}
+                      >
+                        {moveMeta[x.movementClass].label}
+                      </Selo>
                     </td>
-                    <td className="num">{x.coverageDays === null ? '∞' : `${x.coverageDays}d`}</td>
+                    <td className="num">
+                      {x.coverageDays === null ? <span className="muted">sem venda</span> : `${x.coverageDays}d`}
+                    </td>
                     <td className="num">{formatBRL(x.idleValue)}</td>
                   </tr>
                 ))}
                 {overview.data.topIdle.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="empty">Nenhum capital ocioso relevante. 👏</td>
+                    <td colSpan={4}>
+                      <TudoCerto>Nenhum capital ocioso relevante.</TudoCerto>
+                    </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
+        </>
       )}
     </>
   );

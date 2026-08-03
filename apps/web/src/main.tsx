@@ -4,7 +4,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, HashRouter } from 'react-router-dom';
 import { AppRoot } from './App';
 import { AuthProvider } from './auth/AuthContext';
+// Antes de styles.css de propósito: as @font-face precisam estar registradas
+// quando as regras que pedem Fraunces/Inter/JetBrains Mono forem avaliadas,
+// senão o primeiro quadro sai em fonte de sistema.
+import './fonts.css';
 import './styles.css';
+import { ScopeProvider } from './lib/scope';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, staleTime: 10_000 } },
@@ -23,7 +28,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <Router {...routerProps}>
         <AuthProvider>
-          <AppRoot />
+          <ScopeProvider>
+            <AppRoot />
+          </ScopeProvider>
         </AuthProvider>
       </Router>
     </QueryClientProvider>

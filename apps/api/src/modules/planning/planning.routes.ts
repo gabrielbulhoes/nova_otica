@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, parseDays } from '../../http/helpers.js';
-import type { ProductGroup } from './planning.math.js';
+import { PRODUCT_GROUPS, type ProductGroup } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
@@ -31,11 +31,11 @@ export const planningRouter = Router();
 // Janela padrão do planejamento: 90 dias de histórico de vendas.
 const days = (v: unknown) => parseDays(v, 90);
 
-// Recorte de cobertura (?group=): principal (padrão) | lentes | todos.
-// Operacional começa em 'principal' (óculos de grau/sol + relógio); lentes e
-// consolidado só quando pedidos explicitamente.
+// Recorte de cobertura (?group=): principal (padrão) | relogios | lentes |
+// outros | todos. Operacional começa em 'principal' (óculos de grau e sol);
+// os demais só quando pedidos explicitamente.
 const group = (v: unknown): ProductGroup =>
-  v === 'lentes' || v === 'todos' ? v : 'principal';
+  PRODUCT_GROUPS.includes(v as ProductGroup) ? (v as ProductGroup) : 'principal';
 
 /** GET /api/planning/overview — capital imobilizado + Pareto + giro. */
 planningRouter.get(

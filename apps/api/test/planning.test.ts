@@ -8,6 +8,10 @@ import {
   supplierFor,
   storeCarriesBrand,
   annotateCardAges,
+  suggestedDiscount,
+  analysisBrand,
+  bestOutletStore,
+  outletTransfer,
   buildDecisionCards,
   buildSuggestions,
   decisionConfidence,
@@ -16,6 +20,7 @@ import {
   forecastDemand,
   isMadeToOrderLens,
   matchesProductGroup,
+  PARTITION_GROUPS,
   isBrandAnalysable,
   carryingCost,
   marginPct,
@@ -366,13 +371,34 @@ describe('forecastDemand (suavização + sazonalidade)', () => {
 });
 
 describe('matchesProductGroup (recortes de cobertura)', () => {
-  it('cobertura principal = óculos + óculos de grau/armações + relógios', () => {
-    for (const cat of ['Óculos de Sol', 'OCULOS SOLAR', 'Armação', 'ARMACAO RX', 'Óculos de Grau', 'Relógio', 'RELOGIO']) {
+  it('cobertura principal = óculos + óculos de grau/armações (relógio saiu)', () => {
+    for (const cat of ['Óculos de Sol', 'OCULOS SOLAR', 'Armação', 'ARMACAO RX', 'Óculos de Grau']) {
       expect(matchesProductGroup(cat, 'principal')).toBe(true);
     }
     for (const cat of ['Lente', 'LENTE PRONTA', 'Estojo', 'Acessório', null]) {
       expect(matchesProductGroup(cat, 'principal')).toBe(false);
     }
+    // Feedbacks 5.0, item 03: relógio pediu recorte próprio.
+    expect(matchesProductGroup('RELOGIO', 'principal')).toBe(false);
+    expect(matchesProductGroup('Relógio', 'relogios')).toBe(true);
+  });
+
+  it('os quatro recortes PARTICIONAM o catálogo: um grupo por categoria, nenhum órfão', () => {
+    // A queixa do Galbe era aritmética: "lente 80 mil + óculos e relógio 40 mil
+    // = 120 mil, porém o total é 211.026". Faltava recorte para 88.661 unidades.
+    const catalogo = [
+      'OCULOS', 'ARMACAO', 'RELOGIO', 'LENTES', 'TRATAMENTO', 'LENTES PRONTAS',
+      'PORTA OCULOS', 'LENCOS', 'ACESSORIOS', 'VOUCHER', 'BRINCO', 'OUTROS',
+      'LENTES DE CONTATO ESTOQUE', 'CLIP ON', 'HASTES', null, undefined, '',
+    ];
+    for (const cat of catalogo) {
+      const casam = PARTITION_GROUPS.filter((g) => matchesProductGroup(cat, g));
+      expect(casam, `categoria ${String(cat)}`).toHaveLength(1);
+      expect(matchesProductGroup(cat, 'todos')).toBe(true);
+    }
+    // E tratamento é do laboratório, junto com lente — o rótulo da tela já
+    // dizia "lentes e tratamentos" enquanto o código só olhava "lente".
+    expect(matchesProductGroup('TRATAMENTO', 'lentes')).toBe(true);
   });
 
   it('lentes isola qualquer categoria com "lente" — inclusive lente de grau', () => {
@@ -480,10 +506,13 @@ describe('matchesProductGroup · acessórios que citam "óculos"', () => {
     expect(matchesProductGroup('CORDAO DE OCULOS', 'principal')).toBe(false);
   });
 
-  it('produto de moda de verdade segue no principal', () => {
+  it('produto de moda de verdade segue no seu recorte', () => {
     expect(matchesProductGroup('OCULOS', 'principal')).toBe(true);
     expect(matchesProductGroup('ARMACAO', 'principal')).toBe(true);
-    expect(matchesProductGroup('RELOGIO', 'principal')).toBe(true);
+    expect(matchesProductGroup('RELOGIO', 'relogios')).toBe(true);
+    // Relógio saiu do principal, mas NÃO saiu da análise de marca: Technos e
+    // Ray-Ban são a mesma pergunta comercial.
+    expect(isBrandAnalysable('RELOGIO')).toBe(true);
   });
 });
 
@@ -842,5 +871,209 @@ describe('catálogo de marcas (fornecedor + mix por loja)', () => {
     const resolve = (p: typeof p1) => supplierFor(extractBrand(p.description), catalog);
     const po = buildPurchaseOrders([p1, p2], 90, resolve);
     expect(po.orders.map((o) => o.supplier).sort()).toEqual(['Kering', 'Marcolin']);
+  });
+});
+
+describe('suggestedDiscount — a REGRA DA REDE (parâmetro do Galbe, 30/07)', () => {
+  // "Nossa regra atual pra promocionar são as peças fora de coleção do
+  //  fornecedor. E o desconto aumenta 10% a cada 90 dias. Os descontos iniciam
+  //  com 20% ou 30%, depende do preço cheio. Se for abaixo de 1.000 eu coloco
+  //  20%, acima de 1.000 eu inicio com 30%."
+
+  it('preço cheio abaixo de R$ 1.000 começa em 20%', () => {
+    const r = suggestedDiscount({ unitPrice: 900, unitCost: 200, coverageDays: null });
+    expect(r.suggestedPct).toBe(20);
+    expect(r.params.basePct).toBe(20);
+    expect(r.params.priceBand).toBe('abaixo de R$ 1.000');
+  });
+
+  it('preço cheio de R$ 1.000 ou mais começa em 30% — a quebra é inclusiva', () => {
+    expect(suggestedDiscount({ unitPrice: 1000, unitCost: 200, coverageDays: null }).suggestedPct).toBe(30);
+    expect(suggestedDiscount({ unitPrice: 2500, unitCost: 500, coverageDays: null }).params.basePct).toBe(30);
+  });
+
+  it('sobe 10 p.p. a cada 90 dias parada, em degraus', () => {
+    const base = { unitPrice: 900, unitCost: 100, coverageDays: null };
+    expect(suggestedDiscount({ ...base, stuckDays: 89 }).suggestedPct).toBe(20);
+    expect(suggestedDiscount({ ...base, stuckDays: 90 }).suggestedPct).toBe(30);
+    expect(suggestedDiscount({ ...base, stuckDays: 200 }).suggestedPct).toBe(40);
+    expect(suggestedDiscount({ ...base, stuckDays: 270 }).suggestedPct).toBe(50);
+  });
+
+  it('o degrau é contado e devolvido, para a tela mostrar a régua', () => {
+    const r = suggestedDiscount({ unitPrice: 1500, unitCost: 300, coverageDays: null, stuckDays: 200 });
+    expect(r.params).toMatchObject({ basePct: 30, stepPct: 10, stepDays: 90, steps: 2, stuckDays: 200 });
+    expect(r.suggestedPct).toBe(50); // 30 + 2 × 10
+  });
+
+  it('o teto continua sendo a margem: a regra nunca manda vender abaixo do custo', () => {
+    // Margem de 25%: a regra pediria 30%, mas 25% já zera.
+    const r = suggestedDiscount({ unitPrice: 1000, unitCost: 750, coverageDays: null });
+    expect(r.maxPct).toBe(25);
+    expect(r.suggestedPct).toBe(25);
+    expect(r.rationale).toMatch(/zera a margem/i);
+  });
+
+  it('quando o teto vem de custo ESTIMADO, a explicação avisa', () => {
+    const r = suggestedDiscount({
+      unitPrice: 1000, unitCost: 750, coverageDays: null, costEstimated: true,
+    });
+    expect(r.params.ceilingEstimated).toBe(true);
+    expect(r.rationale).toMatch(/estimada/i);
+  });
+
+  it('sem margem, não sugere desconto — sugere outro caminho', () => {
+    const r = suggestedDiscount(100, 100, null);
+    expect(r.maxPct).toBe(0);
+    expect(r.suggestedPct).toBe(0);
+    expect(r.rationale).toMatch(/devolução|bonificação/i);
+  });
+
+  it('sem histórico de tempo parada, fica no degrau inicial e diz isso', () => {
+    const r = suggestedDiscount({ unitPrice: 500, unitCost: 100, coverageDays: null });
+    expect(r.params.steps).toBe(0);
+    expect(r.params.stuckDays).toBeNull();
+    expect(r.rationale).toMatch(/degrau inicial/i);
+  });
+
+  it('a explicação sempre nomeia a régua e acompanha o número', () => {
+    const r = suggestedDiscount({ unitPrice: 1200, unitCost: 400, coverageDays: null, stuckDays: 95 });
+    expect(r.rationale).toMatch(/regra da rede/i);
+    expect(r.rationale).toContain('30%');
+    expect(r.rationale).toContain('95 dias');
+  });
+
+  it('a forma posicional antiga continua funcionando (compatibilidade)', () => {
+    const r = suggestedDiscount(200, 100, null);
+    expect(r.maxPct).toBe(50);
+    expect(r.suggestedPct).toBe(20);
+  });
+});
+
+describe('bestOutletStore (feedback 05 — "remanejar para onde?")', () => {
+  const pos = [
+    { storeId: 'a', storeName: 'A', unitsSold: 0, currentStock: 20 },
+    { storeId: 'b', storeName: 'B', unitsSold: 5, currentStock: 3 },
+    { storeId: 'c', storeName: 'C', unitsSold: 5, currentStock: 10 },
+    { storeId: 'd', storeName: 'D', unitsSold: 9, currentStock: 1 },
+  ];
+
+  it('escolhe quem mais vende a peça', () => {
+    expect(bestOutletStore(pos)?.storeId).toBe('d');
+  });
+
+  it('empate no giro decide pelo menor estoque — menos risco de reencalhe', () => {
+    const semD = pos.filter((p) => p.storeId !== 'd');
+    expect(bestOutletStore(semD)?.storeId).toBe('b');
+  });
+
+  it('loja sem venda nenhuma nunca é destino', () => {
+    const soParadas = [pos[0]];
+    expect(bestOutletStore(soParadas)).toBeNull();
+  });
+
+  it('não sugere devolver para a própria origem', () => {
+    expect(bestOutletStore(pos, 'd')?.storeId).toBe('b');
+  });
+});
+
+describe('bestOutletStore — reserva por marca (peça sem venda própria)', () => {
+  const semGiro = [
+    { storeId: 'a', storeName: 'A', unitsSold: 0, currentStock: 5 },
+    { storeId: 'b', storeName: 'B', unitsSold: 0, currentStock: 2 },
+  ];
+  const marca = [
+    { storeId: 'a', storeName: 'A', unitsSold: 3, currentStock: 40 },
+    { storeId: 'b', storeName: 'B', unitsSold: 11, currentStock: 30 },
+  ];
+
+  it('sem venda da peça, decide pelo giro da MARCA e declara a base', () => {
+    const r = bestOutletStore(semGiro, undefined, marca);
+    expect(r?.storeId).toBe('b');
+    expect(r?.basis).toBe('marca');
+  });
+
+  it('venda da própria peça tem precedência sobre a marca', () => {
+    const comGiro = [{ storeId: 'a', storeName: 'A', unitsSold: 1, currentStock: 5 }];
+    const r = bestOutletStore(comGiro, undefined, marca);
+    expect(r?.storeId).toBe('a');
+    expect(r?.basis).toBe('sku');
+  });
+
+  it('sem giro nem na peça nem na marca, não inventa destino', () => {
+    const marcaMorta = marca.map((m) => ({ ...m, unitsSold: 0 }));
+    expect(bestOutletStore(semGiro, undefined, marcaMorta)).toBeNull();
+  });
+});
+
+
+describe('outletTransfer (feedback 05 — o card de liquidação virar transferência)', () => {
+  it('a origem é quem MENOS escoa, não quem tem mais saldo', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 12, currentStock: 3 },
+      // Muito saldo, mas ainda vende: não é o pior encalhe.
+      { storeId: 'grande', storeName: 'Grande', unitsSold: 8, currentStock: 20 },
+      // Menos saldo, zero saída: é daqui que a peça precisa sair.
+      { storeId: 'parada', storeName: 'Parada', unitsSold: 0, currentStock: 6 },
+    ];
+    const t = outletTransfer(pos, 'destino');
+    expect(t?.fromStoreId).toBe('parada');
+    // Sem nenhuma venda no período, vai o saldo inteiro.
+    expect(t?.quantity).toBe(6);
+  });
+
+  it('deixa na origem o que ela provou escoar no período', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 9, currentStock: 1 },
+      { storeId: 'lenta', storeName: 'Lenta', unitsSold: 2, currentStock: 10 },
+    ];
+    expect(outletTransfer(pos, 'destino')?.quantity).toBe(8);
+  });
+
+  it('empate na taxa desempata pelo saldo encalhado', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 5, currentStock: 0 },
+      { storeId: 'p', storeName: 'P', unitsSold: 0, currentStock: 4 },
+      { storeId: 'g', storeName: 'G', unitsSold: 0, currentStock: 15 },
+    ];
+    expect(outletTransfer(pos, 'destino')?.fromStoreId).toBe('g');
+  });
+
+  it('sem origem possível, não inventa transferência', () => {
+    // Só o destino tem saldo: não há de onde tirar.
+    const pos = [{ storeId: 'destino', storeName: 'Destino', unitsSold: 4, currentStock: 7 }];
+    expect(outletTransfer(pos, 'destino')).toBeNull();
+    expect(outletTransfer([], 'destino')).toBeNull();
+  });
+
+  it('nunca propõe transferência de zero unidade', () => {
+    const pos = [
+      { storeId: 'destino', storeName: 'Destino', unitsSold: 3, currentStock: 0 },
+      // Vendeu mais do que tem em saldo: a subtração daria negativo.
+      { storeId: 'origem', storeName: 'Origem', unitsSold: 9, currentStock: 2 },
+    ];
+    expect(outletTransfer(pos, 'destino')?.quantity).toBe(1);
+  });
+});
+
+
+describe('analysisBrand (o balde de marca do fornecedor vazio)', () => {
+  it('a grife da descrição tem precedência sobre o fornecedor', () => {
+    expect(analysisBrand('MU52YS ZVN10R 54 OCULOS MIU MIU', 'OCULOS', 'FORNECEDOR X')).toBe('MIU MIU');
+  });
+
+  it('em lente, onde não se extrai grife, vale o fornecedor', () => {
+    // Na lente a descrição é a LINHA do produto, não a marca — por isso o
+    // extractBrand devolve null ali e o fornecedor é o dado bom.
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', 'ZEISS')).toBe('ZEISS');
+  });
+
+  it('fornecedor vazio ou "—" NÃO vira marca — era o balde único', () => {
+    // O campo brand do CDS é o fornecedor e vem assim na maior parte do
+    // catálogo real. Agrupar por ele dava "giro da marca" de 1.120 un. para uma
+    // peça que nunca vendeu, e mandava todo card para a mesma filial.
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', '—')).toBeNull();
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', '   ')).toBeNull();
+    expect(analysisBrand('MULTIGRESSIV MONOFOCAIS 1.60', 'LENTES', null)).toBeNull();
   });
 });

@@ -9,13 +9,37 @@ import {
   getPurchaseOrders,
   formatBRL,
 } from '../api/client';
-import { StatCard, PageHeader, Loading, CoverageBadge, fmtMonths } from '../components/ui';
+import {
+  StatCard,
+  PageHeader,
+  AberturaDeSecao,
+  Codigo,
+  Loading,
+  CoverageBadge,
+} from '../components/ui';
 import { useAuth } from '../auth/AuthContext';
+import { useScope } from '../lib/scope';
+
+/**
+ * O job de sincronização devolve o enum cru (`SUCCESS`, `PARTIAL`…) e ele estava
+ * chegando em inglês no indicador — na primeira tela depois do login, que é a
+ * que o cliente abre para a equipe dele. O console inteiro fala português.
+ */
+const situacaoDaSincronizacao: Record<string, string> = {
+  SUCCESS: 'Sucesso',
+  RUNNING: 'Em andamento',
+  PARTIAL: 'Parcial',
+  FAILED: 'Falhou',
+};
 
 export function Dashboard() {
   const { isAdmin } = useAuth();
-  const summary = useQuery({ queryKey: ['summary'], queryFn: getSummary });
-  const coverage = useQuery({ queryKey: ['coverage'], queryFn: () => getStoreCoverage() });
+  const { scope } = useScope();
+  const summary = useQuery({ queryKey: ['summary', scope], queryFn: () => getSummary({ group: scope }) });
+  const coverage = useQuery({
+    queryKey: ['coverage', scope],
+    queryFn: () => getStoreCoverage({ group: scope }),
+  });
   // Mesma queryKey do Planejamento (days=90): compartilha cache e invalidação
   // SSE; staleTime maior porque o plano completo é caro no backend.
   const rebalance = useQuery({
@@ -25,13 +49,20 @@ export function Dashboard() {
     staleTime: 5 * 60_000,
   });
   const sync = useQuery({ queryKey: ['sync-status'], queryFn: getSyncStatus, enabled: isAdmin });
-  const alerts = useQuery({ queryKey: ['alerts'], queryFn: () => getAlerts({}) });
+  const alerts = useQuery({ queryKey: ['alerts', scope], queryFn: () => getAlerts({ group: scope }) });
   const orders = useQuery({ queryKey: ['planning-orders', '90', ''], queryFn: () => getPurchaseOrders({ days: '90' }) });
 
   // Cobertura da rede = todo o estoque ÷ toda a venda mensal (média ponderada).
+  //
+  // Soma as UNIDADES VENDIDAS e converte uma vez só. Somar os `monthlyUnits`
+  // já arredondados de cada loja dava 20,6 aqui e 20,7 em Relatórios — e a
+  // diferença de uma casa é exatamente o tipo de coisa que faz o cliente
+  // perguntar, com razão, por que as duas telas não batem.
   const cov = coverage.data?.rows ?? [];
-  const totalMonthly = cov.reduce((a, r) => a + r.monthlyUnits, 0);
+  const janela = coverage.data?.windowDays ?? coverage.data?.days ?? 30;
+  const totalSold = cov.reduce((a, r) => a + r.unitsSold, 0);
   const totalStock = cov.reduce((a, r) => a + r.stockUnits, 0);
+  const totalMonthly = janela > 0 ? (totalSold * 30) / janela : 0;
   const networkCoverage = totalMonthly > 0 ? totalStock / totalMonthly : null;
   const maxMonths = Math.max(1, ...cov.map((r) => r.coverageMonths ?? 0));
 
@@ -39,7 +70,25 @@ export function Dashboard() {
 
   return (
     <>
+      {/* ONDA 5 · ESTA TELA É A IMPLEMENTAÇÃO DE REFERÊNCIA DO DE-PARA.
+          O cliente disse, sobre o console: "ficou mais confusa as informações.
+          Essa fonte pra infos não é legal também e acho que temos que demarcar
+          melhor as informações principais."
+
+          Duas respostas, e as duas moram no sistema (styles.css + ui.tsx), não
+          aqui — esta tela só as CONVOCA, e é assim que as outras 19 devem fazer:
+
+          1. dosagem da mono: rótulo descritivo saiu de mono caixa alta e voltou
+             para Inter (`.label`); a mono ficou com etiqueta curta (`.eyebrow`,
+             `.carimbo`), carimbo de unidade (`.unidade`), identificador
+             (`.codigo`) e cabeçalho de coluna;
+          2. hierarquia: os nove cartões tinham UMA assinatura visual. Agora têm
+             três níveis — `nivel={1}` no indicador que a tela existe para
+             mostrar, o padrão no apoio, `nivel={3}` no contexto — e cada seção
+             abre com a régua dourada do manual (<AberturaDeSecao>), que até
+             aqui não estava sendo usada nesta tela. */}
       <PageHeader
+        eyebrow="Operação"
         title="Dashboard"
         subtitle="Visão de estoque da rede em tempo real (base sincronizada + movimentações do dia)."
       />
@@ -61,7 +110,7 @@ export function Dashboard() {
         <div className="banner warn">
           <span className="dot amber" />
           <div>
-            <strong>{alerts.data.out}</strong> ruptura(s) e <strong>{alerts.data.low}</strong> item(ns) com
+            <strong>{alerts.data.out}</strong> item(ns) em falta e <strong>{alerts.data.low}</strong> item(ns) com
             estoque baixo. <Link to="/admin/alertas" style={{ color: 'var(--accent)' }}>Ver alertas →</Link>
           </div>
         </div>
@@ -72,8 +121,12 @@ export function Dashboard() {
       {orders.data && orders.data.summary.items > 0 && (
         <div className="banner warn">
           <span className="dot amber" />
+          {/* Saiu o emoji de carrinho que abria a frase: muda de desenho
+              a cada sistema e some no cinza; e a anatomia do banner já é
+              [marcador de estado] + [frase], igual nos outros dois acima —
+              trocar por um ícone aqui quebraria essa uniformidade. */}
           <div>
-            🛒 <strong>{orders.data.summary.items}</strong> item(ns) no ponto de reposição —{' '}
+            <strong>{orders.data.summary.items}</strong> item(ns) no ponto de reposição —{' '}
             {orders.data.summary.suppliers} pedido(s) de fornecedor somando{' '}
             <strong>{formatBRL(orders.data.summary.total)}</strong>.{' '}
             <Link to="/admin/planejamento" style={{ color: 'var(--accent)' }}>Ver pedidos prontos →</Link>
@@ -85,39 +138,118 @@ export function Dashboard() {
         <Loading />
       ) : summary.data ? (
         <>
+          {/* NÍVEL 1 — UM SÓ, e é a COBERTURA DA REDE.
+              A onda anterior deixou dois cartões em nível 1 (unidades e
+              cobertura). O teto do sistema é dois, mas teto não é meta: com dois
+              destaques lado a lado, de mesma superfície e mesmo corpo de número,
+              o olho não escolhe — ele alterna. A tela voltava a não ter um
+              principal, que é exatamente a queixa do cliente ("demarcar melhor
+              as informações principais").
+
+              Por que a cobertura e não as unidades:
+              · "38.453 un." é MAGNITUDE, não veredito. Sozinho não diz se está
+                bom ou ruim, e não muda de forma legível de um dia para o outro —
+                ninguém age por causa dele.
+              · "21,9 meses" é RAZÃO, e já vem julgada: o gestor sabe de cor qual
+                é a faixa saudável da rede dele, então o número se lê como
+                diagnóstico no mesmo movimento em que se lê como dado.
+              · as unidades são o NUMERADOR da cobertura. Quem olha a cobertura
+                já olhou as unidades; o inverso não vale. Destacar os dois é
+                destacar a mesma informação duas vezes, uma delas pela metade.
+              · e a ruptura, terceira candidata, não perde espaço com isso: ela
+                tem banner próprio acima e tela própria em Alertas. Ruptura é
+                lista de exceção — se resolve item a item, não se lê como estado
+                da rede.
+
+              O `largo` (duas colunas) segue na cobertura, e agora por dois
+              motivos: a explicação tem 76 caracteres e numa coluna de 265px
+              quebrava em três linhas; e a largura dupla passou a ser o canal que
+              faz o único nível 1 vencer sem depender só do filete. */}
           <div className="grid grid-4">
-            <StatCard label="Lojas" value={summary.data.stores} />
-            <StatCard label="Produtos" value={summary.data.products} />
-            <StatCard label="Unidades em estoque" value={summary.data.stockUnits.toLocaleString('pt-BR')} />
+            {/* NÍVEL 2 — o saldo bruto. Continua sendo o primeiro número da
+                grade (é a leitura natural: quanto eu tenho, depois por quantos
+                meses dá), mas em assinatura de apoio. */}
             <StatCard
+              label="Unidades em estoque"
+              value={summary.data.stockUnits.toLocaleString('pt-BR')}
+              unidade="un."
+              hint="Saldo da rede, ao vivo."
+            />
+            <StatCard
+              nivel={1}
+              className="largo"
               // O endpoint escopa gestor de loja à própria loja — o rótulo
               // precisa dizer a verdade sobre o recorte exibido.
               label={isAdmin ? 'Cobertura da rede' : 'Cobertura da loja'}
-              value={networkCoverage === null ? '—' : fmtMonths(Math.round(networkCoverage * 10) / 10)}
-              hint="Estoque ÷ média mensal de unidades vendidas"
+              value={
+                networkCoverage === null
+                  ? '—'
+                  : (Math.round(networkCoverage * 10) / 10).toLocaleString('pt-BR', {
+                      maximumFractionDigits: 1,
+                    })
+              }
+              unidade={networkCoverage === null ? undefined : 'meses'}
+              hint={
+                cov.length > 1
+                  ? `${totalStock.toLocaleString('pt-BR')} un. ÷ ${totalMonthly.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un./mês — pesa o estoque parado das lojas do fim da lista`
+                  : 'Estoque ÷ média mensal de unidades vendidas'
+              }
             />
-          </div>
-
-          <div className="grid grid-3" style={{ marginTop: 16 }}>
+            {/* NÍVEL 2 — apoio: não é o retrato do estoque, é a fila de trabalho
+                que sai dele. Assinatura de cartão padrão, igual à das unidades:
+                os dois são satélites do mesmo destaque. */}
             <StatCard
               label="Transferências pendentes"
               value={summary.data.pendingMovements}
               hint="Solicitações e aprovações a resolver"
             />
+          </div>
+
+          {/* NÍVEL 3 — contexto. Sem moldura e sem fundo, só o filete de cima:
+              recua sem sumir. E ocupa MENOS altura que o cartão padrão que estas
+              quatro informações tinham antes — a hierarquia devolveu linha à
+              tela em vez de cobrar por ela. */}
+          <div className="grid grid-4" style={{ marginTop: 10 }}>
+            <StatCard nivel={3} label="Lojas na rede" value={summary.data.stores} />
+            {/* toLocaleString: o catálogo saía "21683" enquanto o estoque logo
+                acima saía "40.563" — dois formatos de milhar na mesma tela. */}
+            {/* O número segue o recorte do topo (Feedbacks 5.0, item 01). Como
+                a rede só nos manda a contagem total de SKUs, o recorte é uma
+                projeção — e a tela diz isso em vez de fingir contagem. */}
             <StatCard
+              nivel={3}
+              label="Produtos no catálogo"
+              value={summary.data.products.toLocaleString('pt-BR')}
+              hint={
+                summary.data.productsEstimated && summary.data.productsNetwork != null
+                  ? `Estimado no recorte · ${summary.data.productsNetwork.toLocaleString('pt-BR')} SKUs na rede inteira`
+                  : 'SKUs da rede inteira'
+              }
+            />
+            <StatCard
+              nivel={3}
               label="Última sincronização"
+              // Carimbo de data/hora é IDENTIFICADOR, não quantidade: não se lê
+              // como magnitude, se compara com outro carimbo. É um dos quatro
+              // lugares onde a mono fica — em caixa normal e sem entreletras.
               value={
-                summary.data.lastSync
-                  ? new Date(summary.data.lastSync.startedAt).toLocaleString('pt-BR')
-                  : '—'
+                summary.data.lastSync ? (
+                  <Codigo>{new Date(summary.data.lastSync.startedAt).toLocaleString('pt-BR')}</Codigo>
+                ) : (
+                  '—'
+                )
               }
               hint={
                 summary.data.lastSync
-                  ? `${summary.data.lastSync.status} · ${summary.data.lastSync.recordsWritten} registros`
+                  ? `${
+                      situacaoDaSincronizacao[summary.data.lastSync.status] ??
+                      summary.data.lastSync.status
+                    } · ${summary.data.lastSync.recordsWritten} registros`
                   : 'Nunca executada'
               }
             />
             <StatCard
+              nivel={3}
               label="Financeiro"
               value={<Link to="/admin/bi" style={{ color: 'var(--accent)', fontSize: 20 }}>Ver no BI →</Link>}
               hint="Faturamento, ticket médio e formas de pagamento"
@@ -126,11 +258,12 @@ export function Dashboard() {
 
           {/* Feedback 02/05 (Galbe): painel inicial focado em ESTOQUE — o
               financeiro mora no BI; aqui entram cobertura e remanejamento. */}
-          <div className="card" style={{ marginTop: 16 }}>
-            <h3 className="section-title">Cobertura de estoque por loja</h3>
-            <p className="muted" style={{ marginTop: -4, marginBottom: 10, fontSize: 12.5 }}>
-              Unidades em estoque ÷ média mensal de unidades vendidas = estoque para quantos meses.
-            </p>
+          <AberturaDeSecao
+            eyebrow="Cobertura"
+            titulo="Cobertura de estoque por loja"
+            descricao="Unidades em estoque ÷ média mensal de unidades vendidas = estoque para quantos meses."
+          />
+          <div className="card">
             {coverage.isLoading ? (
               <Loading />
             ) : cov.length > 0 ? (
@@ -175,11 +308,13 @@ export function Dashboard() {
           </div>
 
           {isAdmin && (
-            <div className="card" style={{ marginTop: 16 }}>
-              <h3 className="section-title">Transferências sugeridas entre lojas</h3>
-              <p className="muted" style={{ marginTop: -4, marginBottom: 10, fontSize: 12.5 }}>
-                Produtos parados numa loja com saída em outra — remanejar antes de comprar.
-              </p>
+            <>
+              <AberturaDeSecao
+                eyebrow="Remanejamento"
+                titulo="Transferências sugeridas entre lojas"
+                descricao="Produtos parados numa loja com saída em outra — remanejar antes de comprar."
+              />
+              <div className="card">
               {rebalance.isLoading ? (
                 <Loading />
               ) : transfers.length > 0 ? (
@@ -217,7 +352,8 @@ export function Dashboard() {
               ) : (
                 <div className="empty">Nenhuma transferência sugerida agora — estoque equilibrado entre as lojas.</div>
               )}
-            </div>
+              </div>
+            </>
           )}
         </>
       ) : (

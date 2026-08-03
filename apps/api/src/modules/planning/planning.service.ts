@@ -7,6 +7,7 @@ import { loadBrandCatalog } from './brandCatalog.js';
 import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
 import {
+  analysisBrand,
   analyzeProduct,
   annotateCardAges,
   buildCommercialStrategy,
@@ -110,7 +111,10 @@ export async function planningInputs(
   const scoped = products.filter((p) => matchesProductGroup(p.category, group));
   return scoped.map((p) => {
     const price = toNumber(p.price) ?? 0;
-    const cost = toNumber(p.cost) ?? round2(price * 0.55);
+    // O valor de compra vem do ERP em parte do catálogo. Onde falta, estimamos
+    // — e marcamos, porque é ele que define o TETO do desconto de liquidação.
+    const custoReal = toNumber(p.cost);
+    const cost = custoReal ?? round2(price * 0.55);
     const unitsSold = soldBy.get(p.id) ?? 0;
     const recentUnits = Math.min(recentBy.get(p.id) ?? 0, unitsSold);
     const demandHistory: DemandHistory = {
@@ -130,6 +134,7 @@ export async function planningInputs(
       currentStock: stockBy.get(p.id) ?? 0,
       unitCost: cost,
       unitPrice: price,
+      costEstimated: custoReal == null,
       onOrderQty: onOrderBy.get(p.id) ?? 0,
       demandHistory,
     };
@@ -252,6 +257,8 @@ export async function decisionBoard(days: number, storeId?: string, group: Produ
     generated.plans,
     generated.rebalance,
     new Set(decided.keys()),
+    generated.positions,
+    generated.brandPositions,
   );
   return annotateCardAges(open, history, batch, DECISION_SLA_DAYS);
 }
@@ -266,8 +273,58 @@ export async function generateCards(days: number, storeId?: string, group: Produ
     plans(days, storeId, group),
     rebalancePlan(days, group),
   ]);
-  const board = buildDecisionCards(productPlans, reb.rows);
-  return { ...board, plans: productPlans, rebalance: reb.rows };
+  // Posições por loja: alimentam o destino de escoamento dos cards de
+  // liquidação ("remanejar para onde?"). Vêm do mesmo plano de remanejamento,
+  // então não custam consulta nova.
+  const posicoes = new Map<
+    string,
+    { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+  >();
+  for (const r of reb.inputs ?? []) {
+    const lista = posicoes.get(r.productId) ?? [];
+    lista.push({
+      storeId: r.storeId,
+      storeName: r.storeName,
+      unitsSold: r.unitsSold,
+      currentStock: r.currentStock,
+    });
+    posicoes.set(r.productId, lista);
+  }
+  // Reserva por marca: a maioria dos cards de liquidação é estoque morto, sem
+  // venda própria em loja nenhuma.
+  const porMarca = new Map<
+    string,
+    { storeId: string; storeName: string; unitsSold: number; currentStock: number }[]
+  >();
+  for (const r of reb.inputs ?? []) {
+    // Agrupa pela marca de ANÁLISE (grife da descrição), não pelo campo de
+    // fornecedor — que vem vazio na maior parte do catálogo real e faria um
+    // balde único com produtos de marcas diferentes.
+    const marca = analysisBrand(r.description, r.category ?? null, r.brand);
+    if (!marca) continue;
+    const lista = porMarca.get(marca) ?? [];
+    const atual = lista.find((x) => x.storeId === r.storeId);
+    if (atual) {
+      atual.unitsSold += r.unitsSold;
+      atual.currentStock += r.currentStock;
+    } else {
+      lista.push({
+        storeId: r.storeId,
+        storeName: r.storeName,
+        unitsSold: r.unitsSold,
+        currentStock: r.currentStock,
+      });
+    }
+    porMarca.set(marca, lista);
+  }
+  const board = buildDecisionCards(productPlans, reb.rows, undefined, posicoes, porMarca);
+  return {
+    ...board,
+    plans: productPlans,
+    rebalance: reb.rows,
+    positions: posicoes,
+    brandPositions: porMarca,
+  };
 }
 
 /**
@@ -371,6 +428,7 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
       productId: pos.productId,
       description: product.description,
       brand: product.brand,
+      category: product.category,
       unitsSold: pos.sold,
       currentStock: pos.stock,
     });
@@ -397,7 +455,9 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     };
   }
 
-  return plan;
+  // `inputs` sai junto: são as posições por loja de cada produto, que o board
+  // usa para escolher o destino de escoamento sem uma consulta nova.
+  return { ...plan, inputs };
 }
 
 /** Fornecedores (marcas) com seus prazos: cadastrados ou padrão da rede. */

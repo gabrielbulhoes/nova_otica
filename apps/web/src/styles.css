@@ -1,39 +1,215 @@
-/* ─────────────────────────────────────────────────────────────────────────
-   Nova Ótica — Design System macOS (Apple HIG, tema claro "Aqua")
-   Mantém os nomes de classe usados pelas páginas; o visual é 100% macOS.
-   ───────────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Nova Ótica — Design System NANOFLOW
+   Fonte de verdade: /docs/marca/nanoflow-manual.html
+
+   PONTE DE NOMES (por que este arquivo tem duas camadas de variáveis)
+   ───────────────────────────────────────────────────────────────────────────
+   As 20 páginas do console já chamam classes (.card, .btn, .badge…) e
+   variáveis (--accent, --text, --panel…) herdadas do tema macOS anterior.
+   Reescrever as páginas custaria caro e travaria o trabalho em paralelo, então
+   aqui o vocabulário é PRESERVADO e só a implementação muda:
+
+     camada 1 · TOKENS DA MARCA   nomes do manual (--preto, --ouro, --tinta…).
+                                  Só estes carregam valor de marca.
+     camada 2 · ALIASES SEMÂNTICOS  os nomes antigos (--accent, --text…)
+                                  apontam para a camada 1. Nada de valor
+                                  literal aqui — é só tradução.
+
+   Quem for mexer em cor: mexa na camada 1. A camada 2 é contrato com as
+   páginas e não deve ganhar valores próprios.
+
+   ONDA 5 · A DOSAGEM DA MONOESPAÇADA (a regra que este arquivo passou a impor)
+   ───────────────────────────────────────────────────────────────────────────
+   Retorno do cliente, sobre o console: "acho que ficou mais confusa as
+   informações. Essa fonte pra infos não é legal também e acho que temos que
+   demarcar melhor as informações principais."
+
+   Ele está certo, e a causa é nossa. A regra do manual ("JetBrains Mono:
+   rótulos, dados, código, carimbos"; "rótulo em mono sempre em caixa alta com
+   entreletras 0.18em") foi escrita para uma PÁGINA DE MARCA, que tem dois ou
+   três rótulos por seção. Aplicada na mesma dose a um console operacional, que
+   tem 40+ rótulos por tela, ela deixa de ser assinatura e vira base. Medido no
+   Dashboard entregue: 85 de 176 elementos com texto em mono (48,3%), 729
+   caracteres, incluindo "Unidades em estoque" e "Transferências pendentes" em
+   caixa alta a 10px com 1,8px de entreletras. A regra não está errada; a DOSE
+   estava.
+
+   A MONO PASSA A SIGNIFICAR UMA COISA SÓ: "isto é identificador ou etiqueta",
+   nunca "isto é texto pequeno". Três papéis, e nada além deles:
+
+     ETIQUETA CURTA   mono · CAIXA ALTA · 0.18em · ≤ ~14 caracteres
+                      .carimbo · .unidade · .eyebrow · .titlebar .title
+     ETIQUETA LONGA   mono · CAIXA ALTA · 0.08em · 15 a ~24 caracteres
+                      th (cabeçalho de coluna)
+                      — a 0.18em, "VENDA MÉDIA/MÊS" perde o contorno da palavra,
+                        que é a forma que o olho usa para reconhecê-la.
+     IDENTIFICADOR    mono · caixa normal · 0 de entreletras
+                      .codigo (SKU, código, ID, data/hora, protocolo)
+
+   TUDO O QUE FOR LIDO COMO INFORMAÇÃO VAI PARA INTER. Rótulo descritivo de
+   indicador, frase de apoio, rótulo de campo, texto de chip de estado, nome de
+   loja, nome de produto — e QUANTIDADE.
+
+   OS TRÊS NUMERAIS, E POR QUE A QUANTIDADE SAIU DA MONO
+   O sistema já tinha três vozes numéricas na MESMA tela para o MESMO
+   significado: "1.486" saía em Fraunces no indicador, em mono na célula da
+   tabela e em Inter dentro da frase do banner. Isso é parte literal do "ficou
+   mais confusa as informações". Agora são três vozes para três SIGNIFICADOS:
+
+     Fraunces   o número-herói, o que a tela existe para mostrar (.stat .value)
+     Inter tab. toda quantidade que vive numa linha ou numa frase (td.num)
+     mono       o identificador, que se compara caractere a caractere (.codigo)
+
+   O único argumento funcional da mono numa coluna de números é o alinhamento, e
+   quem entrega alinhamento é `font-variant-numeric: tabular-nums`, não a
+   família. Medido nesta build: Inter SEM tabular-nums desalinha 12,1px entre
+   "1111" e "0000" a 13,5px — por isso `tabular-nums` em td.num não é enfeite, é
+   obrigatório; COM tabular-nums as duas medem 35,02px, alinhamento perfeito. E
+   a largura não muda de lado: "1.486" mede 38,66px em Inter tabular 13,5px
+   contra 39,02px em mono 13px. A troca não custa densidade.
+
+   REGRAS DO MANUAL QUE ESTE ARQUIVO FAZ CUMPRIR
+   ───────────────────────────────────────────────────────────────────────────
+   · Fundo branco-papel é o padrão. Escuro é ESCOLHA DO USUÁRIO (data-tema).
+   · Fraunces nunca abaixo de 18px · JetBrains Mono nunca em texto corrido.
+   · Rótulo em mono é sempre caixa alta — com 0.18em até ~14 caracteres e 0.08em
+     acima disso (ver a nota de dosagem, acima).
+   · Botão tem corte assimétrico (superior-esquerdo e inferior-direito);
+     campo e chip permanecem retos — é o contraste entre os dois que faz o
+     botão ser lido como ação sem depender de cor.
+   · Ouro puro (#C9A227) é preenchimento, traço, filete e superfície — nunca
+     texto sobre claro (2.17:1). TEXTO de ênfase sobre claro usa --ouro-texto.
+   · Hierarquia por filete de 1px, não por sombra difusa.
+   · Estado operacional nunca é comunicado só por cor: rótulo escrito, forma
+     própria do marcador e espessura do filete carregam a mesma informação,
+     porque a cor some no daltonismo, na impressão P&B e no monitor de loja.
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  /* Cores de sistema (Apple) */
-  --accent: #007aff;
-  --accent-hover: #0a84ff;
-  --accent-press: #0060df;
-  --green: #34c759;
-  --amber: #ff9f0a;
-  --red: #ff3b30;
-  --purple: #af52de;
-  --teal: #5ac8fa;
+  /* ─── Camada 1 · Tokens da marca NANOFLOW ──────────────────────────────── */
+  --preto: #0d0b08;
+  --carvao: #17140f;
+  --grafite: #221d15;
+  --branco: #f6f2e9;
+  --branco2: #e4dcc9;
+  --ouro: #c9a227;
+  --ouro-lux: #f0d482;
+  --ouro-dark: #8a6914;
+  --tinta: #2a2416;
+  --tinta-suave: #5c543e;
+  --linha: rgba(201, 162, 39, 0.32);
+  --linha2: rgba(246, 242, 233, 0.1);
+  --linha-clara: rgba(13, 11, 8, 0.13);
 
-  /* Superfícies */
-  --text: #1d1d1f;
-  --muted: #6e6e73;
-  --window: rgba(255, 255, 255, 0.86);
-  --window-solid: #ffffff;
-  --sidebar: rgba(246, 246, 248, 0.72);
-  --panel: #ffffff;
-  --panel-2: #f5f5f7;
-  --hover: rgba(0, 0, 0, 0.04);
-  --border: rgba(0, 0, 0, 0.1);
-  --border-strong: rgba(0, 0, 0, 0.16);
-  --ring: rgba(0, 122, 255, 0.35);
+  /* ─── Derivações da camada 1 (não são do manual — são deste produto) ─────
+     O manual dá UM tom de ênfase sobre claro (--ouro-dark) e ele só aguenta a
+     superfície mais clara: 4.57:1 sobre o branco-papel, mas 3.74:1 sobre
+     --panel-2 e 4.32:1 sobre a lavagem de hover. Como --accent pinta TODO link
+     e todo botão contornado, o token reprovava assim que o elemento caía dentro
+     de um card elevado, de uma linha em hover ou de um banner — sem ninguém
+     perceber. --ouro-texto é o mesmo ouro escurecido até aguentar as NOVE
+     superfícies claras que o produto realmente tem (pior caso 4.94:1), para que
+     o valor de --ouro-dark, que é do manual, não precise mudar. */
+  --ouro-texto: #74570f; /* ênfase sobre claro · pior caso 4.94:1 */
+  --ouro-press: #6d520f; /* fundo do botão pressionado · --branco em cima dá 6.6:1 */
+  --linha-clara-forte: rgba(13, 11, 8, 0.24); /* filete de destaque, no claro */
+  --linha2-forte: rgba(246, 242, 233, 0.22); /* idem no escuro — ver nota de elevação */
+  /* Contorno de CAMPO é caso à parte: pela 1.4.11 ele precisa de 3:1, porque é
+     ele que identifica "aqui se digita". Em --border-strong o campo ficava a
+     1.72:1 no claro e 1.92:1 no escuro — contorno que o olho não fecha. Estes
+     dois tons existem só para input/select/textarea e para o botão do
+     multi-seleção, que abre um campo; chip, filete de tabela e botão fantasma
+     continuam finos, senão a tela vira uma grade de caixas e perde o desenho
+     do manual, que constrói hierarquia com filete de 1px. */
+  --linha-campo-clara: rgba(13, 11, 8, 0.46); /* 3.16:1 sobre o branco-papel */
+  --linha-campo-escura: rgba(246, 242, 233, 0.38); /* 3.31:1 sobre o grafite */
 
-  --radius: 12px;
-  --radius-sm: 8px;
-  --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.12);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.05);
+  /* Estados operacionais derivados da paleta quente do manual.
+     A paleta NANOFLOW é monocromática quente: importar verde/vermelho de iOS
+     brigaria com ela. Estes três tons são derivações do mesmo eixo terroso.
 
-  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue',
-    'Inter', 'Segoe UI', Roboto, sans-serif;
+     A REGRA QUE ORGANIZA OS TRÊS, e que é o motivo de eles terem mudado de
+     valor: o estado mais grave é sempre o de MAIOR CONTRASTE contra o fundo —
+     no claro, o mais escuro; no escuro, o mais claro. Antes os três tinham
+     praticamente a mesma luminância (razão 1.08 a 1.19 entre si), então sob
+     deuteranopia "saudável" e "crítico" viravam a mesma cor (ΔE 8.9) e em
+     escala de cinza ficavam no mesmo tom — inclusive no @media print de
+     Reports.tsx. Separá-los por luminância é o que sobrevive ao daltonismo E
+     ao preto-e-branco, porque nenhum dos dois apaga a diferença de claro/escuro.
+     Mesmo assim a cor nunca decide sozinha: badge tem rótulo escrito e filete
+     esquerdo com espessura crescente, e .dot tem FORMA própria por estado. */
+  --verde: #486441; /* saudável · claro · 5.9:1 sobre branco-papel · cinza 92 */
+  --verde-claro: #7d9f62; /* saudável · ESCURO · 7.0:1 sobre preto · cinza 147 */
+  --ambar: #71430a; /* atenção · claro · 7.3:1 · bronze, não o ouro da marca · cinza 73 */
+  /* --ambar-claro era #f0d482 — o MESMO hex de --ouro-lux. No tema escuro o
+     estado "atenção" ficava pixel a pixel igual à cor de luxo da marca, e a
+     interface passava a dizer "atenção" toda vez que quisesse dizer "marca".
+     O #f0d482 é do manual e não se move; quem se move é o derivado.
+
+     Por que ESTE hex, e não o primeiro âmbar que já não colidia: separar por
+     hex resolve a colisão literal e não resolve a colisão PERCEBIDA. Medido em
+     ΔE*ab com simulação Viénot–Brettel–Mollon, contra --ouro-lux:
+       tricromata 31.7 · deuteranopia 31.0 · protanopia 27.7
+     (o candidato anterior, #e5a54b, dava 23.2 / 17.5 / 16.7 — abaixo do ΔE ≈ 20
+     que a auditoria adota como separação confiável sem comparação lado a lado,
+     ou seja, ainda encostava no ouro para quem tem deficiência de visão de cor).
+     Contra os outros dois estados, no pior observador: --terra-claro 54.6 e
+     --verde-claro 39.2. E a escada de cinza dos três estados continua de pé —
+     verde 142 · âmbar 182 · terra 204 — que é o que sobrevive ao grayscale(1)
+     e à impressão P&B. */
+  --ambar-claro: #f0b429; /* atenção · ESCURO · 9.85:1 sobre carvão · cinza 182 */
+  --terra: #6e1c0e; /* crítico · claro · 10.1:1 · óxido, não vermelho digital · cinza 44 */
+  --terra-claro: #f6bea9; /* crítico · ESCURO · 12.0:1 sobre preto · cinza 200 */
+
+  /* Famílias com papéis fixos. As @font-face moram em src/fonts.css. */
+  --font-titulo: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --font-corpo: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Corte assimétrico do símbolo, em variável para não virar número mágico. */
+  --corte: 16px;
+  --corte-sm: 10px;
+
+  /* ─── Camada 2 · Aliases semânticos (contrato com as 20 páginas) ────────── */
+  /* --accent é color: de todo link e de todo botão contornado, então precisa
+     aguentar QUALQUER superfície clara em que a página o coloque — não só o
+     branco-papel. Por isso aponta para --ouro-texto e não para --ouro-dark. */
+  --accent: var(--ouro-texto);
+  --accent-hover: var(--ouro);
+  --accent-press: var(--ouro-press);
+  --green: var(--verde);
+  --amber: var(--ambar);
+  --red: var(--terra);
+  --purple: var(--tinta); /* fora da paleta do manual: cai para tinta neutra */
+  --teal: var(--ouro-texto); /* idem: as páginas usavam ciano como cor de texto */
+
+  --text: var(--tinta);
+  --ink: var(--tinta); /* Decisions.tsx pede var(--ink); antes não existia */
+  --muted: var(--tinta-suave);
+  --window: var(--branco);
+  --window-solid: var(--branco);
+  --sidebar: var(--branco);
+  --panel: var(--branco);
+  --panel-2: var(--branco2);
+  --hover: rgba(201, 162, 39, 0.08); /* lavagem dourada, não cinza */
+  --border: var(--linha-clara);
+  --border-strong: var(--linha-clara-forte);
+  --border-campo: var(--linha-campo-clara);
+  --border-ouro: var(--linha);
+  --ring: rgba(201, 162, 39, 0.34);
+
+  /* O manual separa blocos com filete de 1px, não com sombra difusa.
+     Os raios ficam em 0: superfície é papel, não vidro. */
+  --radius: 0px;
+  --radius-sm: 0px;
+  --shadow-window: 0 18px 44px rgba(13, 11, 8, 0.1);
+  --shadow-card: none;
+
+  /* Alias antigo da família de corpo. Fica no contrato porque páginas e
+     componentes podem chamá-lo em style inline; o CSS daqui usa --font-corpo. */
+  --font: var(--font-corpo);
+
+  color-scheme: light;
 }
 
 * {
@@ -47,18 +223,15 @@ body {
 }
 
 body {
-  font-family: var(--font);
+  font-family: var(--font-corpo);
   color: var(--text);
   font-size: 14px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* Wallpaper do "desktop" (aparece atrás das janelas e no launcher) */
-  background:
-    radial-gradient(1200px 820px at 18% 8%, #e8f0ff 0%, transparent 60%),
-    radial-gradient(1100px 760px at 88% 92%, #ffe9f0 0%, transparent 55%),
-    linear-gradient(160deg, #eaf0fb 0%, #f2eefb 55%, #f6f1ee 100%);
-  background-attachment: fixed;
+  /* Branco-papel puro: o wallpaper azul-rosa do tema anterior não existe mais.
+     O manual pede superfície de papel, hierarquia por filete. */
+  background: var(--branco);
 }
 
 a {
@@ -66,13 +239,282 @@ a {
   text-decoration: none;
 }
 
-/* ─── Janela macOS (webdesk) ─────────────────────────────────────────────── */
+/* Títulos crus (h1–h3) também caem na serifa: várias páginas usam <h1>/<h2>
+   direto, sem .page-title. Nenhum desce abaixo de 18px — regra do manual. */
+h1,
+h2,
+h3 {
+  font-family: var(--font-titulo);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+h1 {
+  font-size: 26px;
+  margin: 0 0 4px;
+}
+h2 {
+  font-size: 20px;
+  margin: 0 0 8px;
+}
+h3 {
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+strong,
+b {
+  font-weight: 600;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ouro-texto);
+  outline-offset: 2px;
+}
+
+/* ONDA 4 · O anel de foco de CAMPO estava sumindo por acidente de especificidade.
+   A regra de campo mais abaixo casa `input:not([type=checkbox]):not([type=radio])
+   :not([type=range])` e escreve `outline: none`. Isso vale (0,3,1) e ganha do
+   `:focus-visible` global acima, que vale (0,1,0) — então o campo de busca e o
+   textarea ficavam SÓ com o box-shadow de ouro a 34% (1.28:1 no claro, 2.30:1 no
+   escuro), abaixo dos 3:1 que a 1.4.11 pede de um indicador de foco. O `select`
+   ao lado, que aparece na mesma regra SEM os `:not()`, mantinha o anel — a mesma
+   linha do produto tinha dois comportamentos.
+   A correção repete a mesma cadeia de `:not()` para reempatar a especificidade e
+   devolver o outline. Fica aqui em cima, junto do foco global, porque é a mesma
+   regra conceitual e não um remendo da seção de formulário. */
+input:not([type='checkbox']):not([type='radio']):not([type='range']):focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.mselect-btn:focus-visible {
+  outline: 2px solid var(--ouro-texto);
+  outline-offset: 2px;
+}
+
+/* ─── Utilitários de marca (para a Onda 3 usar nas páginas) ──────────────── */
+
+/* Régua hierárquica: gradiente dourado ABRE/FECHA seção, filete neutro separa
+   item. A hierarquia tem que ser lida antes do texto.
+
+   ONDA 5 · A RÉGUA ESTAVA SUBAPROVEITADA: medido, o Dashboard entregue tinha
+   ZERO `.rule-section` e ZERO `.rule`. A ferramenta prevista pelo manual para
+   separar seção de item existia no CSS e não estava na tela — por isso os nove
+   blocos do painel chegavam ao olho como uma pilha só.
+
+   O gradiente saía de `transparent` nas duas pontas, o que deixava a régua com
+   ~40% da largura visível e a fazia parecer um erro de renderização. Agora ela
+   nasce e morre no filete neutro do produto (não em transparente), com o ouro
+   no miolo: a linha atravessa o bloco inteiro e o ouro marca o centro dela. */
+.rule,
+.rule-section {
+  display: block;
+  width: 100%;
+  height: 1px;
+  border: 0;
+  padding: 0;
+}
+.rule {
+  background: var(--border);
+  margin: 14px 0;
+}
+.rule-section {
+  background: linear-gradient(90deg, var(--border), var(--ouro) 22%, var(--ouro) 78%, var(--border));
+  margin: 22px 0 14px;
+}
+/* Abertura de seção completa: a régua dourada e o sobretítulo em mono são UMA
+   coisa só, e é assim que devem chegar à tela. Quem monta a página escreve
+   <AberturaDeSecao>, do ui.tsx, e não repete esta estrutura à mão. */
+/* As margens são apertadas de propósito, e isso foi MEDIDO. A primeira versão
+   desta abertura usava 24/12 com a régua a 10px de respiro: somada às duas
+   seções da tela, ela empurrou a tabela de cobertura para baixo a ponto de o
+   primeiro quadro passar de 4 linhas de loja visíveis para 1. Hierarquia que
+   custa linha não serve a uma ferramenta de trabalho — o cliente opera 19 lojas
+   por esta tela. A abertura tem que ser LIDA, não espaçosa: quem marca a seção
+   é a régua dourada e o sobretítulo, não o ar em volta deles. */
+.abertura {
+  margin: 12px 0 6px;
+}
+.abertura:first-child {
+  margin-top: 0;
+}
+.abertura > .rule-section {
+  margin: 0 0 7px;
+}
+.abertura > .eyebrow {
+  margin: 0 0 5px;
+}
+.abertura > .section-title {
+  margin: 0;
+}
+.abertura > .hint {
+  margin-top: 2px;
+  max-width: 78ch;
+}
+/* O cartão que vem logo depois de uma abertura não repete o respiro dela: o
+   título já está desenhado acima, e a primeira coisa dentro do cartão é o
+   cabeçalho da tabela, que tem o próprio padding. */
+.abertura + .card {
+  padding-top: 4px;
+}
+
+/* Malha Nano: pontos de 1px a cada 22px, máscara radial obrigatória (é ela que
+   impede a malha de virar textura chapada) e opacidade ≤20%. Sobrepõe só área
+   de respiro — nunca texto corrido. Precisa de pai com position:relative. */
+.mesh {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: radial-gradient(circle, rgba(201, 162, 39, 0.18) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse at 72% 24%, #000 6%, transparent 62%);
+  mask-image: radial-gradient(ellipse at 72% 24%, #000 6%, transparent 62%);
+}
+
+/* Abertura de seção: filete curto + rótulo em mono. Ouro-dark porque é TEXTO.
+   ETIQUETA CURTA — fica em mono caixa alta 0.18em. É o uso que o manual
+   desenhou e é onde a mono trabalha melhor: uma ou duas palavras que nomeiam o
+   bloco inteiro ("OPERAÇÃO", "COBERTURA", "REMANEJAMENTO"). Subiu de 10 para
+   10,5px porque a caixa alta espaçada precisa de corpo para não virar filete. */
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ouro-texto);
+  margin: 0 0 12px;
+}
+.eyebrow::before {
+  content: '';
+  width: 26px;
+  height: 1px;
+  background: var(--ouro);
+  flex: none;
+}
+
+/* ═══ ONDA 5 · O RÓTULO DESCRITIVO SAIU DA MONO ═══════════════════════════
+   `.label` é a classe que as 20 telas usam para nomear um dado: "Piso de
+   compra", "Capacidade na janela", "Unidades em estoque", "Transferências
+   pendentes", "Última sincronização". São 53 ocorrências no produto, e a
+   maioria tem 15 a 26 caracteres.
+
+   Em mono, caixa alta, 10px e 1,8px de entreletras, uma palavra dessas perde
+   exatamente o que o olho usa para reconhecê-la sem soletrar: o contorno
+   (ascendentes, descendentes, a silhueta da palavra inteira). A caixa alta
+   achata esse contorno num retângulo e a entreletras separa as letras a ponto
+   de o leitor ler L-E-T-R-A em vez de PALAVRA. É este o "essa fonte pra infos
+   não é legal" do cliente, e é o defeito mais repetido do console.
+
+   Volta para Inter 12px/600, caixa normal, sem entreletras. 600 (e não 500) é
+   o que devolve a hierarquia que a caixa alta segurava de graça: o rótulo
+   continua distinguindo-se do valor por PESO, sem depender de deformação.
+
+   O carimbo de verdade não morreu — mudou de nome: rótulo de 1 a 3 palavras que
+   funciona como etiqueta usa `.carimbo` (bloco) ou `.unidade` (colado ao
+   número). Quem só quer nomear o dado usa `.label`. */
+.label {
+  font-family: var(--font-corpo);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  line-height: 1.4;
+}
+/* EXCEÇÃO, e a única: `.label` DENTRO DA CASCA continua em mono caixa alta.
+   Na barra de título e na barra lateral o `.label` não nomeia um dado, nomeia
+   um CONTROLE ou uma pessoa — "Recorte", "Gestor da rede" — e são todos de até
+   14 caracteres. É a mesma função do `.eyebrow`: etiqueta curta que abre um
+   bloco, não informação a ser lida. Manter a mono aqui é o que preserva a
+   assinatura carimbada da casca, que é justamente a parte que o cliente
+   aprovou ("bem melhor", sobre a porta de entrada), enquanto o corpo do console
+   volta para Inter. A regra é por CONTEXTO e não por classe nova de propósito:
+   assim nenhuma das 20 telas precisa saber desta distinção. */
+.titlebar .label,
+.sidebar .label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* ─── ONDA 5 · Os três papéis da monoespaçada ────────────────────────────── */
+
+/* ETIQUETA CURTA, em bloco. Nome de fuso, sigla, unidade, um estado, um
+   carimbo de data. Regra prática: se não couber em ~14 caracteres, não é
+   carimbo — é rótulo, e vai de `.label`.
+   9,5 → 10px: a 9,5 com 0.18em o carimbo estava no limite do reconhecível. */
+.carimbo {
+  font-family: var(--font-mono);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.65;
+  margin-top: 5px;
+}
+
+/* ETIQUETA CURTA, colada a um número. É a mono como TEMPERO, que é o papel que
+   ela passa a ter no console: "1.486 UN.", "R$ 84.200", "9,4 MESES", "30D".
+   Existe separada de `.carimbo` só por causa da caixa: aqui não há margem
+   nenhuma, o carimbo encosta no número e herda a linha dele. */
+.unidade {
+  font-family: var(--font-mono);
+  /* Relativo, para acompanhar o número a que está colado — mas com piso, senão
+     o carimbo colado a um valor de nível 3 (20px) cairia para 6,8px.
+     Medido na primeira tentativa: a 0.62em o "UN." colado ao número de 40px do
+     nível 1 saía com 24,8px e disputava a cena com o próprio número que ele
+     deveria estar carimbando. A 0.34em ele mede 13,6px no nível 1, 10px no
+     nível 2 e 10px no nível 3 — carimbo em todos os três. */
+  font-size: max(10px, 0.34em);
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-left: 0.35em;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+/* IDENTIFICADOR. SKU, código de produto, ID de movimentação, data/hora,
+   protocolo. Aqui a mono é FUNÇÃO, não decoração: são cadeias que o operador
+   compara caractere a caractere ("RB4446L" contra "RB4446I"), e a largura fixa
+   é o que faz a diferença saltar. Por isso, e só aqui, a mono vem em CAIXA
+   NORMAL e com entreletras ZERO — caixa alta e espaçamento atrapalhariam
+   justamente a comparação que a família existe para servir. */
+.codigo {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+}
+
+/* Empilhamento vertical de blocos (usado como raiz de página). */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ─── Janela do webdesk ──────────────────────────────────────────────────── */
 
 .macos-desktop {
   min-height: 100vh;
   padding: 0;
+  background: var(--branco);
 }
 
+/* Deixou de imitar janela de sistema: é uma folha de papel com filete dourado
+   no topo, que funciona como a régua que abre o documento inteiro. */
 .macos-window {
   display: grid;
   grid-template-columns: 244px 1fr;
@@ -83,6 +525,9 @@ a {
   height: 100dvh; /* barra dinâmica de navegadores móveis não corta o rodapé */
   background: var(--window-solid);
   overflow: hidden;
+  /* O filete dourado no topo é a régua que abre o documento inteiro — é o que
+     substitui a barra de título translúcida do tema anterior. */
+  border-top: 2px solid var(--ouro);
 }
 
 @media (min-width: 1120px) {
@@ -92,18 +537,17 @@ a {
   .macos-window {
     height: calc(100vh - 32px);
     height: calc(100dvh - 32px);
-    border-radius: 14px;
+    border-radius: 0;
     box-shadow: var(--shadow-window);
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--linha);
+    border-top: 2px solid var(--ouro);
   }
 }
 
-/* Barra lateral translúcida (vibrancy) */
+/* Barra lateral: papel separado por filete, sem vidro fosco nem vibrancy. */
 .sidebar {
   background: var(--sidebar);
-  backdrop-filter: saturate(180%) blur(24px);
-  -webkit-backdrop-filter: saturate(180%) blur(24px);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--linha);
   display: flex;
   flex-direction: column;
   padding: 10px 12px 14px;
@@ -112,37 +556,41 @@ a {
   overflow-y: auto;
 }
 
-/* Traffic lights */
+/* Os três semáforos do macOS não sobrevivem à marca. Restou UM indicador:
+   o símbolo NANOFLOW (quadrado com os cantos superior-esquerdo e
+   inferior-direito em arco). Os seletores .y e .g continuam existindo para
+   não quebrar o JSX — só não desenham nada. */
 .traffic {
   display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 6px 8px 14px;
+  padding: 8px 8px 14px;
 }
 .traffic i {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: inline-block;
+  display: none;
 }
 .traffic .r {
-  background: #ff5f57;
+  /* O símbolo da marca já é desenhado em SVG ao lado do nome "NovaÓtica", logo
+     abaixo. Manter este aqui deixava DOIS símbolos empilhados no topo da
+     sidebar, e o de cima lia como resíduo do semáforo que ele substituiu.
+     O bloco continua ocupando o espaço de respiro do topo da janela. */
+  display: none;
 }
-.traffic .y {
-  background: #febc2e;
-}
+.traffic .y,
 .traffic .g {
-  background: #28c840;
+  display: none;
 }
 
 .brand {
+  font-family: var(--font-corpo);
   font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.2px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   padding: 2px 10px 12px;
   color: var(--text);
 }
 .brand span {
-  color: var(--accent);
+  color: var(--ouro-texto);
 }
 
 .nav-link {
@@ -150,22 +598,25 @@ a {
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border-radius: 7px;
-  color: #3a3a3c;
+  border-radius: 0;
+  border-left: 2px solid transparent;
+  color: var(--tinta);
   font-weight: 500;
   font-size: 13.5px;
-  transition: background 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .nav-link:hover {
   background: var(--hover);
 }
+/* Seleção marcada por filete dourado + fundo de papel 2 — o ouro fica no
+   ponto de decisão, não em área. */
 .nav-link.active {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 122, 255, 0.4);
+  background: var(--branco2);
+  border-left-color: var(--ouro);
+  color: var(--tinta);
+  font-weight: 600;
 }
 
-/* Área principal da janela */
 .window-main {
   display: flex;
   flex-direction: column;
@@ -175,19 +626,104 @@ a {
 }
 .titlebar {
   height: 44px;
+  /* Sem gap, o nome da tela encosta no rótulo do seletor ao lado e sai
+     "DASHBOARDRECORTE". O justify-content: space-between só separa os EXTREMOS;
+     os itens vizinhos dentro do mesmo grupo continuam colados. */
+  gap: 18px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 18px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--linha);
+  background: var(--branco);
 }
+/* Nome da tela é rótulo, não título: vai em mono caixa alta. */
 .titlebar .title {
-  font-weight: 600;
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--tinta);
+  /* ONDA 4 · o nome da tela é o item que PODE encolher: ele se repete na barra
+     lateral e no <h1> da página, então truncar aqui não perde informação. Sem
+     isto ele empurrava o resto da barra e o seletor de recorte era pintado por
+     cima do "Dados ao vivo" — medido: sobreposição literal a partir de 1.081px. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ONDA 4 · O RECORTE NUNCA ENCOLHE.
+   Ele era o único filho elástico da barra (o grupo da direita já tinha
+   flex:none), então era ele que absorvia toda a falta de espaço: a 768px a
+   caixa do seletor media 2px de largura e a opção "Tudo" tinha 0% de
+   visibilidade nas 14 telas admin — o controle deixava de ser operável, sem
+   nenhum aviso. O recorte decide O QUE a tela inteira está mostrando; ele é o
+   último item que pode sumir, não o primeiro. */
+.titlebar .scope-picker {
+  flex: none;
+}
+/* Faixa 721–1204px: nenhuma regra de casca existia aqui. A barra passa a se
+   desmontar por ordem de importância, em vez de espremer tudo ao mesmo tempo.
+   1204px é onde a auditoria mediu o início da compressão do recorte. */
+@media (max-width: 1204px) {
+  .titlebar {
+    gap: 12px;
+    padding: 0 12px;
+  }
+  /* "Dados ao vivo" é confirmação de que nada está errado — é a informação de
+     menor urgência da barra. O quadrado verde permanece, com o texto no
+     title/aria-label, então o canal não desaparece: ele muda de forma. */
+  .titlebar .live-status .live-status-text {
+    display: none;
+  }
+}
+@media (max-width: 1080px) {
+  /* O rótulo "RECORTE" sai antes dos chips: os chips carregam o valor, o rótulo
+     só o nomeia — e o grupo continua nomeado para o leitor de tela pelo
+     aria-labelledby, que não depende do elemento estar visível. */
+  .titlebar .scope-picker > .label {
+    display: none;
+  }
+}
+@media (max-width: 960px) {
+  /* Último recurso: o botão de tema vira só ícone. O nome acessível continua no
+     aria-label (ver AdminShell), então nada se perde no leitor de tela. */
+  .titlebar .btn .rotulo-tema {
+    display: none;
+  }
+}
+/* ONDA 4 · A BARRA PASSA A QUEBRAR EM VEZ DE VAZAR.
+   Medido a 768px: o bloco de título era espremido a largura ZERO (o nome da
+   tela sumia por inteiro) e o grupo da direita terminava 5px ALÉM da janela,
+   o que dava barra de rolagem horizontal em `.macos-window` nas 15 rotas do
+   admin. Barra horizontal na casca é sempre defeito. O recorte ganhou dois
+   chips nos Feedbacks 5.0, então a barra ficou ainda mais larga do que quando
+   isso foi medido.
+   Abaixo de 900px ela deixa de ser uma linha de 44px e passa a ser um bloco
+   que quebra: o título ocupa a primeira faixa inteira e os controles a
+   segunda. Ninguém some, ninguém vaza. */
+@media (max-width: 900px) {
+  .titlebar {
+    height: auto;
+    min-height: 44px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 8px 12px;
+  }
+  .titlebar .title {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  /* O recorte continua sendo o último a encolher, mas quando nem assim couber
+     ele rola dentro de si em vez de empurrar a barra para fora da janela. */
+  .titlebar .scope-picker {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+  }
 }
 .main {
   flex: 1 1 auto;
@@ -202,21 +738,36 @@ a {
 /* ─── Tipografia de página ──────────────────────────────────────────────── */
 
 .page-title {
+  font-family: var(--font-titulo);
   font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.18;
   margin: 0 0 4px;
 }
 .page-sub {
   color: var(--muted);
-  margin: 0 0 22px;
+  /* 20 → 14: a Onda 5 acrescentou o sobretítulo da página acima do título, e o
+     respiro tinha que sair de algum lugar. Sai daqui, que é onde ele não separa
+     nada — o próximo bloco já vem com margem própria. */
+  margin: 0 0 14px;
   font-size: 14px;
+  line-height: 1.55;
+  max-width: 78ch;
 }
+/* Sobretítulo da PÁGINA (dentro do <header> do PageHeader): encosta no título,
+   porque os dois são uma coisa só. O respiro de 12px do .eyebrow é para quando
+   ele abre uma seção no meio da tela. */
+header > .eyebrow {
+  margin-bottom: 5px;
+}
+/* 18px é o piso da Fraunces no manual — abaixo disso a serifa não se sustenta. */
 .section-title {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.2px;
-  margin: 0 0 12px;
+  font-family: var(--font-titulo);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: 0;
+  margin: 0 0 10px;
 }
 .muted {
   color: var(--muted);
@@ -250,6 +801,19 @@ a {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+/* Duas e três colunas viram uma. Medido a 768px: `.main` de /admin/decisoes
+   rolava na horizontal (scrollWidth 742 × clientWidth 524) por causa da
+   `.grid-3`, e /admin/estrategia pela `.grid-2`. Não era tabela larga dentro de
+   um cartão — era a área de conteúdo inteira que rolava.
+   A regra mora AQUI, e não junto do bloco da casca lá em cima, porque
+   `.grid-3` só é definida nesta altura do arquivo: a media query escrita antes
+   perdia para a regra base por ordem de cascata, com a mesma especificidade. */
+@media (max-width: 900px) {
+  .grid-3,
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 720px) {
   /* No mobile/tablet a "janela" deixa de ter altura fixa: o documento inteiro
      rola normalmente (a sidebar empilha em cima e não corta o conteúdo). */
@@ -267,7 +831,7 @@ a {
   }
   .sidebar {
     border-right: none;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--linha);
     /* No mobile a navegação vira um cabeçalho que rola com a página (não fixo),
        liberando toda a altura para o conteúdo. */
     flex-direction: row;
@@ -311,8 +875,10 @@ a {
   }
 }
 
-/* ─── Cards ─────────────────────────────────────────────────────────────── */
+/* ─── Cards e indicadores ───────────────────────────────────────────────── */
 
+/* Sem sombra: o card existe pelo filete. Densidade preservada (padding 18px,
+   igual ao tema anterior) — a elegância aqui é precisão, não ar. */
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -320,21 +886,157 @@ a {
   padding: 18px;
   box-shadow: var(--shadow-card);
 }
+
+/* ═══ ONDA 5 · OS TRÊS NÍVEIS DE CARTÃO ═══════════════════════════════════
+   Retorno do cliente: "acho que temos que demarcar melhor as informações
+   principais". Medido no Dashboard entregue: 10 cartões, 3 assinaturas visuais
+   — e as 3 só diferiam porque um cartão embrulha tabela e muda de altura. Os 9
+   indicadores tinham fundo, filete, sombra e corpo de número IDÊNTICOS. Nada
+   dizia qual deles é o motivo de a tela existir.
+
+   A Onda 1 trocou sombra por filete, como o manual manda, e no caminho achatou
+   tudo no mesmo plano: sem sombra, o único eixo de elevação que restava era a
+   COR do filete — e cor é justamente o canal que a impressão P&B e o daltonismo
+   apagam. Então a hierarquia é reconstruída em QUATRO canais geométricos, que
+   sobrevivem ao cinza, ao papel e ao monitor de loja:
+
+                        filete de topo      superfície        corpo do número   área
+     nível 1 destaque   3px, ouro           papel 2 (branco2) Fraunces 40px     22px
+     nível 2 (padrão)   1px, igual à volta  papel             Fraunces 27px     18px
+     nível 3 contexto   1px, só em cima     nenhuma           Fraunces 20px     12px 0
+
+   O nível 1 não usa "borda mais grossa em volta": um retângulo mais encorpado
+   compete com a tabela ao lado e engorda a tela inteira. Usa FILETE DE TOPO —
+   é a mesma gramática que a janela do console já tem (`.macos-window` abre com
+   2px de ouro em cima) e que o manual chama de régua. O olho lê "isto abre".
+
+   E a DENSIDADE SOBE, não cai: o nível 3 abre mão da moldura e do fundo e cai
+   de 18px de respiro para 12px em cima e zero nas laterais, o que devolve à
+   tela mais linha do que o nível 1 consome. É ferramenta de trabalho — nível
+   não pode custar altura.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* NÍVEL 1 · o indicador que a tela existe para mostrar. UM por tela, no máximo
+   dois — a regra é a mesma do botão primário: se há três, a tela não decidiu. */
+.card.destaque {
+  background: var(--panel-2);
+  border-color: var(--border-strong);
+  border-top: 3px solid var(--ouro);
+  padding: 22px 20px;
+}
+.card.destaque .value,
+.card.destaque .kpi {
+  font-size: 40px;
+  margin-top: 10px;
+}
+.card.destaque .label {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+/* Ocupa duas colunas do grid. Área é canal de hierarquia tanto quanto corpo de
+   letra, e é o canal que continua funcionando de longe, no monitor da loja. */
+.card.largo {
+  grid-column: span 2;
+}
+@media (max-width: 720px) {
+  .card.largo {
+    grid-column: auto;
+  }
+}
+
+/* NÍVEL 3 · contexto e rodapé. Sem moldura, sem fundo: só o filete de cima, que
+   é o que diz "isto pertence ao bloco acima". Recua sem sumir. */
+.card.contexto {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  padding: 10px 0 2px;
+}
+.card.contexto .value,
+.card.contexto .kpi {
+  font-size: 20px;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.card.contexto .label {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+/* ONDA 5 · A ZONA DE AÇÃO DENTRO DO CARD (`.acao-do-card`).
+   Os três níveis acima resolvem a hierarquia ENTRE cartões. Esta resolve a
+   hierarquia DENTRO de um — que é o problema das telas de decisão, onde um card
+   carrega, com a mesma assinatura, o que a pessoa vai FAZER (o desconto a
+   aplicar, a rota da transferência) e a JUSTIFICATIVA de por que o motor sugeriu
+   aquilo. Com uma assinatura só, distinguir as duas exige LER as duas.
+
+   Usa deliberadamente a MESMA gramática do nível 1 — superfície própria
+   (--panel-2) + filete de 3px em ouro + respiro maior —, para que o console
+   tenha UM jeito de dizer "isto é o principal", e não um por escala.
+
+   O filete vai à ESQUERDA, e não no topo como no cartão: dentro do card o
+   vizinho de cima é conteúdo do MESMO card, e um filete horizontal ali leria
+   como separador de seção (o papel de `hr.rule`), não como promoção. À esquerda
+   ele corre ao lado do bloco inteiro e o marca como uma faixa.
+
+   No escuro segue a mesma inversão do nível 1: o ouro claro é o que separa
+   quando o vizinho é grafite. */
+.acao-do-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border-left: 3px solid var(--ouro);
+}
+[data-tema='escuro'] .acao-do-card {
+  background: var(--grafite);
+  border-left-color: var(--ouro-lux);
+}
+/* No papel a superfície morre por regra (ver o bloco de impressão no fim do
+   arquivo): sobra o filete, que é geométrico e imprime. */
+@media print {
+  .acao-do-card {
+    background: transparent;
+    border-left: 3px solid #000;
+  }
+}
+
+/* Indicador: número em Fraunces (herói), rótulo em Inter (serviço).
+   ONDA 5 · o rótulo saiu da mono — ver a nota longa em `.label`. Esta regra
+   existe só para o par de tamanhos do indicador; a família vem de `.label`. */
 .stat .label {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
+  line-height: 1.35;
 }
 .stat .value {
+  font-family: var(--font-titulo);
   font-size: 27px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.1;
+  margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tinta);
+}
+/* Não existe mais um `.stat .hint` em mono: ele tinha especificidade maior que
+   .hint e reimpunha o carimbo justamente onde o StatCard escreve frase
+   ("Solicitações e aprovações a resolver", "capital a comprar + a liberar").
+   O indicador que quiser carimbo usa .carimbo, que vale em qualquer contexto. */
+.stat .hint,
+.stat .carimbo {
   margin-top: 6px;
 }
-.stat .hint {
-  color: var(--muted);
-  font-size: 12px;
+
+/* Número solto (Histórico). Mesma regra do indicador. */
+.kpi {
+  font-family: var(--font-titulo);
+  font-size: 27px;
+  font-weight: 400;
+  line-height: 1.1;
   margin-top: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Toolbar / controles ───────────────────────────────────────────────── */
@@ -347,25 +1049,57 @@ a {
   margin-bottom: 18px;
 }
 
-input,
-select {
-  background: #fff;
-  border: 1px solid var(--border-strong);
+/* Campo é RETO. O contraste com o corte assimétrico do botão é o que faz o
+   botão ser lido como ação sem depender de cor.
+   O :not() existe porque checkbox/radio/range não podem receber padding e
+   borda de campo de texto — no tema anterior recebiam e ficavam deformados. */
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+select,
+textarea {
+  background: var(--branco);
+  border: 1px solid var(--border-campo);
   color: var(--text);
   padding: 8px 11px;
-  border-radius: 7px;
+  border-radius: 0;
   font-size: 14px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   outline: none;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
-input:focus,
-select:focus {
-  border-color: var(--accent);
+input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
+select:focus,
+textarea:focus {
+  border-color: var(--ouro-texto);
   box-shadow: 0 0 0 3px var(--ring);
 }
-input::placeholder {
-  color: #a1a1a6;
+/* Placeholder é TEXTO e conta para o 1.4.3 — a 70% o --tinta-suave compunha
+   para #8A8371 e caía a 3.36:1. A 92% mede 5.5:1 e continua lendo como
+   provisório, que é o papel dele. */
+input::placeholder,
+textarea::placeholder {
+  color: rgba(92, 84, 62, 0.92);
+}
+/* Controles nativos herdam o ouro em vez do azul do sistema. */
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'] {
+  accent-color: var(--ouro-texto);
+}
+/* Data e número são dados: leem melhor em mono e alinham em coluna. */
+input[type='date'],
+input[type='number'] {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* Os dois campos de data de /admin/vendas eram os ÚNICOS dois focáveis sem
+   anel em todo o console (WCAG 2.4.7 e 2.4.11). O `input[type=date]` do
+   Chromium leva o foco para uma parte interna do controle, e a regra genérica
+   de `:focus` não chegava lá — `:focus-within` chega. */
+input[type='date']:focus,
+input[type='date']:focus-within {
+  border-color: var(--ouro-texto);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 
 /* ─── Filtro multi-seleção (MultiSelect) ────────────────────────────────── */
@@ -373,29 +1107,30 @@ input::placeholder {
 .mselect {
   position: relative;
 }
+/* Abre um campo, não uma ação: permanece reto. */
 .mselect-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #fff;
-  border: 1px solid var(--border-strong);
+  background: var(--branco);
+  border: 1px solid var(--border-campo);
   color: var(--text);
   padding: 8px 11px;
-  border-radius: 7px;
+  border-radius: 0;
   font-size: 14px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   cursor: pointer;
   max-width: 240px;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
 .mselect-btn:focus-visible {
-  border-color: var(--accent);
+  border-color: var(--ouro-texto);
   box-shadow: 0 0 0 3px var(--ring);
   outline: none;
 }
 .mselect-btn.active {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--ouro-texto);
+  color: var(--ouro-texto);
   font-weight: 600;
 }
 .mselect-label {
@@ -414,10 +1149,10 @@ input::placeholder {
   left: 0;
   min-width: 240px;
   max-width: 320px;
-  background: var(--window-solid, #fff);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--shadow-card);
+  background: var(--panel);
+  border: 1px solid var(--linha);
+  border-radius: 0;
+  box-shadow: 0 12px 30px rgba(13, 11, 8, 0.12);
   overflow: hidden;
 }
 .mselect-list {
@@ -435,9 +1170,9 @@ input::placeholder {
   border: none;
   color: var(--text);
   font-size: 13.5px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   padding: 7px 9px;
-  border-radius: 7px;
+  border-radius: 0;
   cursor: pointer;
 }
 .mselect-opt:hover {
@@ -450,18 +1185,18 @@ input::placeholder {
   flex: none;
   width: 16px;
   height: 16px;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border: 1px solid var(--border-campo);
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  color: #fff;
+  color: var(--branco);
   background: transparent;
 }
 .mselect-opt.checked .mselect-check {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--ouro-texto);
+  border-color: var(--ouro-texto);
 }
 .mselect-empty {
   color: var(--muted);
@@ -475,11 +1210,11 @@ input::placeholder {
 .mselect-actions button {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--ouro-texto);
   font-size: 13px;
-  font-family: inherit;
+  font-family: var(--font-corpo);
   padding: 6px 9px;
-  border-radius: 7px;
+  border-radius: 0;
   cursor: pointer;
   width: 100%;
   text-align: left;
@@ -488,76 +1223,185 @@ input::placeholder {
   background: var(--hover);
 }
 
+/* ─── Botões ────────────────────────────────────────────────────────────── */
+
+/* O corte assimétrico do símbolo: superior-esquerdo e inferior-direito em
+   raio 16px, os outros dois a 90°. É a assinatura do sistema.
+   .btn (contornado) é a ação comum; .btn.solid é o primário preenchido, que o
+   manual limita a UMA ocorrência por tela — por isso o padrão não é sólido:
+   telas com vários botões continuariam dentro da regra dos 5% de ouro. */
+/* ONDA 4 · O CONTORNO PASSOU DE --ouro PARA --ouro-texto (só no tema claro).
+   Medido: --ouro (#C9A227) sobre o branco-papel dá 2.17:1. Como .btn não tem
+   preenchimento, esse filete de 1px É o botão — é a única coisa que diz onde a
+   ação começa e termina. A 1.4.11 pede 3:1 do contorno de um controle, e a
+   auditoria contou 3.267 instâncias reprovando na largura de projeto.
+   --ouro-texto (#74570F) mede 6.04:1 sobre o branco-papel e é o MESMO tom que o
+   rótulo do botão já usava, então o botão passa a ser desenhado por uma cor só,
+   em vez de rótulo escuro dentro de moldura clara. O ouro puro não sai do
+   componente: continua sendo o preenchimento do hover e do .solid, que é onde o
+   manual manda ouro ser superfície. No escuro nada muda — lá --ouro sobre o
+   preto mede 7.59:1 e já passava (ver o bloco [data-tema='escuro'] .btn). */
 .btn {
-  background: var(--accent);
-  color: #fff;
-  border: none;
+  background: transparent;
+  color: var(--ouro-texto);
+  border: 1px solid var(--ouro-texto);
   padding: 8px 16px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--corte) 0 var(--corte) 0;
+  font-family: var(--font-corpo);
   font-weight: 500;
   font-size: 13.5px;
-  font-family: inherit;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  transition: background 0.12s, transform 0.04s;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
+  transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+  box-shadow: none;
 }
 .btn:hover {
-  background: var(--accent-hover);
+  background: var(--ouro);
+  color: var(--preto);
 }
 .btn:active {
   background: var(--accent-press);
-  transform: translateY(0.5px);
+  border-color: var(--accent-press);
+  color: var(--branco);
 }
+/* Primário: uma ocorrência por tela. */
+.btn.solid {
+  background: var(--ouro);
+  border-color: var(--ouro);
+  color: var(--preto);
+}
+/* Única aparição de --ouro-lux fora do tema escuro, e é proposital: aqui ele é
+   SUPERFÍCIE, não texto. Como texto sobre claro daria 1.30:1 e sumiria; como
+   fundo com --preto em cima dá 13.52:1. É a distinção que separa "cor de fundo
+   claro" de "cor de tema escuro" — quem copiar esta regra para um color: quebra. */
+.btn.solid:hover {
+  background: var(--ouro-lux);
+  border-color: var(--ouro-lux);
+  color: var(--preto);
+}
+/* Terciário: sem ouro nenhum, só tinta e filete neutro.
+   ONDA 4 · --border-strong (0.24 de preto) media 1.72:1 sobre o branco-papel:
+   o botão fantasma não tinha contorno perceptível NEM preenchimento, ou seja,
+   não tinha boundary nenhum. Passa a usar --border-campo (0.46 → 3.16:1), o
+   mesmo filete que o produto já reservou para "aqui se opera" nos campos. O
+   token --border-strong continua com o valor dele: quem muda é o botão, porque
+   ele é controle; filete de tabela e moldura de cartão seguem finos. */
 .btn.ghost {
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid var(--border-strong);
-  color: var(--text);
-  box-shadow: none;
+  background: transparent;
+  border: 1px solid var(--border-campo);
+  color: var(--tinta);
 }
 .btn.ghost:hover {
-  background: var(--panel-2);
+  background: var(--hover);
+  border-color: var(--ouro);
+  color: var(--tinta);
 }
+/* O raio cheio de 16px comeria a altura de um botão de 25px: reduz junto. */
 .btn.sm {
-  padding: 5px 11px;
+  padding: 5px 12px;
   font-size: 12.5px;
-  border-radius: 6px;
+  border-radius: var(--corte-sm) 0 var(--corte-sm) 0;
 }
 .btn.danger {
-  background: var(--red);
+  color: var(--terra);
+  border-color: var(--terra);
+  background: transparent;
 }
 .btn.danger:hover {
-  filter: brightness(1.05);
+  background: var(--terra);
+  border-color: var(--terra);
+  color: var(--branco);
 }
-.btn:disabled {
-  opacity: 0.45;
+/* Desabilitado por COR NEUTRA, não por opacity. O `opacity: .5` compunha o
+   rótulo com o fundo e levava o botão contornado a 1.97:1 — o operador via que
+   o botão estava apagado mas não conseguia LER o que estava indisponível, e
+   neste console há vários botões que só liberam sob condição. Trocado por tom
+   neutro (--muted: 6.7:1 no claro, 7.7:1 no escuro), que mantém o rótulo
+   legível e comunica a indisponibilidade por cor neutra + cursor + o
+   aria-disabled que o JSX já deve escrever. Todas as variantes convergem para o
+   mesmo repouso: desabilitado nunca é dourado, senão parece acionável. */
+.btn:disabled,
+.btn:disabled:hover,
+.btn.solid:disabled,
+.btn.solid:disabled:hover,
+.btn.ghost:disabled,
+.btn.ghost:disabled:hover,
+.btn.danger:disabled,
+.btn.danger:disabled:hover {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--muted);
   cursor: not-allowed;
 }
 
-/* Segmented control (macOS) */
+/* Controle segmentado: chips retos dentro de uma moldura de 1px. O item ativo
+   é preenchido com tinta e recebe um filete dourado embaixo — o ouro marca a
+   decisão, não a superfície inteira. */
 .segmented {
   display: inline-flex;
-  background: rgba(120, 120, 128, 0.12);
-  border-radius: 8px;
-  padding: 2px;
-  gap: 2px;
+  background: transparent;
+  /* ONDA 4 · mesma razão do .btn.ghost: a moldura é o único boundary do
+     controle segmentado (os chips inativos não têm fundo). 1.72 → 3.16:1. */
+  border: 1px solid var(--border-campo);
+  border-radius: 0;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
 }
+/* ONDA 5 · O chip carrega o VALOR escolhido, não o nome do controle: "Óculos e
+   relógios" (17 caracteres), "Todas as lojas", "Últimos 90 dias". É informação,
+   e o operador troca de recorte olhando para ela. Sai da mono caixa alta e vai
+   para Inter 12px. Quem continua em mono é o rótulo do grupo ao lado — e agora
+   os dois se distinguem por FAMÍLIA, que é o que a hierarquia pedia: mono
+   nomeia, Inter responde. */
 .segmented button {
   border: none;
+  border-right: 1px solid var(--border);
   background: transparent;
-  color: var(--text);
-  padding: 5px 14px;
-  border-radius: 6px;
-  font-size: 13px;
+  color: var(--tinta-suave);
+  padding: 6px 14px;
+  border-radius: 0;
+  font-family: var(--font-corpo);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
-  font-family: inherit;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.segmented button:last-child {
+  border-right: none;
+}
+.segmented button:hover {
+  background: var(--hover);
+  color: var(--tinta);
 }
 .segmented button.active {
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  background: var(--tinta);
+  color: var(--branco);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--ouro);
 }
 
 /* ─── Tabelas ───────────────────────────────────────────────────────────── */
+
+/* ONDA 4 · A TABELA LARGA ROLA DENTRO DO CARTÃO, NÃO A PÁGINA INTEIRA.
+   Medido: em /admin/planejamento o corpo da página rolava DE LADO já a 1.280px
+   (+153px) e a 1.024px (+375px), porque as 8 tabelas não tinham contêiner de
+   rolagem — e o que rolava junto era o cabeçalho, os filtros e o título, isto é,
+   a referência que o operador usa para saber que linha está lendo. A auditoria
+   ainda registrou 0 barra horizontal de página em 102 medições: não havia
+   transbordo visível, o console simplesmente arrastava o corpo inteiro.
+   O `:has` limita o contêiner de rolagem aos cartões que REALMENTE embrulham uma
+   tabela — importa porque um `overflow` em todo .card recortaria o popover do
+   multi-seleção. Hoje nenhum .card do produto tem tabela e popover juntos (o
+   MultiSelect vive na .toolbar, fora do cartão), e é essa a condição que a regra
+   preserva. Stock.tsx já fazia isso à mão, no inline; agora é do sistema. */
+.card:has(> table),
+.card:has(> .table-wrap) {
+  overflow-x: auto;
+}
 
 table {
   width: 100%;
@@ -566,16 +1410,35 @@ table {
 th,
 td {
   text-align: left;
-  padding: 11px 14px;
+  /* ONDA 5 · 14 → 12px de respiro lateral. Dez colunas × 28px de respiro são
+     280px de largura gastos só em ar — e é essa largura que falta às colunas de
+     TEXTO, que são as que quebram e definem a altura da linha. Medido na tabela
+     de recomendação de compra do Planejamento (10 colunas, 440 linhas): a
+     redução devolve 40px às colunas de conteúdo. O respiro VERTICAL não se
+     move: é ele que separa uma linha da outra, e mexer nele seria apertar a
+     leitura em vez de aproveitar espaço morto. */
+  padding: 11px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 13.5px;
 }
+/* Cabeçalho de coluna é ETIQUETA e FICA em mono caixa alta — é onde a mono
+   presta serviço: nomeia a coluna sem competir com o dado, e o operador lê o
+   cabeçalho uma vez e o corpo cem.
+
+   ONDA 5 · A ENTRELETRAS CAIU DE 0.18em PARA 0.08em. 0.18em é medida de
+   etiqueta de 1 a 2 palavras; nesta tabela os cabeçalhos são "VENDA MÉDIA/MÊS",
+   "TRANSFERÊNCIAS PENDENTES", "ÚLTIMA SINCRONIZAÇÃO" — 15 a 24 caracteres, onde
+   o espaçamento larga as letras a ponto de a palavra deixar de ter contorno. A
+   0.08em o cabeçalho continua carimbado e volta a ser lido de uma vez.
+   10 → 10,5px pelo mesmo motivo do .eyebrow: caixa alta espaçada precisa de
+   corpo. O ganho de altura é zero — a linha do th já é maior que o texto. */
 th {
+  font-family: var(--font-mono);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-weight: 600;
+  letter-spacing: 0.08em;
+  font-weight: 500;
 }
 tbody tr:last-child td {
   border-bottom: none;
@@ -583,40 +1446,126 @@ tbody tr:last-child td {
 tbody tr:hover {
   background: var(--hover);
 }
+/* ONDA 5 · QUANTIDADE SAIU DA MONO E CONTINUOU ALINHADA.
+   `td.num` é a maior massa de mono do produto: 140 ocorrências no JSX, 44
+   células só no Dashboard. E era a terceira voz numérica da mesma tela para o
+   mesmo significado — "1.486" saindo em Fraunces no indicador, em mono aqui e
+   em Inter dentro da frase do banner.
+
+   O único argumento funcional da mono numa coluna é o alinhamento dos dígitos,
+   e quem entrega isso é `tabular-nums`, não a família. Medido nesta build, a
+   13,5px: Inter sem tabular-nums põe "1111" em 21,97px e "0000" em 34,08px —
+   12,1px de desalinho, uma coluna que mente sobre a ordem de grandeza; COM
+   tabular-nums as duas medem 35,02px. Por isso `font-variant-numeric` fica
+   declarado ANTES da família nesta regra: ele é a parte obrigatória.
+
+   Custo de densidade: nenhum. "1.486" mede 38,66px em Inter tabular 13,5px
+   contra 39,02px em JetBrains Mono 13px — 0,9% mais estreito, não mais largo.
+
+   Quem PRECISA de mono na célula é o IDENTIFICADOR (SKU, código, ID, data/hora),
+   que se compara caractere a caractere: esse usa `.codigo`, logo abaixo. */
 td.num,
 th.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
+td.num {
+  font-family: var(--font-corpo);
+  font-size: 13.5px;
+  font-feature-settings: 'tnum' 1;
+}
+/* Célula de identificador: mono de verdade, caixa normal, entreletras zero. */
+td.codigo,
+td .codigo {
+  white-space: nowrap;
+}
 
 /* ─── Badges ────────────────────────────────────────────────────────────── */
 
+/* Chip: reto, com filete. Mono caixa alta 0.18em, como manda o manual.
+   TRÊS canais carregam o estado, e nenhum deles é a cor sozinha:
+     1. o rótulo escrito, que o JSX sempre passa ("Ruptura", "saudável"…);
+     2. a espessura do filete esquerdo — 3px crítico, 2px atenção, 1px saudável.
+        É a mesma linguagem do .banner, sobrevive ao cinza e, ao contrário do
+        fundo, IMPRIME (borda imprime, background não);
+     3. a luminância do tom, hoje bem separada entre os três.
+   O peso da fonte NÃO entra: a JetBrains Mono deste projeto é variável de 400 a
+   500 (ver src/fonts.css), então "negrito no crítico" viraria negrito sintético
+   e não daria diferença confiável. Por isso o filete faz esse trabalho. */
+/* ONDA 5 · O CHIP DE ESTADO SAIU DA MONO CAIXA ALTA.
+   Ele é o maior consumidor de mono POR CARACTERE do Dashboard: 19 selos de
+   cobertura, 357 dos 729 caracteres em mono da tela — quase metade. E o texto
+   que ele carrega não é etiqueta, é frase curta: "9,4 meses · alta",
+   "Aprovada/Pendente", "Reconciliada". Em mono caixa alta com 0.18em isso vira
+   "9,4 MESES · ALTA" — 16 caracteres sem contorno de palavra, repetidos 19
+   vezes numa coluna, que é exatamente o ruído que o cliente chamou de "mais
+   confusa as informações".
+
+   A própria Onda 4 já tinha registrado o sintoma sem tratar a causa: 744 selos
+   partidos em duas linhas no Planejamento, 19 no Estoque, 30 em Transferências,
+   e a solução foi `white-space: nowrap` — segurar a largura que a caixa alta
+   espaçada inflava. Agora a causa some: Inter 11,5px em caixa normal mede ~28%
+   menos que mono caixa alta 10,5px com 0.18em no mesmo texto.
+
+   O chip NÃO perde nenhum dos três canais que a auditoria de daltonismo exigiu:
+   o rótulo escrito continua (é o que muda de família), o filete esquerdo com
+   espessura crescente continua (1px saudável · 2px atenção · 3px crítico), o
+   ícone da grade 24 continua (vem do <Selo>). O peso agora TAMBÉM trabalha, e
+   trabalha de verdade: em Inter o 600 é uma face real (o @font-face declara
+   300..600), enquanto na JetBrains Mono deste projeto a faixa é 400..500 e
+   "negrito no crítico" teria virado negrito sintético — que era o motivo
+   declarado de o peso não ser usado como canal até aqui. */
 .badge {
   display: inline-block;
-  padding: 3px 9px;
-  border-radius: 999px;
+  padding: 3px 8px;
+  border-radius: 0;
+  border: 1px solid transparent;
+  font-family: var(--font-corpo);
   font-size: 11.5px;
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  /* ONDA 4 · REGRESSÃO CONSERTADA. O caixa-alta com 0.18em de entreletras que a
+     Onda 1 trouxe alargou o chip sem que ninguém declarasse que ele não quebra:
+     na largura de projeto (1440px) a auditoria contou 744 selos partidos em duas
+     linhas só no Planejamento, 19 "Em estoque" no Estoque e 30 "Criar
+     movimentação" em Transferências — pílulas de 105×42 onde caberia 105×25.
+     "EM / ESTOQUE" em duas linhas não é um selo, é ruído dentro da célula. */
+  white-space: nowrap;
 }
+/* saudável — filete fino: é o estado que não pede ação */
 .badge.green {
-  background: rgba(52, 199, 89, 0.16);
-  color: #248a3d;
+  background: rgba(72, 100, 65, 0.12);
+  border-color: rgba(72, 100, 65, 0.42);
+  color: var(--verde);
 }
+/* atenção — filete médio */
 .badge.amber {
-  background: rgba(255, 159, 10, 0.16);
-  color: #b25e00;
+  background: rgba(113, 67, 10, 0.13);
+  border-color: rgba(113, 67, 10, 0.45);
+  border-left-width: 2px;
+  color: var(--ambar);
 }
+/* crítico — filete grosso: o chip mais pesado da família, também no cinza */
 .badge.red {
-  background: rgba(255, 59, 48, 0.14);
-  color: #c9271f;
+  background: rgba(110, 28, 14, 0.11);
+  border-color: rgba(110, 28, 14, 0.42);
+  border-left-width: 3px;
+  color: var(--terra);
 }
+/* informativo — neutro preenchido, sem cor de estado */
 .badge.blue {
-  background: rgba(0, 122, 255, 0.14);
-  color: #0060df;
+  background: var(--branco2);
+  border-color: var(--border-strong);
+  color: var(--tinta);
 }
+/* inerte — só contorno, o mais apagado da família */
 .badge.gray {
-  background: rgba(120, 120, 128, 0.16);
-  color: #6e6e73;
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--muted);
 }
 
 /* ─── Estados / banners ─────────────────────────────────────────────────── */
@@ -625,36 +1574,79 @@ th.num {
   color: var(--muted);
   padding: 30px;
   text-align: center;
+  font-size: 13.5px;
 }
+/* Banner é bloco de aviso: reto, com filete dourado à esquerda quando exige
+   atenção. */
+/* ONDA 5 · o respiro caiu de 12/18 para 10/12. No Dashboard os avisos chegam
+   empilhados (integração + rupturas + ponto de reposição) e, com 18px entre
+   eles, os três consumiam 190px do primeiro quadro antes de o operador ver um
+   número sequer. Três avisos seguidos são um GRUPO — o filete esquerdo já os
+   separa; o ar em volta só empurra a tabela para fora da tela. */
 .banner {
-  border-radius: 10px;
-  padding: 12px 16px;
-  margin-bottom: 18px;
+  border-radius: 0;
+  padding: 10px 16px;
+  margin-bottom: 12px;
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
   display: flex;
   gap: 10px;
   align-items: center;
-  background: #fff;
+  background: var(--panel);
+  font-size: 13.5px;
 }
+/* O filete esquerdo do banner é INDICADOR DE ESTADO, então precisa de 3:1 e
+   precisa ser a cor do estado. Estava em --ouro puro, que dá 2.17:1 sobre o
+   branco-papel: uma régua de 3px que ninguém enxerga, dizendo "atenção" com a
+   cor da marca. Passa a usar --ambar, o mesmo tom do .badge.amber. */
 .banner.warn {
-  background: rgba(255, 159, 10, 0.1);
-  border-color: rgba(255, 159, 10, 0.35);
+  background: rgba(113, 67, 10, 0.09);
+  border-color: rgba(113, 67, 10, 0.3);
+  border-left-color: var(--ambar);
 }
 .banner.ok {
-  background: rgba(52, 199, 89, 0.1);
-  border-color: rgba(52, 199, 89, 0.35);
+  background: rgba(72, 100, 65, 0.09);
+  border-color: rgba(72, 100, 65, 0.3);
+  border-left-color: var(--verde);
 }
+
+/* Marcador de estado. A geometria do sistema não tem cantos redondos fora da
+   forma da marca — então os três estados se separam por FORMA dentro do mesmo
+   vocabulário reto, e não por tom:
+
+     crítico   quadrado CHEIO      ■   peso máximo
+     atenção   quadrado VAZADO     □   mesma silhueta, sem preenchimento
+     saudável  TRAÇO horizontal    ▬   nem sequer é um quadrado
+
+   Forma é o único canal que atravessa deuteranopia, protanopia, impressão em
+   preto-e-branco e monitor descalibrado sem perder nada. O texto ao lado
+   continua obrigatório — o ponto reforça, não substitui. */
 .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
   display: inline-block;
+  vertical-align: middle;
+  border: 1.5px solid transparent;
+  background: transparent;
 }
-.dot.green {
-  background: var(--green);
+/* Cheio. Também é o que um `.dot` sem classe de estado e com background inline
+   renderiza, que é como Planning.tsx desenha "Parado (sem giro)". */
+.dot.red {
+  background: var(--terra);
+  border-color: var(--terra);
 }
+/* Vazado: mesma silhueta do crítico, sem miolo. */
 .dot.amber {
-  background: var(--amber);
+  background: transparent;
+  border-color: var(--ambar);
+}
+/* Traço: a forma mais leve, para o estado que não pede ação. */
+.dot.green {
+  width: 11px;
+  height: 3px;
+  border: 0;
+  background: var(--verde);
 }
 
 /* ─── Modal ─────────────────────────────────────────────────────────────── */
@@ -662,8 +1654,7 @@ th.num {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(3px);
+  background: rgba(13, 11, 8, 0.42);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -674,7 +1665,9 @@ th.num {
   width: 460px;
   max-width: 92vw;
   box-shadow: var(--shadow-window);
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--linha);
+  border-top: 2px solid var(--ouro);
+  background: var(--panel);
 }
 .field {
   display: flex;
@@ -682,13 +1675,22 @@ th.num {
   gap: 6px;
   margin-bottom: 12px;
 }
+/* ONDA 5 · Rótulo de campo é INSTRUÇÃO, não etiqueta: "Quantidade a transferir",
+   "Loja de destino", "Motivo da recusa". Ele diz o que escrever, e o usuário o
+   lê no momento em que está prestes a digitar — é o pior lugar possível para
+   caixa alta espaçada a 9,5px. Inter 12px/600, caixa normal: o mesmo tratamento
+   de `.label`, porque é a mesma função. */
 .field label {
-  font-size: 12.5px;
+  font-family: var(--font-corpo);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 600;
 }
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
 }
 
@@ -699,22 +1701,30 @@ th.num {
   display: grid;
   place-items: center;
   padding: 24px;
+  position: relative;
+  /* Halo dourado do hero do manual — gradiente de luz, não wallpaper colorido. */
+  background: radial-gradient(ellipse at 50% 22%, rgba(201, 162, 39, 0.14), transparent 62%),
+    var(--branco);
 }
 .launcher-inner {
   width: 720px;
   max-width: 94vw;
   text-align: center;
+  position: relative;
+  z-index: 1;
 }
 .launcher h1 {
+  font-family: var(--font-titulo);
   font-size: 40px;
-  font-weight: 700;
-  letter-spacing: -1px;
+  font-weight: 400;
+  letter-spacing: 0;
   margin: 0 0 6px;
 }
 .launcher p {
   color: var(--muted);
   margin: 0 0 28px;
   font-size: 17px;
+  line-height: 1.65;
 }
 .tiles {
   display: grid;
@@ -726,55 +1736,56 @@ th.num {
     grid-template-columns: 1fr;
   }
 }
+/* Sem vidro, sem salto: papel com filete que fica dourado no hover. */
 .tile {
-  background: var(--window);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0;
   padding: 28px 24px;
   text-align: left;
-  box-shadow: var(--shadow-card);
-  transition: transform 0.15s, box-shadow 0.15s;
+  box-shadow: none;
+  transition: border-color 0.16s ease, background 0.16s ease;
   color: var(--text);
 }
 .tile:hover {
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-window);
+  border-color: var(--ouro);
+  background: rgba(201, 162, 39, 0.05);
 }
 .tile .glyph {
   font-size: 30px;
   margin-bottom: 12px;
+  line-height: 1;
 }
 .tile h3 {
+  font-family: var(--font-titulo);
   margin: 0 0 6px;
   font-size: 19px;
-  letter-spacing: -0.3px;
+  font-weight: 400;
+  letter-spacing: 0;
 }
 .tile p {
   font-size: 13.5px;
   margin: 0;
+  line-height: 1.6;
 }
 
-/* ─── StoreShell (loja, estilo Apple Store) ─────────────────────────────── */
+/* ─── StoreShell (loja) ─────────────────────────────────────────────────── */
 
 .store {
   min-height: 100vh;
-  background: #fbfbfd;
+  background: var(--branco);
 }
 .store-nav {
   position: sticky;
   top: 0;
   z-index: 20;
-  height: 48px;
+  height: 52px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 22px;
-  background: rgba(251, 251, 253, 0.8);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-bottom: 1px solid var(--border);
+  background: var(--branco);
+  border-bottom: 1px solid var(--linha);
 }
 .store-nav .brand {
   padding: 0;
@@ -786,12 +1797,18 @@ th.num {
   align-items: center;
 }
 .store-nav nav a {
-  color: #333;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--tinta-suave);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   font-weight: 500;
+  padding-bottom: 2px;
+  border-bottom: 1px solid transparent;
 }
 .store-nav nav a:hover {
-  color: #000;
+  color: var(--tinta);
+  border-bottom-color: var(--ouro);
 }
 .store-main {
   max-width: 1080px;
@@ -803,145 +1820,33 @@ th.num {
   padding: 40px 20px 34px;
 }
 .store-hero h1 {
+  font-family: var(--font-titulo);
   font-size: 44px;
-  font-weight: 700;
-  letter-spacing: -1px;
+  font-weight: 400;
+  letter-spacing: 0;
   margin: 0 0 8px;
 }
 .store-hero p {
   font-size: 19px;
   color: var(--muted);
   margin: 0;
+  line-height: 1.6;
 }
 
-/* Scrollbar discreta */
+/* Barra de rolagem discreta, em tinta quente. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.18);
-  border-radius: 8px;
-  border: 2px solid transparent;
+  background: rgba(42, 36, 22, 0.22);
+  border-radius: 0;
+  border: 3px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(42, 36, 22, 0.38);
   background-clip: content-box;
-}
-
-/* ─── Modo escuro (macOS dark) ───────────────────────────────────────────── */
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --accent: #0a84ff;
-    --accent-hover: #409cff;
-    --accent-press: #0060df;
-
-    --text: #f5f5f7;
-    --muted: #98989d;
-    --window: rgba(28, 28, 30, 0.82);
-    --window-solid: #1c1c1e;
-    --sidebar: rgba(40, 40, 42, 0.66);
-    --panel: #2c2c2e;
-    --panel-2: #3a3a3c;
-    --hover: rgba(255, 255, 255, 0.06);
-    --border: rgba(255, 255, 255, 0.1);
-    --border-strong: rgba(255, 255, 255, 0.2);
-    --ring: rgba(10, 132, 255, 0.45);
-
-    --shadow-window: 0 24px 60px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.28);
-  }
-
-  body {
-    background:
-      radial-gradient(1200px 820px at 18% 8%, #1b2740 0%, transparent 60%),
-      radial-gradient(1100px 760px at 88% 92%, #2a1930 0%, transparent 55%),
-      linear-gradient(160deg, #0e1016 0%, #141118 55%, #16120f 100%);
-  }
-
-  .nav-link {
-    color: #e5e5e7;
-  }
-  .titlebar {
-    background: rgba(28, 28, 30, 0.7);
-  }
-  input,
-  select,
-  .mselect-btn {
-    background: #1c1c1e;
-    color: var(--text);
-  }
-  .mselect-btn.active {
-    color: var(--accent);
-  }
-  input::placeholder {
-    color: #6a6a6e;
-  }
-  .btn.ghost {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text);
-  }
-  .btn.ghost:hover {
-    background: rgba(255, 255, 255, 0.14);
-  }
-  .segmented {
-    background: rgba(120, 120, 128, 0.24);
-  }
-  .segmented button.active {
-    background: #5a5a5e;
-    color: #fff;
-  }
-  .tile,
-  .modal {
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-  .banner {
-    background: var(--panel);
-  }
-  .store {
-    background: #000;
-  }
-  .store-nav {
-    background: rgba(0, 0, 0, 0.72);
-  }
-  .store-nav nav a {
-    color: #d1d1d6;
-  }
-  .store-nav nav a:hover {
-    color: #fff;
-  }
-
-  .badge.green {
-    background: rgba(52, 199, 89, 0.2);
-    color: #63e6a0;
-  }
-  .badge.amber {
-    background: rgba(255, 159, 10, 0.2);
-    color: #ffce70;
-  }
-  .badge.red {
-    background: rgba(255, 69, 58, 0.2);
-    color: #ff8078;
-  }
-  .badge.blue {
-    background: rgba(10, 132, 255, 0.2);
-    color: #6db2ff;
-  }
-  .badge.gray {
-    background: rgba(120, 120, 128, 0.28);
-    color: #b0b0b6;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.18);
-    background-clip: content-box;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.3);
-    background-clip: content-box;
-  }
 }
 
 /* ─── Dock (webdesk) ─────────────────────────────────────────────────────── */
@@ -949,61 +1854,118 @@ th.num {
 .window-main {
   position: relative;
 }
+/* Deixou de ser a doca translúcida do macOS: é uma régua de papel com filete
+   dourado, colada ao rodapé da janela. */
 .dock {
   position: absolute;
   left: 50%;
   bottom: 14px;
   transform: translateX(-50%);
   display: flex;
-  gap: 8px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.5);
-  backdrop-filter: saturate(180%) blur(24px);
-  -webkit-backdrop-filter: saturate(180%) blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  border-radius: 20px;
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.22);
+  gap: 6px;
+  padding: 7px 10px;
+  background: var(--branco);
+  border: 1px solid var(--linha);
+  border-radius: 0;
+  box-shadow: 0 10px 28px rgba(13, 11, 8, 0.12);
   z-index: 30;
 }
 .dock button {
-  width: 46px;
-  height: 46px;
-  border-radius: 13px;
-  border: none;
-  background: rgba(255, 255, 255, 0.65);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
-  font-size: 21px;
+  width: 42px;
+  height: 42px;
+  border-radius: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+  /* O `font-size: 19px` que morava aqui era da era dos emojis no dock. O botão
+     agora recebe <Icon>, que dimensiona por width/height do SVG, então a regra
+     não tinha efeito nenhum sobre o desenho. */
   line-height: 1;
   cursor: pointer;
   display: grid;
   place-items: center;
-  transition: transform 0.14s ease;
+  transition: background 0.14s ease, border-color 0.14s ease;
   position: relative;
 }
 .dock button:hover {
-  transform: translateY(-8px) scale(1.14);
+  background: var(--hover);
+  border-color: var(--linha);
+}
+/* Marcador do item ativo: filete dourado, não bolinha. */
+.dock button.active {
+  background: var(--branco2);
 }
 .dock button.active::after {
   content: '';
   position: absolute;
-  bottom: -5px;
+  bottom: -3px;
   left: 50%;
   transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
+  width: 14px;
+  height: 2px;
+  border-radius: 0;
+  /* ONDA 4 · era --ouro puro: 1.77:1 contra o papel e 1.22:1 contra o --branco2
+     do próprio botão ativo. Este filete de 14×2px é o ÚNICO canal que diz "você
+     está nesta tela" no dock (o fundo do botão ativo, --branco2 sobre --branco,
+     mede 1.07:1 e não conta como canal). Um indicador de estado vale 3:1 pela
+     1.4.11. --accent mede 4.94:1 sobre o --branco2 no claro e 11.5:1 sobre o
+     grafite no escuro, e é a cor de "isto se opera" no produto inteiro. */
   background: var(--accent);
 }
-@media (prefers-color-scheme: dark) {
+/* Recolhido na rolagem para baixo (a classe é escrita pelo AdminShell).
+   O dock ENCOLHE, não some: continua uma faixa de papel de ~450px de largura,
+   com o filete dourado e a célula da tela atual marcada, que reabre no hover,
+   no toque e no foco de teclado.
+
+   Por que só a ALTURA cai, e a largura e as colunas ficam paradas: se a faixa
+   também estreitasse, os nove botões trocariam de posição horizontal ao
+   reabrir, e o dedo (ou o cursor) que foi até um ícone acabaria clicando no
+   vizinho. Encolhendo só na vertical, cada botão cresce debaixo do ponteiro
+   sem sair da coluna dele. */
+/* O filete de repouso do dock é o --linha dourado, que compõe para 1.27:1 sobre
+   o branco-papel. Aberto isso basta, porque quem desenha o dock são nove ícones
+   de 42px e a sombra. Recolhido, o que sobra é uma tira de papel sobre papel: no
+   tema claro ela sumiria, e uma faixa que o olho não acha não é "minimizada", é
+   inalcançável. Por isso a borda de cima vira 2px em --accent — 6.04:1 no claro
+   e 13.52:1 no escuro, acima dos 3:1 que a WCAG 1.4.11 pede de um controle. E é
+   --accent de propósito: é a cor de "isto se opera" no produto inteiro. A sombra
+   fica, é ela que descola a faixa da tabela que corre por baixo. */
+.dock.recolhido {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-top: 2px solid var(--accent);
+}
+.dock.recolhido button {
+  height: 12px;
+  /* O primeiro toque na faixa recolhida só REABRE o dock. Sem isto o dedo que
+     encosta para expandir cai direto num botão de 12px de altura e navega para
+     outra tela sem querer. Não tira nada do teclado: pointer-events não afeta
+     foco, e os nove botões continuam na ordem de tabulação — é o foco que
+     reabre o dock, pelo onFocusCapture da casca. */
+  pointer-events: none;
+}
+.dock.recolhido button svg {
+  display: none;
+}
+/* Sem os ícones, o filete dourado é a única coisa que diz em que tela o
+   usuário está — então ele ocupa a coluna inteira em vez de 14px. */
+.dock.recolhido button.active::after {
+  width: 24px;
+}
+
+/* A animação da faixa é declarada em no-preference, e não desligada depois em
+   reduce: assim quem pediu menos movimento recebe a troca DIRETA, sem depender
+   de um override chegar na ordem certa da cascata. A transição de cor do hover
+   continua fora daqui, porque cor não é movimento. */
+@media (prefers-reduced-motion: no-preference) {
   .dock {
-    background: rgba(50, 50, 52, 0.55);
-    border-color: rgba(255, 255, 255, 0.12);
+    transition: padding 0.18s ease;
   }
   .dock button {
-    background: rgba(90, 90, 94, 0.6);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+    transition: background 0.14s ease, border-color 0.14s ease, height 0.18s ease;
   }
 }
+
 @media (max-width: 720px) {
   .dock {
     display: none;
@@ -1016,47 +1978,119 @@ th.num {
   margin-top: 4px;
 }
 .action-card {
-  text-align: left;
+  /* Feedbacks 6.0, item 04: texto centralizado. São quatro contadores lado a
+     lado, e alinhados à esquerda cada bloco começava numa altura diferente por
+     causa do comprimento do rótulo — o olho lia quatro cartões desalinhados em
+     vez de uma régua de indicadores. O filete colorido continua à esquerda:
+     ele é o canal de estado, não o eixo do texto. */
+  text-align: center;
+  align-items: center;
   cursor: pointer;
   font: inherit;
   color: inherit;
-  border-left: 4px solid var(--border-strong, var(--border));
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  border-left: 3px solid var(--border-strong);
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 .action-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.12);
+  background: var(--hover);
 }
 .action-card:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ouro-texto);
   outline-offset: 2px;
 }
 .action-card .action-count {
+  font-family: var(--font-titulo);
   font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-weight: 400;
+  letter-spacing: 0;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 .action-card .action-label {
   font-weight: 600;
   font-size: 13.5px;
   margin-top: 2px;
 }
-.action-card .hint {
+/* .hint é FRASE, não carimbo — e é por isso que ela mudou de família.
+   O manual proíbe JetBrains Mono em texto corrido, mas .hint estava em mono
+   caixa alta com 0.18em de entreletras enquanto as telas escrevem coisas como
+   "Sem marca" = grade do CDS sem fornecedor (o backfill preenche) (63
+   caracteres, Reports.tsx) ou "Faturamento, ticket médio e formas de pagamento"
+   (47, Dashboard.tsx). Caixa alta espaçada nesse comprimento não se lê: some o
+   contorno da palavra, que é o que o olho usa para reconhecer forma. Frase volta
+   para a Inter, em corpo que se lê.
+   O carimbo continua existindo — virou .carimbo, abaixo — para rótulo curto.
+   O de-para de qual ocorrência vira qual está no relatório da Onda 2. */
+/* A .hint carrega a explicação do indicador e a segunda linha da célula de
+   tabela ("ESPORTIVOS LTDA · entrega em 14d"). Fica em 12px: a Onda 5 tentou
+   12,5 e mediu o preço — na tabela de recomendação de compra do Planejamento,
+   que tem 440 linhas, meio pixel de corpo empurrava a segunda linha da célula
+   para uma terceira. Meio pixel de conforto não paga 440 linhas mais altas. */
+.hint {
+  font-family: var(--font-corpo);
   color: var(--muted);
-  font-size: 11.5px;
-  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.5;
+  margin-top: 5px;
 }
-.action-card.red { border-left-color: var(--red); }
-.action-card.red .action-count { color: var(--red); }
-.action-card.green { border-left-color: var(--green); }
-.action-card.green .action-count { color: var(--green); }
-.action-card.blue { border-left-color: var(--accent); }
-.action-card.blue .action-count { color: var(--accent); }
-.action-card.amber { border-left-color: var(--amber); }
-.action-card.amber .action-count { color: var(--amber); }
-/* ─── Selo de dados fictícios (demonstração) ─────────────────────────────────── */
+/* `.carimbo` mudou de lugar: mora agora junto de `.label`, `.unidade` e
+   `.codigo`, no bloco dos três papéis da monoespaçada, no topo do arquivo. */
+/* Os filetes de 3px destes cartões INDICAM o estado, então valem 3:1 e valem a
+   cor do estado. Estavam os dois em --ouro puro (2.17:1 sobre o branco-papel):
+   invisíveis, e ainda por cima iguais entre si em dois estados diferentes.
+   ───────────────────────────────────────────────────────────────────────────
+   ONDA 4 · A PIOR REPROVAÇÃO DO PRODUTO INTEIRO MORAVA AQUI, e a causa é de uma
+   linha: as quatro variantes apontavam para os tokens da CAMADA 1 (--terra,
+   --verde, --ambar, --ouro-texto), que são valores de tema CLARO e não trocam
+   sozinhos. No escuro o bloco lá embaixo redeclarava a cor do número só em
+   .blue e .amber, e não tocava NENHUM dos quatro border-left-color. Resultado
+   medido em /admin/planejamento no escuro: o "35" de RISCO DE RUPTURA saía em
+   #6E1C0E sobre #17140F — 1.61:1, um número de 28px que simplesmente não está
+   lá; o de "green" saía a 2.78:1; e os quatro filetes ficavam entre 1.61 e
+   2.78:1. No claro os mesmos elementos mediam 5.92 a 10.24:1, o que explica
+   por que ninguém viu: só reprovava no tema que as ondas 1-3 nunca abriram.
+   A correção é usar os ALIASES da camada 2 (--red/--green/--amber/--accent),
+   que é o contrato que existe justamente para trocar de valor no escuro. Com
+   isso as 8 declarações passam a medir, no pior caso, 5.9:1 no claro e 7.0:1
+   no escuro — e o bloco de override do tema escuro deixou de ser necessário. */
+.action-card.red {
+  border-left-color: var(--red);
+}
+.action-card.red .action-count {
+  color: var(--red);
+}
+.action-card.green {
+  border-left-color: var(--green);
+}
+.action-card.green .action-count {
+  color: var(--green);
+}
+.action-card.blue {
+  border-left-color: var(--accent);
+}
+.action-card.blue .action-count {
+  color: var(--accent);
+}
+.action-card.amber {
+  border-left-color: var(--amber);
+}
+.action-card.amber .action-count {
+  color: var(--amber);
+}
 
+/* ─── Selo de dados fictícios (demonstração) ─────────────────────────────── */
+
+/* O selo é renderizado FORA da árvore da casca (App.tsx o põe como irmão de
+   <App/>), então nenhum seletor descendente de [data-tema='escuro'] alcançava
+   ele — no console preto o selo continuava um bloco branco, o objeto mais
+   brilhante da tela. A correção é o próprio selo carregar `data-tema`
+   (DemoBadge.tsx decide quando), e para isso ele precisa pintar-se com os
+   ALIASES semânticos, que são o que o bloco escuro redeclara: --window-solid,
+   --text e --accent viram preto/branco/ouro-lux dentro do escopo escuro
+   sozinhos, sem uma segunda cópia da paleta escrita aqui embaixo. */
 .demo-seal {
   position: fixed;
   left: 14px;
@@ -1064,82 +2098,1026 @@ th.num {
   z-index: 60;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 12px;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
   font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border: 1px solid var(--border-strong);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  background: var(--window-solid);
+  border: 1px solid var(--linha);
+  /* Sem sombra difusa: no manual quem separa superfície é o filete de 1px, que
+     esta regra já tem em --linha. (Era um override inline dentro de
+     DemoBadge.tsx, esperando alguém encostar neste arquivo.) */
   pointer-events: auto;
   cursor: help;
   user-select: none;
 }
 .demo-seal strong {
-  font-weight: 700;
-}
-.demo-seal-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--amber);
-  box-shadow: 0 0 0 3px rgba(255, 159, 10, 0.22);
-  animation: demo-seal-pulse 2.4s ease-in-out infinite;
-}
-@keyframes demo-seal-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
-}
-@media (prefers-color-scheme: dark) {
-  .demo-seal {
-    background: rgba(40, 40, 42, 0.72);
-  }
+  font-weight: 500;
+  color: var(--accent);
 }
 @media (max-width: 720px) {
   .demo-seal {
     left: 50%;
     transform: translateX(-50%);
     bottom: 10px;
-    font-size: 11px;
+    font-size: 9px;
     padding: 5px 10px;
   }
 }
+
+/* ═══ Modo escuro ═══════════════════════════════════════════════════════════
+   A troca é DECISÃO DO USUÁRIO (ou da tela): nada aqui reage a
+   prefers-color-scheme. O CLARO é o ponto de partida de toda abertura — o tema
+   não é gravado no navegador (ver src/lib/tema.ts), então este bloco só entra
+   em vigor depois de um clique deliberado no alternador.
+   Ligue com data-tema="escuro" no <html> para o app inteiro, ou no contêiner de
+   um painel de alta densidade (a tela de BI) para escurecer só aquele bloco —
+   os tokens são redeclarados no seletor, então funcionam nos dois escopos.
+   Paleta: preto/carvão/grafite do manual, ouro-lux no lugar do ouro-dark
+   (sobre preto quem precisa de contraste é o tom claro).
+   ═════════════════════════════════════════════════════════════════════════ */
+
+:root[data-tema='escuro'],
+[data-tema='escuro'] {
+  --accent: var(--ouro-lux);
+  --accent-hover: var(--ouro);
+  --accent-press: var(--ouro-dark);
+  --green: var(--verde-claro);
+  --amber: var(--ambar-claro);
+  --red: var(--terra-claro);
+  --purple: var(--branco2);
+  --teal: var(--ouro-lux);
+
+  --text: var(--branco);
+  --ink: var(--branco);
+  --muted: rgba(228, 220, 201, 0.72);
+  --window: var(--preto);
+  --window-solid: var(--preto);
+  --sidebar: var(--carvao);
+  --panel: var(--carvao);
+  --panel-2: var(--grafite);
+  --hover: rgba(201, 162, 39, 0.12);
+  /* Carvão contra preto dá 1.07:1 e grafite contra carvão 1.10:1 — no escuro as
+     três superfícies do manual são praticamente a mesma. Quem tinha que
+     separá-las era o filete, e --linha2 dava 1.24:1. Com --linha2-forte vai a
+     1.84/1.92/1.96 sobre preto/carvão/grafite: ~50% mais separação, e a tela de
+     BI, que é a mais densa do produto, volta a ter blocos legíveis. Continua
+     abaixo de 3:1, o que é aceitável enquanto o filete for ESTRUTURA; borda que
+     indique ESTADO usa --ouro (7.59:1 sobre carvão). */
+  --border: var(--linha2-forte);
+  /* --border-strong sobe junto: se ele ficasse igual a --border, o botão
+     fantasma e o chip inerte teriam exatamente o mesmo filete do separador de
+     tabela, e a hierarquia de dois níveis que o tema claro tem (.13 / .24)
+     desapareceria justo no tema mais difícil de ler. */
+  --border-strong: var(--linha-campo-escura);
+  --border-campo: var(--linha-campo-escura);
+  --ring: rgba(201, 162, 39, 0.42);
+
+  --shadow-window: 0 20px 50px rgba(0, 0, 0, 0.55);
+  --shadow-card: none;
+
+  color-scheme: dark;
+}
+
+:root[data-tema='escuro'] body,
+[data-tema='escuro'] {
+  background: var(--preto);
+  color: var(--text);
+}
+
+[data-tema='escuro'] .macos-desktop,
+[data-tema='escuro'] .store,
+[data-tema='escuro'] .launcher {
+  background: var(--preto);
+}
+[data-tema='escuro'] .launcher {
+  background: radial-gradient(ellipse at 50% 22%, rgba(201, 162, 39, 0.16), transparent 62%),
+    var(--preto);
+}
+[data-tema='escuro'] .macos-window,
+[data-tema='escuro'] .window-main,
+[data-tema='escuro'] .titlebar,
+[data-tema='escuro'] .store-nav,
+[data-tema='escuro'] .dock {
+  background: var(--preto);
+}
+[data-tema='escuro'] .sidebar,
+[data-tema='escuro'] .card,
+[data-tema='escuro'] .banner,
+[data-tema='escuro'] .modal,
+[data-tema='escuro'] .mselect-pop,
+[data-tema='escuro'] .tile {
+  background: var(--carvao);
+}
+[data-tema='escuro'] .nav-link {
+  color: var(--branco2);
+}
+[data-tema='escuro'] .nav-link.active {
+  background: var(--grafite);
+  color: var(--branco);
+}
+[data-tema='escuro'] .titlebar .title,
+[data-tema='escuro'] .brand {
+  color: var(--branco);
+}
+[data-tema='escuro'] .brand span {
+  color: var(--ouro-lux);
+}
+[data-tema='escuro'] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+[data-tema='escuro'] select,
+[data-tema='escuro'] textarea,
+[data-tema='escuro'] .mselect-btn {
+  background: var(--grafite);
+  color: var(--text);
+  border-color: var(--border-campo);
+}
+/* Mesmo motivo do claro: a 45% compunha para #6E695F e dava 3.60:1. */
+[data-tema='escuro'] input::placeholder,
+[data-tema='escuro'] textarea::placeholder {
+  color: rgba(228, 220, 201, 0.62);
+}
+[data-tema='escuro'] input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
+[data-tema='escuro'] select:focus,
+[data-tema='escuro'] textarea:focus,
+[data-tema='escuro'] .mselect-btn:focus-visible {
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .mselect-btn.active {
+  color: var(--ouro-lux);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .mselect-opt,
+[data-tema='escuro'] .mselect-actions button {
+  color: var(--text);
+}
+[data-tema='escuro'] .mselect-actions button {
+  color: var(--ouro-lux);
+}
+[data-tema='escuro'] .mselect-check {
+  color: var(--preto);
+}
+[data-tema='escuro'] .mselect-opt.checked .mselect-check {
+  background: var(--ouro);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .btn {
+  color: var(--ouro-lux);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .btn:hover,
+[data-tema='escuro'] .btn.solid {
+  background: var(--ouro);
+  color: var(--preto);
+}
+[data-tema='escuro'] .btn.ghost {
+  color: var(--branco2);
+  border-color: var(--border-strong);
+  background: transparent;
+}
+[data-tema='escuro'] .btn.ghost:hover {
+  background: rgba(246, 242, 233, 0.08);
+  border-color: var(--ouro);
+  color: var(--branco);
+}
+[data-tema='escuro'] .btn.danger {
+  color: var(--terra-claro);
+  border-color: var(--terra-claro);
+}
+[data-tema='escuro'] .btn.danger:hover {
+  background: var(--terra-claro);
+  color: var(--preto);
+}
+[data-tema='escuro'] .segmented button {
+  color: var(--branco2);
+}
+[data-tema='escuro'] .segmented button.active {
+  background: var(--branco2);
+  color: var(--preto);
+  box-shadow: inset 0 -2px 0 var(--ouro-dark);
+}
+[data-tema='escuro'] .traffic .r {
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .eyebrow {
+  color: var(--ouro-lux);
+}
+/* Aqui moravam duas regras `[data-tema='escuro'] .demo-seal`. Elas nunca
+   pintaram nada: o selo não é descendente da casca, é irmão dela. Agora o selo
+   carrega o próprio `data-tema` e se pinta pelos aliases — ver a regra
+   .demo-seal, acima. */
+[data-tema='escuro'] .mesh {
+  background-image: radial-gradient(circle, rgba(201, 162, 39, 0.2) 1px, transparent 1px);
+}
+[data-tema='escuro'] .stat .value,
+[data-tema='escuro'] .kpi {
+  color: var(--branco);
+}
+/* ONDA 5 · OS TRÊS NÍVEIS NO TEMA ESCURO.
+   `[data-tema='escuro'] .card` vale (0,2,0) e vem DEPOIS de `.card.destaque`,
+   que também vale (0,2,0) — sem estas duas linhas o nível 1 e o nível 2 caíam
+   no mesmo carvão e a hierarquia sumia justamente no tema que a Onda 4 mostrou
+   ser o menos verificado do produto. O nível 1 sobe para grafite (a terceira
+   superfície do manual) e o nível 3 volta a não ter superfície nenhuma.
+   O filete de topo vira --ouro-lux: --ouro sobre carvão mede 7,59:1, mas quem
+   fica ao lado dele aqui é o grafite do próprio cartão, e o tom claro é o que
+   separa no escuro — é a mesma inversão que --accent já faz. */
+[data-tema='escuro'] .card.destaque {
+  background: var(--grafite);
+  border-top-color: var(--ouro-lux);
+}
+[data-tema='escuro'] .card.destaque .label {
+  color: var(--branco);
+}
+[data-tema='escuro'] .card.contexto {
+  background: transparent;
+}
+/* ONDA 4 · O PREENCHIMENTO DO CHIP FICOU OPACO NO ESCURO, e este é o motivo:
+   com fundo translúcido, o que está EMBAIXO do chip entra na conta do contraste.
+   O selo verde media 4.87:1 sobre a linha em repouso e 3.96:1 sobre a linha em
+   destaque (o hover dourado a 12% clareia o composto) — ou seja, texto de
+   10.5px reprovava no 1.4.3 dependendo de onde o mouse estivesse, o que é pior
+   que reprovar sempre: some e volta. Os três valores abaixo são exatamente o
+   composto que a translucidez produzia sobre o carvão, agora fixado, de modo que
+   o desenho não muda e a medida deixa de depender da linha:
+     verde  #272a1c → 4.93:1   âmbar #3a2e13 → 7.13:1   crítico #362c25 → 8.33:1
+   A borda continua translúcida de propósito: ela é filete, não fundo de texto. */
+[data-tema='escuro'] .badge.green {
+  background: #272a1c;
+  border-color: rgba(125, 159, 98, 0.42);
+  color: var(--verde-claro);
+}
+/* Era fundo e borda em --ouro e texto em --ouro-lux: o chip de "atenção" estava
+   vestido inteiro com a cor da marca. Agora usa o próprio âmbar do estado. */
+[data-tema='escuro'] .badge.amber {
+  background: #3a2e13;
+  border-color: rgba(240, 180, 41, 0.45);
+  color: var(--ambar-claro);
+}
+[data-tema='escuro'] .badge.red {
+  background: #362c25;
+  border-color: rgba(246, 190, 169, 0.42);
+  color: var(--terra-claro);
+}
+[data-tema='escuro'] .badge.blue {
+  background: var(--grafite);
+  border-color: var(--border-strong);
+  color: var(--branco);
+}
+[data-tema='escuro'] .badge.gray {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--muted);
+}
+[data-tema='escuro'] .banner.warn {
+  background: rgba(240, 180, 41, 0.12);
+  border-color: rgba(240, 180, 41, 0.34);
+  border-left-color: var(--ambar-claro);
+}
+[data-tema='escuro'] .banner.ok {
+  background: rgba(125, 159, 98, 0.12);
+  border-color: rgba(125, 159, 98, 0.32);
+  border-left-color: var(--verde-claro);
+}
+/* No escuro só muda o TOM de cada marcador — a forma de cada estado é a mesma
+   dos dois temas, senão o usuário teria que reaprender o vocabulário ao trocar. */
+[data-tema='escuro'] .dot.green {
+  background: var(--verde-claro);
+}
+[data-tema='escuro'] .dot.amber {
+  border-color: var(--ambar-claro);
+}
+[data-tema='escuro'] .dot.red {
+  background: var(--terra-claro);
+  border-color: var(--terra-claro);
+}
+[data-tema='escuro'] .tile:hover {
+  background: var(--grafite);
+  border-color: var(--ouro);
+}
+[data-tema='escuro'] .store-nav nav a {
+  color: var(--branco2);
+}
+[data-tema='escuro'] .store-nav nav a:hover {
+  color: var(--branco);
+}
+[data-tema='escuro'] .dock button.active {
+  background: var(--grafite);
+}
+/* Os dois overrides de .action-card que moravam aqui foram removidos na Onda 4:
+   eram um remendo parcial (dois dos quatro estados, e só a cor do NÚMERO, nunca
+   a do filete) de um problema que a camada de aliases resolve inteiro. Ver a
+   nota longa em .action-card.red, acima. */
+[data-tema='escuro'] ::-webkit-scrollbar-thumb {
+  background: rgba(246, 242, 233, 0.2);
+  background-clip: content-box;
+}
+[data-tema='escuro'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(246, 242, 233, 0.34);
+  background-clip: content-box;
+}
+[data-tema='escuro'] :focus-visible {
+  outline-color: var(--ouro);
+}
+/* Par escuro do conserto de especificidade do foco de campo (ver a nota junto
+   do :focus-visible global). Sem esta linha o seletor de campo, que é mais
+   específico, imporia o ouro-texto escuro sobre o preto — 1.8:1. */
+[data-tema='escuro'] input:not([type='checkbox']):not([type='radio']):not([type='range']):focus-visible,
+[data-tema='escuro'] select:focus-visible,
+[data-tema='escuro'] textarea:focus-visible,
+[data-tema='escuro'] .mselect-btn:focus-visible {
+  outline-color: var(--ouro);
+}
+
+/* ─── Impressão ─────────────────────────────────────────────────────────── */
+
+/* ═══ IMPRESSÃO ════════════════════════════════════════════════════════════
+   Reescrito na Onda 4 depois da primeira auditoria de papel que este produto
+   teve. O bloco anterior foi escrito às cegas e tinha três premissas falsas:
+
+   · `.topbar` casava com ZERO elementos em 9 de 9 telas — a barra real chama-se
+     `.titlebar`, e ela imprimia em todas as folhas, levando ao papel o estado de
+     conexão do app ("ALERTAS · RECORTE · DADOS AO VIVO");
+   · `.shell` e `.content` também não existem no produto (são `.macos-window`,
+     `.window-main` e `.main`), então nada era realmente desmontado para o papel:
+     a janela de altura fixa com `overflow:hidden` seguia inteira;
+   · `body { background: #fff }` não alcançava `.macos-window` nem `.window-main`,
+     que declaram o próprio creme #F6F2E9 — com "imprimir fundos" ligado saíam
+     434 folhas A4 inundadas de cor (~22,8 m² de tinta), medidos.
+
+   O comentário antigo creditava a decisão do `print-color-adjust` a um
+   `@media print` em Reports.tsx que nunca existiu (grep de "print" no arquivo =
+   0 ocorrências). E o que ele preservava — o PREENCHIMENTO do chip — foi medido
+   em escala de cinza e não carrega informação nenhuma: âmbar 220,2 · vermelho
+   220,4 · azul 220,3 · verde 224,1, uma amplitude de 0,2 nível em 255. Por isso
+   a estratégia mudou: no papel o estado é carregado por RÓTULO + ÍCONE + estilo
+   do filete esquerdo, canais que sobrevivem à impressora P&B do escritório.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+@page {
+  size: A4;
+  /* Existia zero `@page` no produto. 10mm é a margem contra a qual a auditoria
+     mediu a largura imprimível real (718px) — deixar implícito significava que
+     cada máquina da rede imprimia com uma largura diferente. */
+  margin: 10mm;
+}
+
+/* Bloco que só existe no papel. Fora do @media print ele não ocupa espaço
+   nenhum — é a contraparte de .no-print. */
+.print-only {
+  display: none;
+}
+
 @media print {
-  /* Impressão / "salvar como PDF": sai tudo que é navegação e controle;
-     fica só o conteúdo, em preto no branco. */
+  .print-only {
+    display: block !important;
+  }
+  .cabecalho-papel {
+    font-family: var(--font-titulo);
+    font-size: 9pt;
+    color: #000;
+    border-bottom: 1px solid #000;
+    padding-bottom: 4px;
+    margin-bottom: 10px;
+  }
+
+  /* 1 · SAI TUDO QUE É NAVEGAÇÃO OU CONTROLE ------------------------------- */
   .demo-seal,
   .sidebar,
   .dock,
+  .titlebar,
   .topbar,
   .no-print,
   .segmented,
+  .skip-link,
   button {
     display: none !important;
   }
-  .shell,
-  .content {
+
+  /* A.2 · A ABA ESCOLHIDA VIRA O SUBTÍTULO DO DOCUMENTO -------------------- */
+  /* Os cinco relatórios imprimiam texto de capa IDÊNTICO: o nome do relatório
+     mora no `.segmented`, e o bloco acima esconde `.segmented` e `button`. Quem
+     leva cinco relatórios para uma reunião ficava com cinco maços cuja única
+     diferença estava no cabeçalho da tabela, no meio da primeira folha. */
+  .segmented:has(button.active) {
+    display: block !important;
+    border: 0 !important;
+    background: none !important;
+  }
+  .segmented button.active {
+    display: block !important;
+    border: 0 !important;
+    background: none !important;
+    padding: 0 !important;
+    color: #000 !important;
+    font-family: var(--font-titulo);
+    font-size: 13pt;
+    text-align: left;
+  }
+  /* A .toolbar CONTINUA imprimindo, de propósito: com os botões escondidos e os
+     campos virando texto (bloco 5), ela vira a linha de proveniência do
+     relatório — diz qual busca e quais filtros produziram aquela tabela. Sem ela
+     a folha é uma tabela sem contexto. */
+
+  /* 2 · A JANELA DEIXA DE SER JANELA -------------------------------------- */
+  /* Em tela a casca é um grid de altura travada com rolagem interna; no papel
+     isso é exatamente o que impede o conteúdo de fluir para a folha seguinte. */
+  .macos-desktop,
+  .macos-window,
+  .window-main,
+  .main,
+  .store,
+  .store-main {
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
     margin: 0 !important;
     padding: 0 !important;
     width: 100% !important;
     max-width: none !important;
-  }
-  .card {
-    break-inside: avoid;
-    border: 1px solid #ccc !important;
+    border: none !important;
     box-shadow: none !important;
+    background: #fff !important;
   }
   body {
     background: #fff !important;
     color: #000 !important;
   }
-  .table {
-    font-size: 10pt;
+  .card {
+    break-inside: auto; /* um cartão-tabela de 171 folhas não "cabe" em página */
+    border: 1px solid #999 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    padding: 8px !important;
+    margin-bottom: 8px !important;
+  }
+  /* Cartão pequeno (indicador, banner) continua inteiro numa folha só. */
+  .stat,
+  .banner,
+  .action-card {
+    break-inside: avoid;
+    background: #fff !important;
+  }
+  /* ONDA 5 · OS TRÊS NÍVEIS NO PAPEL P&B.
+     No papel a superfície morre (a regra acima chapa todo cartão em #fff, de
+     propósito — 434 folhas inundadas de creme foi o que a auditoria de
+     impressão mediu). Sobram os canais geométricos, e é para isso que eles
+     existem: o nível 1 fica com um filete de topo de 3px PRETO, o nível 2 com a
+     moldura cinza de sempre e o nível 3 sem moldura nenhuma. Somados ao corpo
+     do número (40 / 27 / 20px), os três continuam distintos numa impressora a
+     laser sem toner colorido. */
+  .card.destaque {
+    border: 1px solid #999 !important;
+    border-top: 3px solid #000 !important;
+    padding: 10px !important;
+  }
+  .card.contexto {
+    border: 0 !important;
+    border-top: 1px solid #999 !important;
+    padding: 6px 0 2px !important;
+  }
+  .rule-section {
+    height: 1px;
+  }
+
+  /* 3 · A LINHA NÃO RACHA NA VIRADA DE PÁGINA ------------------------------ */
+  /* Medido em 12 de 12 tabelas: `tr` estava em break-inside:auto, e na folha
+     14→15 do Planejamento a linha RB4446L partia ao meio — o rabo
+     "ESPORTIVOS LTDA · entrega em 14d" caía sozinho na folha seguinte, debaixo
+     do cabeçalho repetido, sem SKU e sem números. Isso não é layout feio: é uma
+     linha de dado que passa a mentir sobre a que produto pertence. */
+  tr,
+  thead {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   thead {
     display: table-header-group; /* repete o cabeçalho a cada página */
+  }
+  h1,
+  h2,
+  h3,
+  .page-title,
+  .section-title {
+    break-after: avoid;
+  }
+  p,
+  li {
+    orphans: 3;
+    widows: 3;
+  }
+
+  /* 4 · A TABELA LARGA CABE NA FOLHA -------------------------------------- */
+  /* A tabela de recomendação de compra media 1.126px contra 718px de área
+     imprimível: Confiança, Comprar, Pedir até e Capital caíam INTEIRAS fora do
+     papel, e o relatório de compras saía sem a quantidade a comprar e sem o
+     capital. Nada de escala global (que borraria o texto): a folga vem de onde
+     ela realmente está, que é a densidade de tela — 28px de respiro lateral por
+     célula × 10 colunas são 280px só de padding. */
+  table {
+    table-layout: auto;
+    width: 100% !important;
+    font-size: 8pt;
+  }
+  th,
+  td {
+    padding: 2px 4px !important;
+    font-size: 8pt !important;
+    /* A regra certa na dose errada. `overflow-wrap: anywhere` entrou aqui por
+       uma razão social sem espaços (LUXOTTICA BRASIL PRODUTOS OTICOS E
+       ESPORTIVOS LTDA), que sem ele trava a largura mínima da coluna. Aplicado
+       a TODA célula, ele autorizava o navegador a partir dentro de um valor:
+       na Curva ABC, 100% das linhas de RECEITA saíam como "R$ 6.714," numa
+       linha e "00" na seguinte, e os cabeçalhos viravam CLASS/E, DISPONÍV/EL,
+       AÇ/ÃO. Volta ao padrão, e a exceção fica onde o problema estava. */
+    overflow-wrap: normal;
+    word-break: normal;
+  }
+  th {
+    hyphens: none;
+  }
+  /* Dinheiro, quantidade, SKU e data são unidades indivisíveis: um número
+     partido em duas linhas deixa de ser um número. */
+  td.num,
+  th.num,
+  .codigo,
+  .valor,
+  .unidade {
+    white-space: nowrap;
+  }
+  /* E aqui, sim, pode partir: é texto longo sem separador natural. */
+  td.produto,
+  td.fornecedor,
+  td.marca,
+  td .codigo + span {
+    overflow-wrap: anywhere;
+  }
+  td.num,
+  th.num {
+    font-size: 7.5pt !important;
+  }
+  .card:has(> table) {
+    overflow: visible !important;
+  }
+
+  /* 5 · CAMPO EDITÁVEL VIRA TEXTO ----------------------------------------- */
+  /* A regra antiga escondia `button` e esquecia `input`/`select`: a coluna
+     "Ajustar mínimo" de Alertas imprimia 2.176 caixas de texto editáveis, uma
+     por linha, em 171 folhas. O valor é dado e deve sair; a moldura de campo é
+     um convite a escrever numa folha de papel. */
+  input,
+  select,
+  textarea,
+  .mselect-btn {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    color: #000 !important;
+    -webkit-appearance: none;
+    appearance: none;
+    font-size: 8pt !important;
+  }
+
+  /* 6 · O ESTADO NO PAPEL P&B --------------------------------------------- */
+  /* O preenchimento do chip foi medido e não separa nada (amplitude de 0,2 em
+     255 níveis de cinza entre âmbar, vermelho e azul), e dois pares de COR DE
+     TEXTO colapsam: vermelho×azul (Δ 8,1) e verde×cinza (Δ 7,4) — "Alta" e
+     "Novo" saíam do mesmo tom, "Saudável" e "Baixa" também. Então o papel para
+     de depender de tom: o filete esquerdo passa a variar em ESTILO além de
+     espessura, o que é geometria pura e não tem como colapsar em P&B. Os cinco
+     estados ficam com cinco filetes distintos, e o rótulo escrito e o ícone da
+     grade 24 continuam onde sempre estiveram. */
+  .badge {
+    background: transparent !important;
+    color: #000 !important;
+    border: 1px solid #000 !important;
+    /* No papel o chip pode quebrar: aqui não há layout de tela em jogo, e
+       impedir a quebra é o que empurraria a coluna para fora da folha. */
+    white-space: normal !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .badge.red {
+    border-left: 3px solid #000 !important; /* crítico */
+  }
+  .badge.amber {
+    border-left: 2px solid #000 !important; /* atenção */
+  }
+  .badge.green {
+    /* Era 1px sólido — a MESMA borda que todo badge já tem em toda a volta, o
+       que fazia "saudável" e um chip sem cor saírem com o mesmo desenho. Dos
+       cinco estados, quatro se distinguiam no papel; o quinto, não. Ponteado é
+       o único estilo ainda não usado e não colide com o duplo do `blue`. */
+    border-left: 3px dotted #000 !important; /* saudável */
+  }
+  .badge.blue {
+    border-left: 3px double #000 !important; /* informativo */
+  }
+  .badge.gray {
+    border-left: 1px dashed #000 !important; /* inerte */
+  }
+  /* O marcador já era FORMA (cheio / vazado / traço) — só precisa chegar preto e
+     com o preenchimento preservado, porque navegador não imprime fundo. */
+  .dot,
+  .banner {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .dot.red {
+    background: #000 !important;
+    border-color: #000 !important;
+  }
+  .dot.amber {
+    border-color: #000 !important;
+  }
+  .dot.green {
+    background: #000 !important;
+  }
+  .banner {
+    border-color: #000 !important;
+  }
+
+  /* 7 · TIPOGRAFIA DE PAPEL ------------------------------------------------ */
+  a {
+    color: #000 !important;
+  }
+  .muted,
+  .hint,
+  .carimbo,
+  .unidade,
+  .label,
+  th {
+    color: #333 !important;
+  }
+  .codigo {
+    color: #000 !important;
+  }
+  .rule-section {
+    background: #000 !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CENTRAL DE OPERAÇÕES
+   A tela de entrada do console: sete módulos em cartões, no lugar dos 15 links.
+
+   SOBRE O DESENHO, e por que ele não tem canto arredondado nem sombra:
+   o manual põe superfície como PAPEL — filete de 1px, raio 0, sem sombra
+   difusa (ver --radius e --shadow-card). O "arredondado" desta marca é o CORTE
+   ASSIMÉTRICO do símbolo (--corte), que já vive no .btn; aqui ele aparece na
+   PLACA DO ÍCONE, que é o elemento de marca do cartão. Elevação no hover é
+   feita com filete dourado + lavagem + 1.02 de escala: o mesmo vocabulário do
+   resto do produto, sem importar vidro de outro sistema.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+.central {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+/* ─── Cabeçalho ─────────────────────────────────────────────────────────── */
+.central-topo {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding-bottom: 22px;
+}
+.central-identidade {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+.central-marca {
+  color: var(--accent);
+  flex: none;
+  margin-top: 2px;
+}
+.central-titulo {
+  font-family: var(--font-titulo);
+  font-weight: 600;
+  font-size: clamp(26px, 3.4vw, 38px);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  margin: 2px 0 4px;
+  color: var(--text);
+}
+.central-papel {
+  margin: 0;
+}
+
+/* Busca global: filtra módulo E página interna, para o agrupamento não
+   esconder nada de quem já sabe o nome da tela. */
+.central-busca {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 260px;
+  max-width: 380px;
+}
+.central-busca-icone {
+  position: absolute;
+  left: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.central-busca input {
+  width: 100%;
+  padding: 10px 36px 10px 36px;
+  font-size: 14px;
+  font-family: var(--font-corpo);
+}
+.central-busca input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.central-busca-limpar {
+  position: absolute;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.central-busca-limpar:hover {
+  color: var(--accent);
+}
+
+/* ─── Grupos por categoria ──────────────────────────────────────────────── */
+.central-grupo + .central-grupo {
+  margin-top: 34px;
+}
+.central-grupo-topo {
+  margin-bottom: 14px;
+}
+.central-grupo-topo .eyebrow {
+  margin: 10px 0 0;
+}
+
+/* ─── Grade: 4 colunas no desktop, 3 no laptop, 2 no tablet e no celular ── */
+.central-grade {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  /* TRÊS colunas, não quatro. Os grupos têm 1 a 3 módulos: em quatro colunas a
+     fileira nunca fechava e sobrava uma coluna vazia à direita em todo grupo.
+     Com três, "Operação" e "Inteligência" preenchem a linha inteira e a largura
+     do cartão fica idêntica entre os grupos — que é o alinhamento que a tela
+     promete. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.central-grade > li {
+  display: flex; /* estica o cartão: todos ficam com a MESMA altura */
+}
+
+/* ─── O cartão do módulo ────────────────────────────────────────────────── */
+.modulo-card {
+  /* É um <button>: zera o que o agente do usuário desenha e assume o papel. */
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-corpo);
+
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 20px 16px;
+
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius); /* papel: canto reto, como o resto do produto */
+  color: var(--text);
+
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+.modulo-card:hover {
+  border-color: var(--border-ouro);
+  background: var(--hover);
+  transform: scale(1.02);
+}
+.modulo-card:active {
+  transform: scale(0.995);
+}
+.modulo-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.modulo-cabeca {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* A PLACA DO ÍCONE é o elemento de marca do cartão: leva o corte assimétrico
+   do símbolo. O ícone é protagonista — mesma família, mesmo peso, mesmo
+   tamanho em todos os sete cartões. */
+.modulo-placa {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  color: var(--accent);
+  border: 1px solid var(--border-ouro);
+  border-radius: var(--corte) 0 var(--corte) 0;
+  background: transparent;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.modulo-card:hover .modulo-placa {
+  background: var(--accent);
+  color: var(--window-solid);
+}
+
+/* Indicador de pendência: número + rótulo no aria-label do cartão, nunca cor
+   sozinha carregando o significado. */
+.modulo-aviso {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--window-solid);
+  background: var(--red);
+  border-radius: var(--corte-sm) 0 var(--corte-sm) 0;
+  flex: none;
+}
+
+.modulo-nome {
+  font-family: var(--font-titulo);
+  font-weight: 600;
+  font-size: 21px;
+  line-height: 1.15;
+  letter-spacing: -0.005em;
+  margin-top: 2px;
+}
+.modulo-descricao {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  /* Empurra o rodapé para baixo: com alturas iguais, "Entrar" alinha entre
+     todos os cartões da fileira. */
+  flex: 1 1 auto;
+}
+
+/* Páginas que casaram com a busca — some quando não há busca. */
+.modulo-casadas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.modulo-casada {
+  font-size: 11.5px;
+  padding: 3px 8px;
+  color: var(--accent);
+  border: 1px solid var(--border-ouro);
+}
+
+.modulo-rodape {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+}
+.modulo-entrar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.modulo-seta {
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+.modulo-card:hover .modulo-seta {
+  transform: translateX(3px);
+}
+.modulo-badge {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+/* ─── Barra lateral contextual ──────────────────────────────────────────── */
+.sidebar-dica {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.sidebar-modulo {
+  display: flex;
+  flex-direction: column;
+}
+.nav-voltar {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 0 10px;
+}
+.nav-voltar:hover {
+  color: var(--accent);
+}
+.nav-voltar-seta {
+  font-size: 14px;
+  line-height: 1;
+}
+.sidebar-modulo-nome {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 6px;
+  color: var(--accent);
+}
+
+/* ─── Responsivo ────────────────────────────────────────────────────────── */
+@media (max-width: 1180px) {
+  .central-grade {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 860px) {
+  .central-grade {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  /* Duas colunas também no celular (pedido explícito): o cartão encolhe o
+     respiro e a placa, mas mantém ícone, nome e "Entrar". */
+  .modulo-card {
+    padding: 14px 14px 12px;
+    gap: 8px;
+  }
+  .modulo-placa {
+    width: 42px;
+    height: 42px;
+  }
+  .modulo-nome {
+    font-size: 17px;
+  }
+  .modulo-descricao {
+    font-size: 12.5px;
+  }
+  .modulo-badge {
+    display: none; /* a categoria já é o título do grupo logo acima */
+  }
+  .central-topo {
+    align-items: stretch;
+  }
+  .central-busca {
+    max-width: none;
+  }
+}
+
+/* Quem pediu menos movimento não recebe escala nem deslocamento. */
+@media (prefers-reduced-motion: reduce) {
+  .modulo-card,
+  .modulo-placa,
+  .modulo-seta {
+    transition: none;
+  }
+  .modulo-card:hover {
+    transform: none;
+  }
+  .modulo-card:hover .modulo-seta {
+    transform: none;
   }
 }

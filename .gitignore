@@ -13,6 +13,8 @@ build/
 .env.local
 .env.*.local
 !.env.example
+# O EXEMPLO de produção entra (só placeholders); o `.env` preenchido, nunca.
+!.env.production.example
 
 # Prisma
 apps/api/prisma/*.db
@@ -47,3 +49,22 @@ apps/web/src/api/demo-real-data.json
 
 # Catálogo de marcas (dado comercial real — gerado de PDVs_Grifes)
 apps/api/data/brand-catalog.json
+
+# Evidência visual das auditorias de design: PNG e PDF regeneráveis pelos
+# scripts em docs/marca/auditoria/evidencias/. Os relatórios .md ficam
+# versionados; as ~70 MB de captura, não — o repositório é público e clone
+# não deve carregar prova que qualquer um refaz rodando o script.
+docs/marca/auditoria/evidencias/
+docs/marca/impressao/
+docs/marca/telas/v4/
+
+# Variante de nome usada por um dos auditores (singular).
+docs/marca/auditoria/evidencia/
+
+# Evidência visual das auditorias: renderiza DADOS REAIS da rede (nomes de
+# loja, saldo, faturamento). O repositório é público — os relatórios .md ficam,
+# os prints não.
+docs/marca/auditoria/evidencia-*/
+
+# PDF gerado do runbook — o fonte é o .md em docs/deploy/
+Runbook-Infra-*.pdf
