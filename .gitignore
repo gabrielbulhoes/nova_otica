@@ -65,3 +65,6 @@ docs/marca/auditoria/evidencia/
 # loja, saldo, faturamento). O repositório é público — os relatórios .md ficam,
 # os prints não.
 docs/marca/auditoria/evidencia-*/
+
+# PDF gerado do runbook — o fonte é o .md em docs/deploy/
+Runbook-Infra-*.pdf
