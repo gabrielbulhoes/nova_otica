@@ -48,49 +48,26 @@ const dockItems: DockItem[] = [
    As rotas não mudaram: quem tinha um link salvo continua chegando.
 */
 
-// ─── Tema ───────────────────────────────────────────────────────────────────
+/* ─── Tema: CLARO, FIXO, EM TODAS AS PÁGINAS ──────────────────────────────────
+   O produto passa a ter UMA aparência — o branco-papel do NANOFLOW, que é o
+   padrão do manual: superfície de papel, filete de 1px, canto reto e o ouro
+   como único acento. Aqui moravam o alternador (`useTemaDoConsole`) e a chave
+   de preferência `novaotica.tema`; os dois saíram, junto com o botão da barra
+   de título. Nenhuma casca escreve mais `data-tema`, e a ausência do atributo É
+   o tema claro.
 
-export type Tema = 'claro' | 'escuro';
+   Por que fixar em vez de manter a opção: a escolha ficava gravada no
+   navegador, então bastava um clique de alguém, uma vez, para a demonstração
+   seguinte abrir preta — uma marca diferente da que o cliente aprovou, na
+   primeira tela que ele vê. Nenhuma linha consulta `prefers-color-scheme`: o
+   tema do sistema operacional do gerente nunca decidiu isto, e continua sem
+   decidir.
 
-/** Chave única da preferência. Outras cascas devem ler ESTA, não inventar outra. */
-export const CHAVE_TEMA = 'novaotica.tema';
-
-/**
- * Tema do console — decisão do USUÁRIO, nunca do sistema operacional.
- *
- * Nenhuma linha daqui consulta `prefers-color-scheme`, de propósito: o manual
- * põe o branco-papel como padrão do produto e trata o escuro como opção. Um
- * console que abre preto porque o macOS do gerente está escuro entrega a marca
- * errada logo na primeira impressão — e é a primeira tela que o cliente vê.
- *
- * O atributo é escrito como PROP de um elemento renderizado pelo React, e não
- * com `setAttribute` no <html>: assim o DOM não tem como divergir do estado
- * (StrictMode montando duas vezes, outra casca sobrescrevendo na troca de rota,
- * dois efeitos disputando o mesmo nó). O <EChart> observa mutações de
- * `data-tema` na subárvore do documento, então recebe a troca do mesmo jeito.
- */
-export function useTemaDoConsole() {
-  const [tema, setTema] = useState<Tema>(() => {
-    try {
-      // Sem preferência gravada o valor é 'claro' — o padrão do produto.
-      return localStorage.getItem(CHAVE_TEMA) === 'escuro' ? 'escuro' : 'claro';
-    } catch {
-      // Safari em navegação privada chega a lançar só na LEITURA do storage.
-      return 'claro';
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(CHAVE_TEMA, tema);
-    } catch {
-      /* modo privado: a escolha vale para a sessão e não persiste */
-    }
-  }, [tema]);
-
-  const alternar = () => setTema((atual) => (atual === 'escuro' ? 'claro' : 'escuro'));
-  return { tema, alternar };
-}
+   O escuro NÃO foi apagado, só desligado. Os blocos `[data-tema='escuro']` de
+   styles.css seguem intactos e `bi/transforms.ts` continua sabendo montar as
+   duas paletas; como ninguém escreve o atributo, esse caminho fica dormente.
+   Reativar é voltar a escrever `data-tema` — não reescrever o tema.
+   ─────────────────────────────────────────────────────────────────────────── */
 
 // ─── Dock que recolhe na rolagem ────────────────────────────────────────────
 
@@ -185,7 +162,6 @@ export function AdminShell() {
   const { user, isAdmin, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const { tema, alternar } = useTemaDoConsole();
   useLiveInvalidation();
 
   // Quem rola é .main (a janela tem altura fixa e o conteúdo rola dentro dela),
@@ -239,10 +215,9 @@ export function AdminShell() {
   }, [active]);
 
   return (
-    // O escuro cobre a janela inteira do console porque a escolha é do usuário e
-    // vale para tudo o que ele está operando. Em claro o atributo NÃO é escrito:
-    // ausência de `data-tema` é o estado padrão, e é o que o seletor CSS espera.
-    <div className="macos-desktop" data-tema={tema === 'escuro' ? 'escuro' : undefined}>
+    // Sem `data-tema`: a ausência do atributo É o tema claro, o padrão do
+    // produto e agora o único (ver o bloco "Tema", no topo do arquivo).
+    <div className="macos-desktop">
       {/* Atalho para o conteúdo (WCAG 2.4.1). Medido: não havia UM skip link em
           17 rotas, e a casca cobra 20 paradas fixas de Tab (15 links da barra
           lateral + Sair + os 3 chips de recorte + o tema) antes que o teclado
@@ -365,35 +340,11 @@ export function AdminShell() {
                 <span className="dot green" aria-hidden="true" />
                 <span className="live-status-text">Dados ao vivo</span>
               </span>
-              {/* O rótulo nomeia a AÇÃO ("Tema escuro" = passar para o escuro), e
-                  é texto visível: serve de nome acessível e de indicação de
-                  estado sem depender de cor nenhuma.
-                  ONDA 4 · o botão não expunha ESTADO: sem aria-pressed e sem
-                  role=switch, o rótulo sozinho é ambíguo — "Tema escuro" pode
-                  ser lido como o estado atual ou como o destino, e ao acionar o
-                  usuário recebia silêncio. Com aria-pressed o leitor de tela
-                  anuncia "não pressionado → pressionado" na própria ativação,
-                  sem precisar de uma região aria-live que ninguém mais usa.
-                  O `aria-label` é explícito porque abaixo de 960px o CSS esconde
-                  a palavra e sobra só o ícone. */}
-              <button
-                type="button"
-                className="btn ghost sm"
-                onClick={alternar}
-                aria-pressed={tema === 'escuro'}
-                aria-label={tema === 'escuro' ? 'Tema escuro ativo' : 'Tema escuro'}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 7,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <Icon name="ideia" size={15} />
-                <span className="rotulo-tema">
-                  {tema === 'escuro' ? 'Tema claro' : 'Tema escuro'}
-                </span>
-              </button>
+              {/* Aqui ficava o alternador de tema. Saiu junto com a decisão de
+                  fixar o claro em todo o produto: um controle que não tem mais
+                  dois estados é ruído na barra — e, na prática, um jeito de a
+                  demonstração abrir com uma aparência diferente da aprovada.
+                  O CSS do escuro segue no lugar, apenas dormente. */}
             </div>
           </div>
           {/* O DOCK VEM ANTES DO <main> NO DOM, e é de propósito.

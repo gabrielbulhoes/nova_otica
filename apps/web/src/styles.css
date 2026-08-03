@@ -688,13 +688,9 @@ textarea:focus-visible,
     display: none;
   }
 }
-@media (max-width: 960px) {
-  /* Último recurso: o botão de tema vira só ícone. O nome acessível continua no
-     aria-label (ver AdminShell), então nada se perde no leitor de tela. */
-  .titlebar .btn .rotulo-tema {
-    display: none;
-  }
-}
+/* Aqui ficava o encolhimento do botão de tema abaixo de 960px (rótulo some,
+   sobra o ícone). O botão saiu da barra junto com a fixação do tema claro, e a
+   regra saiu com ele — sem controle, não há o que encolher. */
 /* ONDA 4 · A BARRA PASSA A QUEBRAR EM VEZ DE VAZAR.
    Medido a 768px: o bloco de título era espremido a largura ZERO (o nome da
    tela sumia por inteiro) e o grupo da direita terminava 5px ALÉM da janela,
@@ -2130,12 +2126,18 @@ td .codigo {
   }
 }
 
-/* ═══ Modo escuro ═══════════════════════════════════════════════════════════
-   A troca é DECISÃO DO USUÁRIO (ou da tela): nada mais reage a
-   prefers-color-scheme. Ligue com data-tema="escuro" no <html> para o app
-   inteiro, ou no contêiner de um painel de alta densidade (a tela de BI) para
-   escurecer só aquele bloco — os tokens são redeclarados no seletor, então
-   funcionam nos dois escopos.
+/* ═══ Modo escuro — DORMENTE ════════════════════════════════════════════════
+   O produto é CLARO em todas as páginas: o branco-papel do NANOFLOW é o padrão
+   do manual e passou a ser o único tema entregue. Nenhuma casca escreve mais
+   `data-tema`, então nada abaixo desta linha entra em vigor hoje.
+   Nada aqui reage a prefers-color-scheme — o tema do sistema operacional nunca
+   decidiu a aparência do produto.
+   O bloco fica no arquivo de propósito: é a única definição auditada da paleta
+   escura (contraste medido, daltonismo verificado, par de cores por série de
+   gráfico) e `bi/transforms.ts` ainda sabe montar as duas. Para reativar,
+   escreva data-tema="escuro" no <html> — para o app inteiro — ou no contêiner
+   de um painel de alta densidade, para escurecer só aquele bloco: os tokens são
+   redeclarados nos dois seletores.
    Paleta: preto/carvão/grafite do manual, ouro-lux no lugar do ouro-dark
    (sobre preto quem precisa de contraste é o tom claro).
    ═════════════════════════════════════════════════════════════════════════ */
