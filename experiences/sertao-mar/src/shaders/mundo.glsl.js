@@ -40,8 +40,9 @@ vec3 materia(vec3 pos, vec3 n, float dist, out float rugosidade){
   float manchaBase = fbm2(pos.xz * 0.085 + 31.0, 4);
   vec2 tecido = celulas(pos.xz * 2.6 + 7.0);
   float poros = smoothstep(0.42, 0.02, tecido.y - tecido.x);
-  float mancha = smoothstep(0.50, 0.80, manchaBase) * uCoral;
-  albedo = mix(albedo, uCoralCor * (0.75 + 0.55 * poros), mancha * 0.85);
+  /* colônias, não tapete: só onde o ruído passa de um limiar alto */
+  float mancha = smoothstep(0.58, 0.84, manchaBase) * uCoral;
+  albedo = mix(albedo, uCoralCor * (0.75 + 0.55 * poros), mancha * 0.62);
 
   /* fundo oceânico lembrado: marcas de maré escurecendo os sulcos */
   float sulco = sin(pos.x * 0.15 + pos.z * 0.04) * 0.5 + 0.5;

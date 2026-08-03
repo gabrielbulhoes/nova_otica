@@ -4,9 +4,25 @@
 > O mar já foi sertão.
 > E inevitavelmente voltarão a ser um só.
 
-Uma experiência artística navegável para um artista plástico surrealista. Não é
-um portfólio, não é uma galeria e não é um site institucional: é **uma única
-obra contínua** que o visitante atravessa com o scroll.
+Experiência artística navegável para a obra de **Vic Bulhões**. Não é um
+portfólio, não é uma galeria e não é um site institucional: é **uma única obra
+contínua** que o visitante atravessa com o scroll.
+
+A coleção segue o corpo de obra do artista, em seis movimentos:
+
+| | |
+| --- | --- |
+| **i** | amanhecer no sertão salino — mar no horizonte, peixes onde deveriam existir pássaros |
+| **ii** | **À deriva** — a água chegou; só os galhos secos ainda aparecem |
+| **iii** | **Dança dos tamboretes** — submerso, fundo de areia com cáusticas |
+| **iv** | **Arraia farpada de pano** — o contrafluxo: tudo sobe |
+| **v** | **Sem título** — a noite de velas e coral rosa sobre o mandacaru |
+| **vi** | o mesmo amanhecer da i — o ciclo fecha |
+
+Os poemas exibidos são do artista, transcritos das próprias pranchas. A citação
+de Darwin é a que ele copiou à mão no caderno de anatomia deste universo. O
+primeiro e o último movimento não recebem ficha: são a abertura e o fecho do
+mundo, não pinturas.
 
 ---
 
@@ -20,19 +36,25 @@ npm run build     # gera dist/ — estático, sem servidor
 npm run preview
 ```
 
-O projeto é **autônomo**: não depende de nada do restante do repositório e pode
-ser movido inteiro para um repositório próprio (é para lá que ele deve ir).
-Basta copiar a pasta.
+O projeto é **autônomo**: não depende de nada do restante do repositório e é
+para viver em um repositório próprio. Para mudá-lo de casa, basta copiar a
+pasta e:
+
+```bash
+cd sertao-mar
+git init && git add -A && git commit -m "primeira travessia"
+git remote add origin git@github.com:<usuário>/sertao-mar.git
+git push -u origin main
+```
 
 ---
 
-## O que precisa ser trocado antes de publicar
+## O que ainda falta preencher
 
 | Onde | O quê |
 | --- | --- |
-| `src/obras.js` → `AUTORIA` | nome do artista e legenda do corpo de obra |
-| `src/obras.js` → `OBRAS[]` | título, ano, técnica, dimensões e reflexão de cada pintura |
-| `index.html` → `<title>` e `<meta description>` | metadados |
+| `src/obras.js` → `ano`, `tecnica`, `dimensoes` | dados de acervo de cada obra. Ficaram em branco de propósito: são dados que só o artista tem. **A ficha só exibe o que existe** — preencha e o campo aparece sozinho |
+| `src/obras.js` → obra `v` | está como "Sem título" porque o nome não foi informado |
 
 Cada obra também carrega um **estado do mundo** (`estado`) e uma **posição de
 câmera** (`camera`). São esses dois blocos que definem a pintura — mudar um
@@ -113,8 +135,8 @@ A curva que liga uma obra à seguinte está em `demora()`: ela deixa o mundo
 quase parado no começo e no fim de cada intervalo e concentra a metamorfose no
 meio. É isso que faz o visitante não perceber quando trocou de pintura.
 
-**A última obra reusa o estado da primeira** (`AURORA_SALINA`). O ciclo fecha
-literalmente: quem chega ao fim e continua descendo volta ao princípio.
+**O último movimento reusa o estado do primeiro** (`AURORA_SALINA`). O ciclo
+fecha literalmente: quem chega ao fim e continua descendo volta ao princípio.
 
 ---
 
@@ -125,7 +147,7 @@ O terreno tem três decisões deliberadas:
 - um **corredor rebaixado** ao longo do eixo do percurso, por onde o olhar
   caminha — daí a sensação de vale;
 - **serras** erguidas dos dois lados, que dão silhueta contra o céu;
-- a **borda do mundo**, que afunda abaixo da linha da água a partir de ~240
+- a **borda do mundo**, que afunda abaixo da linha da água a partir de ~120
   unidades do eixo. É por isso que existe sempre mar no horizonte, de qualquer
   ponto do percurso, sem que isso precise ser encenado.
 
