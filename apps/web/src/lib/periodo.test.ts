@@ -99,11 +99,12 @@ describe('período com amostra de 7 dias', () => {
     expect(texto).toContain('Recorte de 3 dias');
     expect(texto).toContain('11/07');
     expect(texto).toContain('13/07/2026');
-    // A parte que o filtro move…
+    // O que é medido no recorte…
     expect(texto).toContain('por loja');
-    // …e a que não move, dita com todas as letras.
+    expect(texto).toContain('medidos no recorte');
+    // …e o que só acompanha em proporção, dito com todas as letras.
     expect(texto).toContain('marca');
-    expect(texto).toContain('7 dias');
+    expect(texto).toContain('em proporção');
   });
 });
 

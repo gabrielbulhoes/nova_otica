@@ -456,6 +456,8 @@ function byDimension(
   const base = biBase(group, category, storeId);
   let rows: { key: string; label: string; total: number; count: number }[] = [];
   let aproximado = false;
+  /** A dimensão foi recortada por DATA de verdade (só o caso loja sem recorte). */
+  let porDataExata = false;
 
   if (by === 'store') {
     /*
@@ -469,6 +471,7 @@ function byDimension(
          cobre a amostra inteira.
     */
     const porData = real && !base.recortando && days > 0 ? salesByStoreNaJanela(days) : null;
+    porDataExata = porData !== null;
     if (porData) {
       rows = porData
         .map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }))
@@ -512,6 +515,31 @@ function byDimension(
     }
     rows = [...acc.entries()].map(([k, v]) => ({ key: k, label: k, total: round2(v.total), count: v.count }));
   }
+
+  /*
+     RECORTE DE DATA NAS QUEBRAS QUE NÃO TÊM DIA.
+
+     Só o caminho `porData` acima é medido dia a dia. Todos os outros saem do
+     item vendido ou do agregado da sonda, que cobrem a AMOSTRA INTEIRA — e sem
+     este passo eles ficavam parados enquanto o KPI ao lado encolhia com a
+     janela. O sintoma era grosseiro: em "Óculos · 1 dia" o total da rede
+     marcava R$ 55.069,69 enquanto A GRACIOSA MIDWAY sozinha mostrava
+     R$ 78.829,04 — uma loja maior que a rede.
+
+     A escala é a fatia MEDIDA que a janela ocupa no faturamento da amostra, a
+     mesma que o KPI usa. Com isso a soma das quebras volta a fechar com o total
+     em qualquer recorte. É projeção, e sai marcada como tal.
+  */
+  const escalaDeData = porDataExata ? 1 : fatiaDaJanela(days);
+  if (escalaDeData !== 1) {
+    aproximado = true;
+    rows = rows.map((r) => ({
+      ...r,
+      total: round2(r.total * escalaDeData),
+      count: Math.round(r.count * escalaDeData),
+    }));
+  }
+
   rows.sort((a, b) => b.total - a.total);
   return aproximado ? { by, rows, aproximado } : { by, rows };
 }
@@ -600,7 +628,21 @@ function abc(
 ) {
   // Um único recorte para as duas dimensões — trocar SKU por marca não mexe
   // em filtro nenhum.
-  const vendidos = soldItemsScoped(storeId).filter((x) => noRecorte(group, category)(x.p));
+  /*
+     O item vendido não tem dia — cobre a amostra inteira. Sem esta escala a
+     curva mostrava a receita dos 7 dias sob um rótulo de 1 dia, e o total da
+     tela discordava do BI para o mesmo recorte. A fatia é a mesma que o BI usa,
+     medida na série diária; as CLASSES não se movem, porque a classificação
+     ABC é feita sobre participação relativa e escala não muda proporção.
+  */
+  const escalaDeData = fatiaDaJanela(days);
+  const vendidos = soldItemsScoped(storeId)
+    .filter((x) => noRecorte(group, category)(x.p))
+    .map((x) =>
+      escalaDeData === 1
+        ? x
+        : { ...x, revenue: round2(x.revenue * escalaDeData), units: Math.round(x.units * escalaDeData) },
+    );
   let items: AbcItem[];
   if (dimension === 'brand') {
     // Mesmo cálculo nos dois sabores da demo (fictício e real) e igual ao da
@@ -618,9 +660,11 @@ function abc(
   // Receita do período sem recorte: é o denominador que faltava na tela.
   // Da rede quando o dataset traz o agregado; da amostra quando não traz.
   const periodRevenue = storeId
-    ? round2(soldItemsScoped(storeId).reduce((a, x) => a + x.revenue, 0))
+    ? round2(soldItemsScoped(storeId).reduce((a, x) => a + x.revenue, 0) * escalaDeData)
     : real
-      ? round2(real.totals.revenue30d)
+      ? // Da série diária, e não de `totals.revenue30d`: o total gravado é o da
+        // amostra inteira, e este número é o denominador DO RECORTE PEDIDO.
+        vendasNaJanela(days).total
       : round2(soldItems().reduce((a, x) => a + x.revenue, 0));
   // Feedbacks 5.0, item 05 ("a curva ABC ainda traz pouco produto"): não é
   // filtro comendo linha — é a janela. A extração do CDS que alimenta a demo
@@ -968,6 +1012,18 @@ function salesAnalysisReport(rawDays: number, by: string) {
     }
     rows = [...acc.entries()].map(([label, v]) => ({ key: label, label: label || '—', ...v }));
   }
+
+  // Mesma escala do BI e do ABC: nenhuma destas dimensões tem dia na amostra, e
+  // sem ela a tabela ficava com o total da amostra sob o rótulo do recorte.
+  const escalaDeData = fatiaDaJanela(days);
+  if (escalaDeData !== 1) {
+    rows = rows.map((r) => ({
+      ...r,
+      units: Math.round(r.units * escalaDeData),
+      revenue: round2(r.revenue * escalaDeData),
+    }));
+  }
+
   rows.sort((a, b) => b.units - a.units);
   return { days, by, rows: rows.slice(0, 500) };
 }

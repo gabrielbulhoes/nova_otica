@@ -423,6 +423,51 @@ describe('demo: mudar o filtro muda o dado', () => {
     }
   });
 
+  /*
+     NENHUMA PARTE PODE SER MAIOR QUE O TODO.
+
+     Defeito relatado pelo cliente: no BI, com recorte "Óculos" em 1 dia, o
+     total da rede marcava R$ 55.069,69 enquanto A GRACIOSA MIDWAY sozinha
+     mostrava R$ 78.829,04. A causa: o KPI passou a acompanhar a janela e as
+     quebras — loja, marca, categoria, curva ABC, análise de vendas — ficaram
+     congeladas no período inteiro, porque nenhuma delas tem dia na amostra.
+     Agora todas caem na mesma escala do KPI, e este teste garante que continuem
+     caindo: basta uma delas voltar a ignorar a janela para uma "parte" ficar
+     maior que o "todo" outra vez.
+  */
+  it('nenhuma quebra fica maior que a rede, em nenhum recorte', () => {
+    for (const group of ['todos', 'principal', 'lentes']) {
+      for (const days of ['1', '3', '7']) {
+        const kpi = get('/bi/kpis', { days, group });
+        const rede = kpi.revenue;
+
+        for (const by of ['store', 'category', 'brand']) {
+          const dim = get('/bi/sales-by-dimension', { days, by, group });
+          const soma = dim.rows.reduce((a: number, r: any) => a + r.total, 0);
+          const maior = dim.rows.reduce((a: number, r: any) => Math.max(a, r.total), 0);
+
+          expect(maior, `${by} · ${group} · ${days}d: uma linha maior que a rede`)
+            .toBeLessThanOrEqual(rede * 1.02);
+          expect(Math.abs(soma - rede) / Math.max(1, rede), `${by} · ${group} · ${days}d: soma fora da rede`)
+            .toBeLessThan(0.05);
+        }
+
+        // A curva ABC lê a mesma janela que o BI.
+        const abc = get('/reports/abc', { days, group });
+        const somaAbc = abc.rows.reduce((a: number, r: any) => a + r.revenue, 0);
+        expect(Math.abs(somaAbc - rede) / Math.max(1, rede), `ABC · ${group} · ${days}d`)
+          .toBeLessThan(0.05);
+      }
+    }
+  });
+
+  it('a análise de vendas encolhe junto com a janela', () => {
+    const um = get('/reports/sales-analysis', { days: '1', by: 'store' });
+    const sete = get('/reports/sales-analysis', { days: '7', by: 'store' });
+    const soma = (r: any) => r.rows.reduce((a: number, x: any) => a + x.revenue, 0);
+    expect(soma(um)).toBeLessThan(soma(sete));
+  });
+
   it('a cobertura declara a janela que realmente usou, nunca maior que a pedida', () => {
     for (const days of ['1', '7', '30', '90']) {
       const r = get('/dashboard/coverage', { days });
