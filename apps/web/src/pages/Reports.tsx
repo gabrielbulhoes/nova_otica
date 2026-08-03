@@ -365,7 +365,7 @@ export function Reports() {
 
       {/* O limite da base, escrito onde o filtro está — não numa nota lá
           embaixo. Some sozinho quando a extração cobrir a janela cheia. */}
-      <LegendaDaAmostra />
+      <LegendaDaAmostra days={days} />
 
       {((tab === 'abc' && dimension === 'brand') || tab === 'coverage') && <BrandScopeNote scope={scope} />}
 

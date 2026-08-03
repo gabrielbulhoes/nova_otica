@@ -221,7 +221,7 @@ export function BI() {
         />
       </div>
 
-      <LegendaDaAmostra />
+      <LegendaDaAmostra days={days} />
 
       {kpis.isLoading || !indicadores ? (
         <Loading />

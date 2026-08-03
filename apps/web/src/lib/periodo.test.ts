@@ -44,16 +44,22 @@ describe('período com amostra de 7 dias', () => {
     vi.resetModules();
   });
 
-  it('desabilita todo recorte maior que a cobertura e diz o motivo no rótulo', async () => {
+  it('oferece recortes MEDIDOS dentro da amostra — um filtro com uma opção não é filtro', async () => {
     const { opcoesDePeriodo } = await comCobertura(AMOSTRA_7_DIAS);
     const opcoes = opcoesDePeriodo(RELATORIOS);
 
-    expect(opcoes.map((o) => o.value)).toEqual(['7', '30', '90', '180']);
-    expect(opcoes[0]).toMatchObject({ value: '7', disabled: false, label: 'Últimos 7 dias' });
-    for (const fora of opcoes.slice(1)) {
-      expect(fora.disabled, `${fora.value} deveria estar desabilitado`).toBe(true);
-      expect(fora.label).toContain('fora da amostra');
-    }
+    const validas = opcoes.filter((o) => !o.disabled).map((o) => o.value);
+    expect(validas).toEqual(['1', '3', '7']);
+    // O vocabulário da página vence quando o período dela cabe na cobertura.
+    expect(opcoes.find((o) => o.value === '7')?.label).toBe('Últimos 7 dias');
+  });
+
+  it('desabilita todo recorte maior que a cobertura e diz o motivo no rótulo', async () => {
+    const { opcoesDePeriodo } = await comCobertura(AMOSTRA_7_DIAS);
+    const fora = opcoesDePeriodo(RELATORIOS).filter((o) => o.disabled);
+
+    expect(fora.map((o) => o.value)).toEqual(['30', '90', '180']);
+    for (const o of fora) expect(o.label).toContain('fora da amostra');
   });
 
   it('o valor inicial cai para o maior recorte que a base responde', async () => {
@@ -64,24 +70,38 @@ describe('período com amostra de 7 dias', () => {
     expect(periodoInicial(RELATORIOS, 7)).toBe('7');
   });
 
-  it('quando NENHUMA opção cabe, a cobertura entra como escolha válida', async () => {
+  it('mesmo quando nenhuma opção da página cabe, sobram escolhas válidas', async () => {
     const { opcoesDePeriodo, periodoInicial } = await comCobertura(AMOSTRA_7_DIAS);
     const opcoes = opcoesDePeriodo(RATEIO);
 
     // Um <select> com todas as opções desabilitadas seria um beco sem saída.
     const validas = opcoes.filter((o) => !o.disabled);
-    expect(validas).toHaveLength(1);
-    expect(validas[0].value).toBe('7');
-    expect(validas[0].label).toContain('toda a amostra');
+    expect(validas.map((o) => o.value)).toEqual(['1', '3', '7']);
+    expect(validas.at(-1)!.label).toContain('toda a amostra');
     expect(periodoInicial(RATEIO, 180)).toBe('7');
   });
 
   it('a legenda nomeia a janela e as datas medidas', async () => {
     const { legendaDaAmostra } = await comCobertura(AMOSTRA_7_DIAS);
-    const texto = legendaDaAmostra();
+    const texto = legendaDaAmostra(7);
     expect(texto).toContain('7 dias');
     expect(texto).toContain('07/07');
     expect(texto).toContain('13/07/2026');
+  });
+
+  it('num recorte menor, a legenda dá as datas do recorte e separa o que acompanha', async () => {
+    const { legendaDaAmostra } = await comCobertura(AMOSTRA_7_DIAS);
+    const texto = legendaDaAmostra(3)!;
+
+    // 3 dias terminando em 13/07 => 11/07 a 13/07.
+    expect(texto).toContain('Recorte de 3 dias');
+    expect(texto).toContain('11/07');
+    expect(texto).toContain('13/07/2026');
+    // A parte que o filtro move…
+    expect(texto).toContain('por loja');
+    // …e a que não move, dita com todas as letras.
+    expect(texto).toContain('marca');
+    expect(texto).toContain('7 dias');
   });
 });
 

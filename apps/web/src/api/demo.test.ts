@@ -355,6 +355,53 @@ describe('demo: /stores (feedback Galbe — "estoque por SKU e loja tá uniforme
   });
 });
 
+describe('demo: mudar o filtro muda o dado', () => {
+  /*
+     O contrato que faltava: o período é um FILTRO, e filtro que não move número
+     é rótulo mentindo. Com a amostra estática real isso valia para o
+     faturamento, a série diária e o desempenho por loja — os três recortes que
+     a fotografia mede com data. Aqui, no dataset fictício, o guarda é a série:
+     ela tem que ter exatamente o número de pontos do período pedido.
+  */
+  /*
+     Estas asserções valem nos DOIS sabores de propósito. Com o dataset
+     fictício a série tem o tamanho pedido; com a amostra real embarcada ela
+     para na janela medida (7 dias). O contrato comum — e o que o defeito
+     violava — é: a série nunca é maior que o pedido, nunca é vazia, e
+     recortes menores devolvem MENOS pontos.
+  */
+  it('a série diária nunca promete mais dias do que entrega', () => {
+    for (const days of ['1', '3', '7', '30', '90']) {
+      const r = get('/bi/sales-timeseries', { days });
+      expect(r.points.length, `período de ${days} dias`).toBeGreaterThan(0);
+      expect(r.points.length, `período de ${days} dias`).toBeLessThanOrEqual(Number(days));
+      // O `days` devolvido é o que a série de fato cobre — é dele que a tela
+      // tira o rótulo, então ele não pode divergir do número de pontos.
+      expect(r.days).toBe(r.points.length);
+    }
+  });
+
+  it('encurtar o período encurta a série — o filtro move o dado', () => {
+    const um = get('/bi/sales-timeseries', { days: '1' });
+    const tres = get('/bi/sales-timeseries', { days: '3' });
+    const sete = get('/bi/sales-timeseries', { days: '7' });
+
+    expect(um.points.length).toBe(1);
+    expect(tres.points.length).toBe(3);
+    expect(sete.points.length).toBe(7);
+    // E o conteúdo muda junto, não só o tamanho.
+    expect(um.points).not.toEqual(tres.points.slice(0, 1));
+  });
+
+  it('a cobertura declara a janela que realmente usou, nunca maior que a pedida', () => {
+    for (const days of ['1', '7', '30', '90']) {
+      const r = get('/dashboard/coverage', { days });
+      expect(r.windowDays, `período de ${days} dias`).toBeLessThanOrEqual(Number(days));
+      expect(r.windowDays).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('demo: janela de vendas medida, não presumida', () => {
   it('/dashboard/coverage devolve a janela que usou como divisor', () => {
     const r = get('/dashboard/coverage');

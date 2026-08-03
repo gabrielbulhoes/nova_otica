@@ -12,8 +12,8 @@ import { legendaDaAmostra } from '../lib/periodo';
  * demonstração com dados fictícios). Uma linha que aparece só quando tem o que
  * dizer não vira ruído de fundo.
  */
-export function LegendaDaAmostra() {
-  const texto = legendaDaAmostra();
+export function LegendaDaAmostra({ days }: { days?: number | string }) {
+  const texto = legendaDaAmostra(days);
   if (!texto) return null;
 
   return (

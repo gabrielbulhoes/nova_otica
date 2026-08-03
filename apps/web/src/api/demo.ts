@@ -393,12 +393,14 @@ function timeseries(days: number, fatia = 1, aproximado = false) {
     // com recorte ativo a série é projetada pela fatia que o recorte ocupa no
     // período, e vai marcada como aproximada. Melhor uma curva declaradamente
     // proporcional do que a curva da rede inteira fingindo ser a do recorte.
-    const points = real.dailySales.slice(-days).map((d) => ({
+    const points = real.dailySales.slice(-effectiveDays(days)).map((d) => ({
       date: d.date,
       total: round2(d.total * fatia),
       count: Math.round(d.count * fatia),
     }));
-    return { days, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
+    // `days` é o que a série COBRE, não o que foi pedido: quem lê a resposta
+    // monta rótulo com ele, e um 30 em cima de 7 pontos é o rótulo mentindo.
+    return { days: points.length, granularity: 'day', points, ...(aproximado ? { aproximado: true } : {}) };
   }
   const points = [];
   const now = new Date();
@@ -449,27 +451,45 @@ function byDimension(
   group: ProductGroup = 'todos',
   category?: string | string[],
   storeId?: string,
+  days = 0,
 ) {
   const base = biBase(group, category, storeId);
   let rows: { key: string; label: string; total: number; count: number }[] = [];
   let aproximado = false;
 
   if (by === 'store') {
-    // Por loja, o valor é a soma dos itens DAQUELA loja dentro do recorte —
-    // não o faturamento inteiro que passou por ela.
-    const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
-    const dentro = noRecorte(group, category);
-    rows = escopo
-      .map((st) => {
-        const itens = soldItemsScoped(st.id).filter((x) => dentro(x.p));
-        return {
-          key: st.id,
-          label: st.name,
-          total: round2(itens.reduce((a, x) => a + x.revenue, 0)),
-          count: itens.reduce((a, x) => a + x.units, 0),
-        };
-      })
-      .filter((r) => r.total > 0);
+    /*
+       Duas réguas, e a escolha entre elas é a diferença entre medir e estimar:
+
+       · SEM recorte de produto, o faturamento por loja tem DATA na amostra
+         (weekdayStore), então o recorte de dias é exato e é ele que vale — é o
+         que faz a barra por loja acompanhar o filtro em vez de ficar parada.
+       · COM recorte de produto, a sonda não quebra loja × dia × produto. Aí
+         vale a régua do item vendido, que respeita o recorte de produto e
+         cobre a amostra inteira.
+    */
+    const porData = real && !base.recortando && days > 0 ? salesByStoreNaJanela(days) : null;
+    if (porData) {
+      rows = porData
+        .map((s) => ({ key: s.storeId, label: s.storeName, total: s.total, count: s.count }))
+        .filter((r) => r.total > 0);
+    } else {
+      // Por loja, o valor é a soma dos itens DAQUELA loja dentro do recorte —
+      // não o faturamento inteiro que passou por ela.
+      const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
+      const dentro = noRecorte(group, category);
+      rows = escopo
+        .map((st) => {
+          const itens = soldItemsScoped(st.id).filter((x) => dentro(x.p));
+          return {
+            key: st.id,
+            label: st.name,
+            total: round2(itens.reduce((a, x) => a + x.revenue, 0)),
+            count: itens.reduce((a, x) => a + x.units, 0),
+          };
+        })
+        .filter((r) => r.total > 0);
+    }
   } else if (by === 'payment') {
     // Não se reparte por produto. Com recorte ativo, o que existe é a fatia do
     // recorte no período — declarada como aproximação, nunca como medida.
@@ -667,10 +687,96 @@ export function coberturaDoDataset(): CoberturaDaAmostra | null {
 }
 
 /**
- * A fotografia real cobre `realWindowDays`: pedir um período maior usaria os
- * mesmos números como se fossem do período maior e inflaria a cobertura.
+ * Janela que a resposta REALMENTE cobre.
+ *
+ * Pedir mais do que a fotografia tem devolve o que ela tem (senão a cobertura
+ * infla); pedir MENOS é um recorte legítimo, e agora ele é respeitado — era o
+ * que fazia o filtro não mover número nenhum dentro da amostra.
  */
-const effectiveDays = (days: number) => (real ? realWindowDays : days);
+const effectiveDays = (days: number) =>
+  real ? Math.max(1, Math.min(days, realWindowDays)) : days;
+
+/* ───────────────────────────────────────────────────────────────────────────
+   RECORTE POR DATA DENTRO DA AMOSTRA
+
+   O que a fotografia mede com data, e portanto responde ao filtro:
+     · dailySales   — faturamento e nº de vendas por DIA;
+     · weekdayStore — faturamento por loja × dia da semana. Como a amostra tem
+       exatamente 7 dias, cada dia da semana aparece uma única vez: o dia da
+       semana é um proxy EXATO da data. Conferido dia a dia contra a série
+       diária — bate ao centavo nos sete.
+
+   O que não tem data e por isso não pode ser recortado: as quebras por marca,
+   categoria, produto, vendedor e forma de pagamento vêm da sonda como total do
+   período. Elas continuam mostrando a amostra inteira, e a interface diz isso
+   (ver LegendaDaAmostra) em vez de deixar o rótulo do filtro mentir.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/** Datas medidas, em ordem crescente. */
+const datasDaAmostra = real ? real.dailySales.map((d) => d.date).sort() : [];
+
+/** Dia da semana (domingo = 0) de uma data ISO, sem depender do fuso local. */
+const diaDaSemana = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay();
+
+/** Os N últimos dias medidos — o recorte que o filtro pediu. */
+function diasNaJanela(days: number): string[] {
+  if (!real) return [];
+  return datasDaAmostra.slice(-effectiveDays(days));
+}
+
+/** Faturamento e nº de vendas da rede no recorte, somados da série diária. */
+function vendasNaJanela(days: number): { total: number; count: number } {
+  if (!real) return { total: revenue, count: salesCount };
+  const dias = new Set(diasNaJanela(days));
+  let total = 0;
+  let count = 0;
+  for (const d of real.dailySales) {
+    if (!dias.has(d.date)) continue;
+    total += d.total;
+    count += d.count;
+  }
+  return { total: round2(total), count };
+}
+
+/**
+ * Quanto o recorte de datas pesa na amostra inteira.
+ *
+ * É o fator que leva um número medido no período todo para dentro da janela,
+ * quando o dado não tem dia (unidades vendidas do recorte de produto, por
+ * exemplo). Fora da amostra real vale 1 — nada é projetado.
+ */
+function fatiaDaJanela(days: number): number {
+  if (!real) return 1;
+  const total = vendasNaJanela(realWindowDays).total;
+  return total > 0 ? vendasNaJanela(days).total / total : 1;
+}
+
+/**
+ * Faturamento por loja no recorte, reconstruído de `weekdayStore`.
+ *
+ * O nº de VENDAS por loja não tem quebra diária na sonda; ele é rateado pela
+ * fatia de faturamento que a loja fez no recorte, e só alimenta rótulos
+ * secundários — nenhuma decisão sai dele.
+ */
+function salesByStoreNaJanela(days: number): typeof salesByStore {
+  if (!real) return salesByStore;
+  const semanaDoRecorte = new Set(diasNaJanela(days).map(diaDaSemana));
+  const porLoja = new Map<string, number>();
+  for (const w of real.weekdayStore) {
+    if (!semanaDoRecorte.has(w.weekday)) continue;
+    porLoja.set(w.storeExt, (porLoja.get(w.storeExt) ?? 0) + w.total);
+  }
+  return real.salesByStore.map((s) => {
+    const total = round2(porLoja.get(s.externalId) ?? 0);
+    const fatia = s.total > 0 ? total / s.total : 0;
+    return {
+      storeId: `st_${s.externalId}`,
+      storeName: s.name,
+      count: Math.round(s.count * fatia),
+      total,
+    };
+  });
+}
 
 /** Cobertura geral e por marca (feedback 06). */
 /**
@@ -916,17 +1022,26 @@ function transferFlow(group: ProductGroup = 'todos', category?: string | string[
   return { nodes: [...names].map((name) => ({ name })), links };
 }
 
-function heatmap(fatia = 1, aproximado = false, storeId?: string) {
+function heatmap(fatia = 1, aproximado = false, storeId?: string, days = 0) {
   // A sonda traz loja × dia da semana sem quebra por categoria: mesma regra da
-  // série diária — projeta pela fatia do recorte e declara a aproximação.
+  // série diária — projeta pela fatia do recorte de PRODUTO e declara a
+  // aproximação. Já o recorte de DATA é exato: o dia da semana fora da janela
+  // sai do mapa em vez de aparecer como se tivesse sido medido nela.
   const escopo = storeId ? stores.filter((s) => s.id === storeId) : stores;
   const yLabels = escopo.map((s) => s.name);
   const cells: [number, number, number][] = [];
   if (real) {
+    const naJanela = days > 0 ? new Set(diasNaJanela(days).map(diaDaSemana)) : null;
     const byKey = new Map(real.weekdayStore.map((w) => [`${w.storeExt}|${w.weekday}`, w.total]));
     escopo.forEach((s, yi) =>
       WEEK.forEach((_, wd) =>
-        cells.push([wd, yi, Math.round((byKey.get(`${s.externalId}|${wd}`) ?? 0) * fatia)]),
+        cells.push([
+          wd,
+          yi,
+          naJanela && !naJanela.has(wd)
+            ? 0
+            : Math.round((byKey.get(`${s.externalId}|${wd}`) ?? 0) * fatia),
+        ]),
       ),
     );
   } else {
@@ -1316,14 +1431,30 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           (a, st) => a + noGrupo.reduce((b, p) => b + (stockQty.get(key(st.id, p.id)) ?? 0), 0),
           0,
         );
+      // Faturamento e nº de vendas do RECORTE DE DATA, somados da série diária
+      // — é a parte da amostra que tem dia, e portanto responde ao filtro.
+      const janela = vendasNaJanela(days);
       // `salesCount` proporcional e declarado: uma venda mistura armação e
-      // lente, então "quantas vendas do recorte" não existe no dado da sonda.
-      const vendas = Math.max(1, Math.round(salesCount * base.fatia));
+      // lente, então "quantas vendas do recorte de produto" não existe no dado
+      // da sonda. A proporção incide sobre o nº de vendas DA JANELA.
+      const vendas = Math.max(1, Math.round(janela.count * base.fatia));
+      /*
+         Faturamento do recorte DENTRO da janela.
+
+         Sem recorte de produto o número é medido: soma da série diária no
+         período. Com recorte, a sonda não quebra produto × dia, então vale a
+         mesma regra que a série, o mapa de calor e a forma de pagamento já
+         usam — o total MEDIDO da janela vezes a fatia MEDIDA que o recorte
+         ocupa no período. É projeção, e a tela declara isso em
+         `vendasAproximadas`. O que não podia continuar é o que havia antes:
+         o total dos 7 dias parado embaixo de um rótulo de 1 dia.
+      */
+      const receitaDaJanela = base.recortando ? round2(janela.total * base.fatia) : janela.total;
       return {
         days,
-        revenue: base.recortando ? base.receita : revenue,
-        salesCount: base.recortando ? vendas : salesCount,
-        avgTicket: round2((base.recortando ? base.receita : revenue) / (base.recortando ? vendas : salesCount)),
+        revenue: receitaDaJanela,
+        salesCount: base.recortando ? vendas : janela.count,
+        avgTicket: round2(receitaDaJanela / (base.recortando ? vendas : janela.count)),
         // O que o recorte de fato move: R$/peça. Ver o comentário em bi.math.
         avgUnitPrice: base.unidades > 0 ? round2(base.receita / base.unidades) : 0,
         // Giro MENSAL, e não "unidades do período ÷ estoque": a janela real da
@@ -1335,7 +1466,11 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         rupturaRate: round2((al.out / Math.max(1, positions)) * 100),
         lowStockRate: round2((al.low / Math.max(1, positions)) * 100),
         stockUnits: unidadesEmEstoque,
-        unitsSold: base.unidades,
+        // "Unidades vendidas no período" ficava parado ao lado de um
+        // faturamento que se movia — dois números vizinhos contando histórias
+        // diferentes sobre a mesma janela. A unidade não tem dia na sonda, então
+        // acompanha pela mesma fatia declarada em `vendasAproximadas`.
+        unitsSold: Math.round(base.unidades * fatiaDaJanela(days)),
         stockPositions: positions,
         outOfStock: al.out,
         lowStock: al.low,
@@ -1345,10 +1480,11 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     }
     if (url === '/bi/sales-timeseries') return timeseries(days, base.recortando ? base.fatia : 1, base.recortando);
     if (url === '/bi/sales-by-dimension')
-      return byDimension(one(params.by) ?? 'store', grupoBi, tipoBi, lojaBi);
+      return byDimension(one(params.by) ?? 'store', grupoBi, tipoBi, lojaBi, days);
     if (url === '/bi/sales-flow') return salesFlow(grupoBi, tipoBi, lojaBi);
     if (url === '/bi/transfer-flow') return transferFlow(grupoBi, tipoBi, lojaBi);
-    if (url === '/bi/heatmap') return heatmap(base.recortando ? base.fatia : 1, base.recortando, lojaBi);
+    if (url === '/bi/heatmap')
+      return heatmap(base.recortando ? base.fatia : 1, base.recortando, lojaBi, days);
   }
 
   // Relatórios

@@ -164,7 +164,7 @@ export function Sales() {
             ]}
           />
         </div>
-        <LegendaDaAmostra />
+        <LegendaDaAmostra days={days} />
         {analysis.isLoading ? (
           <Loading />
         ) : top.length > 0 ? (

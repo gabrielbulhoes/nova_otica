@@ -809,7 +809,7 @@ function FairSplit() {
         </BotaoPrimario>
       </div>
 
-      <LegendaDaAmostra />
+      <LegendaDaAmostra days={days} />
 
       {submitted && (
         split.isLoading ? (
@@ -952,7 +952,7 @@ export function Planning() {
         {GROUP_OPTIONS.find((g) => g.value === group)!.hint}
       </div>
 
-      <LegendaDaAmostra />
+      <LegendaDaAmostra days={days} />
 
       {/* ── O que fazer hoje: prioridades em 1 olhada, ação em 1 clique ──
           É o painel de decisão da tela, e por isso ganha a abertura completa do
