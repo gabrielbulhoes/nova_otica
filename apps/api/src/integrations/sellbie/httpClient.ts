@@ -40,6 +40,17 @@ function unwrap<T>(payload: unknown): T[] {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Params em uma linha curta, para caber no log sem escondê-lo. */
+function resumirParams(params?: object): string {
+  if (!params) return '';
+  return Object.entries(params)
+    .map(([k, v]) => {
+      const s = String(v ?? '');
+      return `${k}=${s.length > 40 ? `${s.slice(0, 37)}…(${s.length})` : s}`;
+    })
+    .join(' ');
+}
+
 /**
  * Cliente HTTP da API CDS (modo "live").
  * - Autentica com os três cabeçalhos da CDS: x_api_key, x_api_token e
@@ -84,7 +95,23 @@ export class SellbieHttpClient implements SellbieClient {
       assertWindow();
       try {
         const res = await this.http.get(route, cfg);
-        return unwrap<T>(res.data);
+        const rows = unwrap<T>(res.data);
+        // O conector corta a resposta num teto que não documenta e não sinaliza
+        // — nem status diferente, nem campo de total, nem cursor. Sem este
+        // aviso, uma rota truncada só aparece semanas depois como "o número do
+        // painel está estranho". Aqui ela aparece no log da própria chamada.
+        if (rows.length >= env.SELLBIE_PAGE_LIMIT) {
+          log.warn('Resposta possivelmente truncada pelo conector', {
+            route,
+            linhas: rows.length,
+            teto: env.SELLBIE_PAGE_LIMIT,
+            // Resumido: `cod_prod` chega com 250 códigos e despejar a lista
+            // inteira a cada aviso deixaria o log ilegível justo na hora em
+            // que ele é a única pista.
+            params: resumirParams(params),
+          });
+        }
+        return rows;
       } catch (err) {
         attempt += 1;
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;

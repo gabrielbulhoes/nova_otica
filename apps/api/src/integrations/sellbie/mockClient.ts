@@ -320,8 +320,11 @@ export class SellbieMockClient implements SellbieClient {
     return data.tamanhos;
   }
 
-  async getProdutos(_params?: SellbieDateRange): Promise<SellbieProduto[]> {
-    return data.produtos;
+  async getProdutos(params?: SellbieDateRange): Promise<SellbieProduto[]> {
+    // Honra date_start/date_end como o conector: é sobre `data_cadastro` que a
+    // varredura do catálogo fatia, e um mock que ignorasse o filtro faria a
+    // varredura parecer correta aqui e falhar só em produção.
+    return filterByDate(data.produtos, (p) => p.data_cadastro, params);
   }
 
   async getClientes(): Promise<SellbieCliente[]> {

@@ -192,6 +192,29 @@ export const mapEstoqueGrade = (
     }));
 };
 
+/**
+ * Produto derivado de uma linha de /cds/estoquegrade — rede de segurança para
+ * quando o catálogo vem truncado.
+ *
+ * `cds/produtos` corta a resposta num teto não documentado; `cds/estoquegrade`
+ * não tem filtro de data e é lido em lotes por `cod_prod`, então ele enxerga
+ * produtos que o catálogo não devolveu. Sem esta ponte, cada um desses vira
+ * uma posição de estoque descartada por "produto desconhecido" — foi assim que
+ * 4.268 posições sumiram na carga de 04/08/2026.
+ *
+ * O registro é deliberadamente MAGRO: só o que a grade realmente traz. `cost`
+ * fica ausente de propósito — a grade não tem custo, e inventar um zero
+ * envenenaria margem e curva ABC com um número que parece medido. Quando o
+ * catálogo completar o produto, o upsert de `syncProducts` sobrescreve isto.
+ */
+export const mapProdutoDaGrade = (g: SellbieEstoqueGrade) => ({
+  externalId: idStr(g.CODIGO),
+  sku: str(g.CODIGO),
+  description: str(g.DESCRICAO) ?? `Produto ${idStr(g.CODIGO)}`,
+  category: str(g.GRUPO),
+  price: num(g.PRECO_VENDA),
+});
+
 export const mapContaPagar = (c: SellbieContaPagar) => ({
   externalId: idStr(c.conta),
   dueDate: date(c.data_vencimento),

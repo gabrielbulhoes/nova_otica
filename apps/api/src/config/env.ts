@@ -51,6 +51,26 @@ const schema = z.object({
   // Identificação do "vendedor" nas vendas online exportadas ao ERP
   // (campo funcionario do POST /cds/inserirvenda).
   SELLBIE_EXPORT_SELLER: z.string().default('ECOMMERCE'),
+  // ─── Contorno do truncamento silencioso do conector ──────────────────────
+  // O conector CDS não tem paginação (nenhuma rota aceita page/limit/offset) e
+  // corta a resposta num teto que não documenta: em 04/08/2026 uma chamada só
+  // a cds/produtos devolveu 5.318 dos ~21.683 produtos da rede, sem erro e sem
+  // sinal de que faltava o resto. A partir deste número de linhas a resposta é
+  // tratada como truncada e a faixa de datas é fatiada (ver sweep.ts).
+  // Abaixo do teto real de propósito: fatiar demais custa chamadas, aceitar um
+  // truncamento custa catálogo.
+  SELLBIE_PAGE_LIMIT: z.coerce.number().int().positive().default(4000),
+  // Piso da varredura do catálogo. 1900-01-01 de propósito: o conector usa
+  // "1900-01-01" como data-nula, e um piso em 2000 excluiria em silêncio todo
+  // produto sem data de cadastro.
+  SELLBIE_CATALOG_START: z.string().default('1900-01-01'),
+  // Teto de chamadas por varredura — trava contra fatiamento descontrolado.
+  SELLBIE_SWEEP_MAX_CALLS: z.coerce.number().int().positive().default(400),
+  // Produtos por chamada em cds/estoquegrade. A rota não tem filtro de data;
+  // o que ela aceita é `cod_prod` como lista CSV, e é assim que o estoque da
+  // rede é lido em pedaços. 250 códigos ≈ 1.750 caracteres de query string,
+  // bem abaixo do limite de URL de qualquer servidor.
+  SELLBIE_STOCK_CHUNK: z.coerce.number().int().positive().default(250),
   SELLBIE_WINDOW_START: z.string().regex(timeRegex).default('06:00'),
   SELLBIE_WINDOW_END: z.string().regex(timeRegex).default('07:00'),
   // A doc da CDS não define janela de horário — em live, deixe true a menos
