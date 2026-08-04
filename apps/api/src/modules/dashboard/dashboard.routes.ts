@@ -34,7 +34,10 @@ dashboardRouter.get(
       lastSync,
     ] = await Promise.all([
       storeId ? Promise.resolve(1) : prisma.store.count(),
-      prisma.product.count(),
+      // Só os ativos. O cadastro do ERP guarda tudo o que já existiu — 60.610
+      // linhas, das quais boa parte saiu de linha —, e o painel diz "produtos
+      // no catálogo", que o gestor lê como "o que eu tenho para vender".
+      prisma.product.count({ where: { active: true } }),
       prisma.customer.count(),
       prisma.stockItem.aggregate({ where: stockWhere, _sum: { quantity: true } }),
       prisma.sale.aggregate({

@@ -130,11 +130,49 @@ describe('lerEstoqueEmLotes', () => {
     expect([...acc.orfaos.keys()].sort()).toEqual(['b', 'c']);
   });
 
-  it('desiste da rota quando ela recusa até códigos isolados', async () => {
-    // maxLote 0 = recusa qualquer lista. Insistir código a código em 60 mil
-    // produtos seriam 60 mil chamadas ao ERP do cliente; o contrato é falhar
-    // alto e deixar o estoque anterior de pé.
-    const { client } = conector(codigos(100), { maxLote: 0 });
-    await expect(lerEstoqueEmLotes(client, codigos(100), new Map())).rejects.toThrow(/a rota está falhando/);
+  it('cai para leitura por filial quando cod_prod é recusado até isolado', async () => {
+    // O caso REAL de 04/08/2026: HTTP 500 em `cod_prod` de 250 códigos até 2.
+    // Recusa de um código isolado prova que o problema é o parâmetro, não o
+    // tamanho — insistir seriam 60 mil chamadas para colher 60 mil erros.
+    const universo = codigos(40);
+    const chamadas: string[] = [];
+    const client = {
+      async getEstoqueGrade(query?: { cod_prod?: string; cod_loja?: string }) {
+        if (query?.cod_prod) {
+          chamadas.push(`prod:${query.cod_prod.split(',').length}`);
+          throw new Error('Request failed with status code 500');
+        }
+        chamadas.push(`loja:${query?.cod_loja ?? '-'}`);
+        // Por filial, cada linha traz só o estoque daquela loja.
+        return universo.map((c) => ({
+          CODIGO: c,
+          GRADE: '1',
+          ESTOQUE: { X: { ID_FILIAL: String(query?.cod_loja), ESTOQUE: '7' } },
+        }));
+      },
+    } as never;
+
+    const acc = await lerEstoqueEmLotes(client, universo, new Map(), ['1', '2', '3']);
+
+    expect(chamadas.filter((c) => c.startsWith('loja:'))).toEqual(['loja:1', 'loja:2', 'loja:3']);
+    // Cada produto tem posição nas três filiais — a chave de deduplicação
+    // precisa incluir a loja, senão só a primeira sobreviveria.
+    expect(acc.posicoes.size).toBe(120);
+    expect(acc.posicoes.get('1|p0')).toBe(7);
+    expect(acc.posicoes.get('3|p0')).toBe(7);
+  });
+
+  it('só sobra a chamada única quando os dois filtros são recusados', async () => {
+    const universo = codigos(10);
+    const client = {
+      async getEstoqueGrade(query?: { cod_prod?: string; cod_loja?: string }) {
+        if (query?.cod_prod || query?.cod_loja) throw new Error('Request failed with status code 500');
+        return universo.map((c) => linha(c));
+      },
+    } as never;
+
+    const acc = await lerEstoqueEmLotes(client, universo, new Map(), ['1', '2']);
+    expect(acc.posicoes.size).toBe(20);
+    expect(acc.posicoes.get('1|p0')).toBe(2);
   });
 });
