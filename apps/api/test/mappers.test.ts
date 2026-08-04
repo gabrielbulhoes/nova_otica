@@ -129,7 +129,7 @@ describe('mappers — contrato real da CDS', () => {
     expect(d.quantity).toBe(2);
   });
 
-  it('pagamento: identidade venda+parcela; forma com padding aparada', () => {
+  it('pagamento: identidade venda+parcela+forma; forma com padding aparada', () => {
     const d = mapPagamento({
       codigo_venda: 1031,
       data_venda: '2026-07-08',
@@ -140,7 +140,10 @@ describe('mappers — contrato real da CDS', () => {
       parcela_atual: 3,
       status_pag: 'Aberto',
     });
-    expect(d.externalId).toBe('22-1031-p3');
+    // A forma de pagamento entra na identidade: sem ela, venda paga com dois
+    // meios na MESMA parcela gerava duas linhas com o mesmo id e a segunda
+    // sobrescrevia a primeira — 68% das vendas da rede divergiam por isso.
+    expect(d.externalId).toBe('22-1031-p3-visapos');
     expect(d.method).toBe('VISA POS');
     expect(d.amount).toBe(109.2);
     expect(d.installments).toBe(10);

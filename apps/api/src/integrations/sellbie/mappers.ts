@@ -163,9 +163,22 @@ export const mapDetalheVenda = (d: SellbieDetalheVenda) => {
 };
 
 export const mapPagamento = (p: SellbiePagamentoVenda) => ({
-  // O conector não expõe id do pagamento; a parcela dentro da venda é a
-  // identidade natural (venda + nº da parcela).
-  externalId: `${saleExternalId(p.codigo_loja, p.codigo_venda)}-p${int(p.parcela_atual) || 1}`,
+  // O conector não expõe id do pagamento, então a identidade é montada.
+  //
+  // Era só `venda + nº da parcela`, e isso COLIDIA: venda paga com dois meios
+  // na mesma parcela — R$ 200 no cartão e R$ 100 em dinheiro, ambos
+  // `parcela_atual = 1` — gerava duas linhas com o mesmo id, e a segunda
+  // sobrescrevia a primeira. Em ótica, pagamento dividido é rotina: medido na
+  // rede em 04/08/2026, 1.464 de 2.146 vendas com pagamento (68%) tinham a
+  // soma das parcelas diferente do total da venda.
+  //
+  // A forma de pagamento entra na chave. O que ainda pode empatar — mesmo meio
+  // e mesma parcela, duas vezes na mesma venda — é resolvido pelo sync com um
+  // sufixo de ordem, que é estável porque a janela é reescrita inteira a cada
+  // sincronização.
+  externalId: `${saleExternalId(p.codigo_loja, p.codigo_venda)}-p${int(p.parcela_atual) || 1}-${
+    str(p.forma_pag)?.toLowerCase().replace(/\s+/g, '') ?? 'na'
+  }`,
   externalSaleId: saleExternalId(p.codigo_loja, p.codigo_venda),
   method: str(p.forma_pag),
   amount: num(p.valor_forma_pag) ?? 0,

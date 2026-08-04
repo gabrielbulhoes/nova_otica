@@ -71,6 +71,13 @@ const schema = z.object({
   // rede é lido em pedaços. 250 códigos ≈ 1.750 caracteres de query string,
   // bem abaixo do limite de URL de qualquer servidor.
   SELLBIE_STOCK_CHUNK: z.coerce.number().int().positive().default(250),
+  // Teto DURO observado em cds/estoquegrade: cada filial devolveu exatas
+  // 50.000 linhas em 04/08/2026, sem aviso. É diferente de SELLBIE_PAGE_LIMIT,
+  // que é o limiar de SUSPEITA — este é o número acima do qual a leitura da
+  // filial é dada como cortada, e a zeragem das posições sem saldo é pulada
+  // (o que não veio pode ter sido apenas truncado, não zerado). Abaixo do teto
+  // real de propósito: com only_disp uma filial devolve alguns milhares.
+  SELLBIE_STOCK_HARD_CAP: z.coerce.number().int().positive().default(20_000),
   // Janela de vendas do sync diário. O padrão do conector é "último mês", mas
   // implícito: sem faixa explícita não há como fatiar quando a resposta é
   // truncada, e detalhesVendas já chega perto do teto com 30 dias de rede.

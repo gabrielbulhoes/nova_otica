@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
@@ -530,10 +531,16 @@ export interface AcumuladorDeEstoque {
   /** "produto|variante" já contabilizados — a soma entre lotes não repete. */
   vistas: Set<string>;
   linhas: number;
+  /**
+   * Alguma resposta bateu no teto DURO do conector. Enquanto isto for true, o
+   * que não veio na leitura não pode ser interpretado como "zerou": pode ter
+   * sido apenas cortado.
+   */
+  truncou: boolean;
 }
 
 function novoAcumulador(): AcumuladorDeEstoque {
-  return { posicoes: new Map(), orfaos: new Map(), vistas: new Set(), linhas: 0 };
+  return { posicoes: new Map(), orfaos: new Map(), vistas: new Set(), linhas: 0, truncou: false };
 }
 
 /**
@@ -631,16 +638,50 @@ export async function lerEstoqueEmLotes(
   const porLoja = async (motivo: string) => {
     log.warn(`Estoque: ${motivo}; tentando ler a grade por filial`, { filiais: lojas.length });
     acc = novoAcumulador();
+
+    // `only_disp: 1` = só produto COM saldo.
+    //
+    // Sem ele, a filial devolve uma linha para cada produto do catálogo, tenha
+    // saldo ou não: com 60 mil produtos, a rede bateu no teto DURO do conector
+    // — exatas 50.000 linhas em cada uma das 22 filiais, em 04/08/2026. O que
+    // passava de 50 mil era descartado sem aviso, e o que vinha era, na maior
+    // parte, zero.
+    //
+    // Com o filtro, a filial devolve só o que existe na prateleira: menos
+    // linhas, longe do teto, e é exatamente o dado que interessa. O preço é que
+    // o produto que ZEROU deixa de aparecer — tratado pela zeragem em
+    // `syncStock`, que só roda quando a leitura veio inteira.
+    let somenteComSaldo = true;
     for (const loja of lojas) {
       let parte: SellbieEstoqueGrade[];
       try {
-        parte = await client.getEstoqueGrade({ cod_loja: loja });
+        parte = await client.getEstoqueGrade(
+          somenteComSaldo ? { cod_loja: loja, only_disp: 1 } : { cod_loja: loja },
+        );
       } catch (err) {
+        if (somenteComSaldo) {
+          // O conector recusou `only_disp`. Recomeça sem ele, aceitando o
+          // volume — e a zeragem fica desligada se o teto for atingido.
+          log.warn('Estoque: only_disp recusado; relendo as filiais sem o filtro', {
+            erro: err instanceof Error ? err.message : String(err),
+          });
+          somenteComSaldo = false;
+          acc = novoAcumulador();
+          return porLojaSemFiltro();
+        }
         // Se `cod_loja` também é recusado, os dois filtros da rota estão fora
         // e só sobra pedir tudo. Truncado é ruim; nada é pior.
         return chamadaUnica(
           `cod_loja também recusado (${err instanceof Error ? err.message : String(err)})`,
         );
+      }
+      if (parte.length >= env.SELLBIE_STOCK_HARD_CAP) {
+        acc.truncou = true;
+        log.warn('Estoque: filial no teto duro do conector — leitura incompleta', {
+          loja,
+          linhas: parte.length,
+          teto: env.SELLBIE_STOCK_HARD_CAP,
+        });
       }
       // `escopo` = a filial: a mesma linha produto×variante volta uma vez por
       // loja, e sem isso só a primeira seria contada.
@@ -648,14 +689,56 @@ export async function lerEstoqueEmLotes(
     }
     log.info('Estoque: grade lida por filial', {
       filiais: lojas.length,
+      somenteComSaldo,
       linhas: acc.linhas,
       posicoes: acc.posicoes.size,
+      truncou: acc.truncou,
+    });
+    return acc;
+  };
+
+  /** Releitura por filial sem `only_disp`, quando o conector o recusa. */
+  const porLojaSemFiltro = async () => {
+    for (const loja of lojas) {
+      let parte: SellbieEstoqueGrade[];
+      try {
+        parte = await client.getEstoqueGrade({ cod_loja: loja });
+      } catch (err) {
+        return chamadaUnica(`cod_loja recusado (${err instanceof Error ? err.message : String(err)})`);
+      }
+      if (parte.length >= env.SELLBIE_STOCK_HARD_CAP) acc.truncou = true;
+      absorverGrade(acc, parte, produtosConhecidos, undefined, loja);
+    }
+    log.info('Estoque: grade lida por filial (sem only_disp)', {
+      filiais: lojas.length,
+      linhas: acc.linhas,
+      posicoes: acc.posicoes.size,
+      truncou: acc.truncou,
     });
     return acc;
   };
 
   if (codigos.length === 0) {
     return lojas.length > 0 ? porLoja('catálogo local vazio') : chamadaUnica('catálogo local vazio');
+  }
+
+  // SONDA DECISIVA, antes de qualquer bisseção.
+  //
+  // A bisseção existe para o caso "a lista ficou longa demais". Ela é péssima
+  // para o caso "a rota não aceita este parâmetro": desceria de 250 a 1 em oito
+  // divisões e, como o cliente HTTP repete erro 5xx quatro vezes com espera
+  // exponencial (2s+4s+8s+16s), cada recusa custa mais de meio minuto. Foi o
+  // que a rede mostrou em 04/08/2026 — dez minutos moendo, com HTTP 500 em
+  // todos os tamanhos.
+  //
+  // Um código só responde a pergunta em uma chamada: se nem UM é aceito, o
+  // problema é o parâmetro, e insistir é desperdício puro.
+  try {
+    await client.getEstoqueGrade({ cod_prod: codigos[0] });
+  } catch (err) {
+    return lojas.length > 0
+      ? porLoja(`cod_prod recusado já com um único código (${err instanceof Error ? err.message : String(err)})`)
+      : chamadaUnica('cod_prod recusado já com um único código');
   }
 
   const fila = emLotes(codigos, env.SELLBIE_STOCK_CHUNK);
@@ -757,7 +840,7 @@ async function syncStock(client: Client) {
     });
   }
 
-  let written = 0;
+  const resolvidas: { storeId: string; productId: string; quantity: number }[] = [];
   let skipped = 0;
   for (const [key, quantity] of acc.posicoes) {
     const [externalStoreId, externalProductId] = key.split('|');
@@ -767,15 +850,87 @@ async function syncStock(client: Client) {
       skipped += 1; // loja ainda não cadastrada (ex.: registro de teste do ERP)
       continue;
     }
-    await prisma.stockItem.upsert({
-      where: { storeId_productId: { storeId, productId } },
-      create: { storeId, productId, quantity, available: quantity, syncedAt: new Date() },
-      update: { quantity, available: quantity, syncedAt: new Date() },
-    });
-    written += 1;
+    resolvidas.push({ storeId, productId, quantity });
   }
   if (skipped > 0) log.warn('Posições de estoque ignoradas (loja desconhecida)', { skipped });
+
+  const carimbo = new Date();
+  const written = await gravarEstoque(resolvidas, carimbo);
+
+  // ZERAGEM — o outro lado do `only_disp`.
+  //
+  // Pedindo só o que tem saldo, o produto que ZEROU simplesmente não vem na
+  // resposta. Sem isto, ele ficaria no banco com o saldo da véspera para
+  // sempre: o painel mostraria 6 unidades de uma armação que já saiu toda, e a
+  // sugestão de remanejamento mandaria buscar o que não existe.
+  //
+  // Quem não foi tocado por esta leitura não tem saldo. Uma instrução, contra
+  // o carimbo desta execução.
+  //
+  // Só roda com a leitura INTEIRA. Se alguma filial bateu no teto do conector,
+  // "não veio" deixa de significar "zerou" e passa a significar "foi cortado"
+  // — e zerar aí apagaria estoque real.
+  if (acc.truncou) {
+    log.warn('Estoque: zeragem pulada — alguma filial veio truncada', {
+      teto: env.SELLBIE_STOCK_HARD_CAP,
+    });
+  } else {
+    const zeradas = await prisma.$executeRawUnsafe(
+      `UPDATE "StockItem"
+          SET "quantity" = 0, "available" = 0, "syncedAt" = $1, "updatedAt" = NOW()
+        WHERE ("syncedAt" IS NULL OR "syncedAt" < $1)
+          AND ("quantity" <> 0 OR "available" <> 0)`,
+      carimbo,
+    );
+    if (zeradas > 0) log.info('Estoque: posições sem saldo zeradas', { zeradas });
+  }
+
   return { read: acc.linhas, written };
+}
+
+/**
+ * Grava as posições de estoque em lote.
+ *
+ * Era um `upsert` do Prisma por posição, dentro de um laço. Com a leitura por
+ * filial a rede devolveu 1,1 MILHÃO de posições — 22 filiais × ~50 mil linhas —
+ * e um milhão de idas e voltas ao banco, a poucos milissegundos cada, é a
+ * diferença entre o sync durar um minuto e durar uma hora. Todo dia.
+ *
+ * `INSERT ... ON CONFLICT` faz o mesmo trabalho em mil instruções em vez de um
+ * milhão. `reserved` fica de FORA do UPDATE de propósito: ele é das
+ * movimentações internas pendentes, não do ERP, e sobrescrevê-lo aqui apagaria
+ * a reserva de toda transferência em andamento.
+ */
+async function gravarEstoque(
+  posicoes: { storeId: string; productId: string; quantity: number }[],
+  carimbo: Date,
+): Promise<number> {
+  // 4 parâmetros por linha (a quantidade serve a `quantity` e a `available`),
+  // bem abaixo do teto de 65.535 parâmetros por instrução do Postgres.
+  const POR_LOTE = 1_000;
+  let written = 0;
+  for (const lote of emLotes(posicoes, POR_LOTE)) {
+    const valores: string[] = [];
+    const params: unknown[] = [];
+    for (const p of lote) {
+      const i = params.length;
+      valores.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 4},0,$${i + 5},NOW(),NOW())`);
+      params.push(randomUUID(), p.storeId, p.productId, p.quantity, carimbo);
+    }
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "StockItem"
+         ("id","storeId","productId","quantity","available","reserved","syncedAt","createdAt","updatedAt")
+       VALUES ${valores.join(',')}
+       ON CONFLICT ("storeId","productId") DO UPDATE SET
+         "quantity"  = EXCLUDED."quantity",
+         "available" = EXCLUDED."available",
+         "syncedAt"  = EXCLUDED."syncedAt",
+         "updatedAt" = NOW()`,
+      ...params,
+    );
+    written += lote.length;
+  }
+  return written;
 }
 
 async function syncSales(client: Client, range?: { date_start: string; date_end: string }) {
@@ -874,30 +1029,48 @@ async function syncPayments(client: Client, range?: { date_start: string; date_e
   );
   const sales = await prisma.sale.findMany({ select: { id: true, externalId: true } });
   const saleMap = new Map(sales.map((s) => [s.externalId, s.id]));
-  let written = 0;
+
+  // Identidade montada, com sufixo de ordem para o empate residual (mesmo meio
+  // e mesma parcela repetidos na mesma venda).
+  const porId = new Map<string, { externalId: string; saleId: string; method?: string; amount: number; installments?: number; paidAt?: Date }>();
+  const vendasTocadas = new Set<string>();
   for (const raw of rows) {
     const d = map.mapPagamento(raw);
     const saleId = saleMap.get(d.externalSaleId);
     if (!saleId) continue;
-    const data = {
+    let externalId = d.externalId;
+    for (let n = 2; porId.has(externalId); n += 1) externalId = `${d.externalId}#${n}`;
+    porId.set(externalId, {
+      externalId,
       saleId,
       method: d.method,
       amount: d.amount,
       installments: d.installments,
       paidAt: d.paidAt,
-    };
-    if (d.externalId) {
-      await prisma.payment.upsert({
-        where: { externalId: d.externalId },
-        create: { externalId: d.externalId, ...data },
-        update: data,
-      });
-    } else {
-      await prisma.payment.create({ data });
-    }
-    written += 1;
+    });
+    vendasTocadas.add(saleId);
   }
-  return { read: rows.length, written };
+
+  // A janela é REESCRITA, não sobreposta. Duas razões, e as duas importam:
+  //
+  // 1. A chave de identidade mudou nesta versão. Um upsert deixaria as linhas
+  //    do esquema antigo para trás, e elas somariam junto com as novas — o
+  //    faturamento por forma de pagamento dobraria, em silêncio.
+  // 2. Pagamento cancelado ou corrigido no ERP some da resposta, e upsert não
+  //    tem como saber disso: a linha velha ficaria no banco para sempre.
+  //
+  // `Payment` não tem dependentes no schema, então apagar é seguro. Em lotes,
+  // porque a janela de 35 dias já traz milhares de vendas.
+  const ids = [...vendasTocadas];
+  for (const lote of emLotes(ids, 5_000)) {
+    await prisma.payment.deleteMany({ where: { saleId: { in: lote } } });
+  }
+  const novos = [...porId.values()];
+  for (const lote of emLotes(novos, 5_000)) {
+    await prisma.payment.createMany({ data: lote, skipDuplicates: true });
+  }
+
+  return { read: rows.length, written: novos.length };
 }
 
 /**
