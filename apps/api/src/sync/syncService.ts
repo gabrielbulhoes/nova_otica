@@ -7,6 +7,8 @@ import { HttpError } from '../http/helpers.js';
 import { getSellbieClient } from '../integrations/sellbie/index.js';
 import { checkWindow } from '../integrations/sellbie/window.js';
 import * as map from '../integrations/sellbie/mappers.js';
+import { emLotes, varrerPorJanelas } from '../integrations/sellbie/sweep.js';
+import type { SellbieEstoqueGrade } from '../integrations/sellbie/types.js';
 import { exportPaidOrdersToErp } from '../modules/commerce/erpExport.service.js';
 
 const log = logger.child({ mod: 'sync' });
@@ -344,8 +346,13 @@ async function syncSellers(client: Client) {
 
 async function syncProducts(client: Client, range?: { date_start: string; date_end: string }) {
   // Sem filtros o conector devolve só os últimos 30 dias — o catálogo
-  // completo exige faixa explícita desde o início da base.
-  const rows = await client.getProdutos(range ?? { date_start: '2000-01-01', date_end: isoToday() });
+  // completo exige faixa explícita desde o início da base. E uma faixa larga
+  // sozinha não basta: o conector corta a resposta num teto que não documenta
+  // (5.318 de ~21.683 produtos na carga de 04/08/2026) e não avisa. Por isso a
+  // faixa vai fatiada por bisseção, até cada janela caber sob o teto.
+  const rows = range
+    ? await client.getProdutos(range)
+    : await varrerCatalogo(client);
   const colors = await prisma.color.findMany({ select: { id: true, externalId: true } });
   const sizes = await prisma.size.findMany({ select: { id: true, externalId: true } });
   const colorMap = new Map(colors.map((c) => [c.externalId, c.id]));
@@ -377,6 +384,56 @@ async function syncProducts(client: Client, range?: { date_start: string; date_e
   return { read: rows.length, written };
 }
 
+/**
+ * Lê o catálogo inteiro varrendo `data_cadastro` por janelas adaptativas.
+ *
+ * O piso é 1900-01-01 por padrão, não 2000-01-01: "1900-01-01" é o
+ * placeholder de data-nula do próprio conector, e um piso em 2000 excluiria em
+ * silêncio todo produto cadastrado sem data — que é exatamente o tipo de perda
+ * que não aparece em erro nenhum.
+ */
+async function varrerCatalogo(client: Client) {
+  const r = await varrerPorJanelas({
+    entidade: 'produtos',
+    inicio: env.SELLBIE_CATALOG_START,
+    fim: isoToday(),
+    limite: env.SELLBIE_PAGE_LIMIT,
+    maxChamadas: env.SELLBIE_SWEEP_MAX_CALLS,
+    buscar: (janela) => client.getProdutos(janela),
+    chave: (p) => String(p.codigo_base),
+    aoRegistrar: (e) => {
+      if (e.lidos === 0) return; // janela vazia é o caso comum; não polui o log
+      log.info('Catálogo: janela lida', {
+        de: e.janela.date_start,
+        ate: e.janela.date_end,
+        lidos: e.lidos,
+        ...(e.fatiada ? { acao: 'fatiada' } : {}),
+      });
+    },
+  });
+
+  log.info('Catálogo varrido', {
+    produtos: r.itens.length,
+    chamadas: r.chamadas,
+    lidosBrutos: r.lidosBrutos,
+    janelasFatiadas: r.janelasTruncadas,
+  });
+  if (r.janelasIndivisiveis > 0) {
+    // Um único dia com mais registros que o teto: a bisseção chegou ao fim do
+    // que o filtro de data permite e ainda assim a resposta veio cortada.
+    log.warn('Catálogo possivelmente incompleto: dia único acima do teto', {
+      janelas: r.janelasIndivisiveis,
+      teto: env.SELLBIE_PAGE_LIMIT,
+    });
+  }
+  if (r.tetoAtingido) {
+    log.warn('Varredura do catálogo interrompida pelo teto de chamadas', {
+      maxChamadas: env.SELLBIE_SWEEP_MAX_CALLS,
+    });
+  }
+  return r.itens;
+}
+
 async function syncCustomers(client: Client) {
   const rows = await client.getClientes();
   let written = 0;
@@ -393,13 +450,97 @@ async function syncCustomers(client: Client) {
   return { read: rows.length, written };
 }
 
+/**
+ * Lê /cds/estoquegrade em lotes de produtos.
+ *
+ * A rota devolve o estoque da rede inteira aninhado por filial, mas está
+ * sujeita ao mesmo teto silencioso das outras: uma chamada única traria só o
+ * começo. Ela não aceita filtro de data — o que ela aceita é `cod_prod` como
+ * lista CSV, e é esse o pedaço com que se fatia.
+ *
+ * O catálogo local é a lista de códigos a pedir. Sem catálogo (primeira carga,
+ * ordem invertida), cai na chamada única de antes: melhor um estoque parcial
+ * que nenhum.
+ */
+async function lerEstoqueGrade(codigos: string[], client: Client) {
+  if (codigos.length === 0) {
+    log.warn('Estoque: catálogo local vazio, lendo a grade em chamada única');
+    return client.getEstoqueGrade();
+  }
+
+  const lotes = emLotes(codigos, env.SELLBIE_STOCK_CHUNK);
+  const porLinha = new Map<string, SellbieEstoqueGrade>();
+  let chamadas = 0;
+
+  for (const lote of lotes) {
+    const parte = await client.getEstoqueGrade({ cod_prod: lote.join(',') });
+    chamadas += 1;
+
+    // Guarda contra filtro ignorado: se o conector devolver majoritariamente
+    // códigos que não foram pedidos, `cod_prod` não está sendo aplicado e
+    // repetir isso 87 vezes seria puxar a mesma resposta truncada 87 vezes.
+    // A verificação roda só no primeiro lote — é onde ela decide alguma coisa.
+    if (chamadas === 1 && parte.length > 0) {
+      const pedidos = new Set(lote);
+      const forasteiros = parte.filter((g) => !pedidos.has(map.idStr(g.CODIGO))).length;
+      if (forasteiros > parte.length / 2) {
+        log.warn('Estoque: o conector ignorou cod_prod; voltando à chamada única', {
+          pedidos: lote.length,
+          recebidos: parte.length,
+          forasteiros,
+        });
+        return client.getEstoqueGrade();
+      }
+    }
+
+    // Identidade da linha é produto×variante (GRADE) — o mesmo produto tem
+    // uma linha por cor/tamanho e todas somam no mesmo saldo por loja.
+    for (const g of parte) porLinha.set(`${map.idStr(g.CODIGO)}|${map.idStr(g.GRADE)}`, g);
+  }
+
+  log.info('Estoque: grade lida em lotes', {
+    lotes: lotes.length,
+    chamadas,
+    produtosPedidos: codigos.length,
+    linhas: porLinha.size,
+  });
+  return [...porLinha.values()];
+}
+
 async function syncStock(client: Client) {
-  // Fonte: /cds/estoquegrade — UMA chamada devolve a rede inteira, com o
-  // estoque aninhado por filial em cada linha produto×variante. As variantes
-  // (GRADE) do mesmo produto são somadas por loja.
+  // Fonte: /cds/estoquegrade — cada linha é produto×variante com o estoque
+  // aninhado por filial. As variantes (GRADE) do mesmo produto são somadas
+  // por loja.
   const stores = await storeIdMap();
   const products = await productIdMap();
-  const rows = await client.getEstoqueGrade();
+  const rows = await lerEstoqueGrade([...products.keys()], client);
+
+  // Produtos que a grade conhece e o catálogo não. Antes eles viravam posição
+  // descartada; agora viram um cadastro magro derivado da própria grade, e a
+  // unidade que existe na prateleira passa a existir no painel. Se o catálogo
+  // vier completo, este laço não faz nada — é fallback, não caminho normal.
+  const orfaos = new Map<string, SellbieEstoqueGrade>();
+  for (const raw of rows) {
+    const codigo = map.idStr(raw.CODIGO);
+    if (codigo && !products.has(codigo) && !orfaos.has(codigo)) orfaos.set(codigo, raw);
+  }
+  if (orfaos.size > 0) {
+    for (const raw of orfaos.values()) {
+      const d = map.mapProdutoDaGrade(raw);
+      const criado = await prisma.product.upsert({
+        where: { externalId: d.externalId },
+        create: { ...d, syncedAt: new Date() },
+        // Update vazio: se o produto apareceu entre a leitura e agora, o dado
+        // do catálogo é melhor que o da grade e não deve ser sobrescrito.
+        update: {},
+        select: { id: true },
+      });
+      products.set(d.externalId, criado.id);
+    }
+    log.warn('Estoque: produtos criados a partir da grade (catálogo incompleto)', {
+      criados: orfaos.size,
+    });
+  }
 
   const byStoreProduct = new Map<string, number>(); // "loja|produto" -> qtd
   for (const raw of rows) {
@@ -416,7 +557,7 @@ async function syncStock(client: Client) {
     const storeId = stores.get(externalStoreId);
     const productId = products.get(externalProductId);
     if (!storeId || !productId) {
-      skipped += 1; // loja/produto ainda não cadastrado (ex.: registro de teste do ERP)
+      skipped += 1; // loja ainda não cadastrada (ex.: registro de teste do ERP)
       continue;
     }
     await prisma.stockItem.upsert({
@@ -426,7 +567,7 @@ async function syncStock(client: Client) {
     });
     written += 1;
   }
-  if (skipped > 0) log.warn('Posições de estoque ignoradas (loja/produto desconhecido)', { skipped });
+  if (skipped > 0) log.warn('Posições de estoque ignoradas (loja desconhecida)', { skipped });
   return { read: rows.length, written };
 }
 

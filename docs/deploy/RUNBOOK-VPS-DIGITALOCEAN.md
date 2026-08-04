@@ -368,6 +368,42 @@ await p.$disconnect();})()'
 60 produtos, o modo continua `mock`. Se vier um número entre os dois, a limpeza
 do 7.3 não aconteceu — **pare e reporte**, porque o banco está misturado.
 
+#### Se o catálogo vier curto — o truncamento silencioso do conector
+
+Na primeira carga real (04/08/2026) esta conferência devolveu **5.318 produtos
+e 3.933 unidades**. O conector CDS não tem paginação — nenhuma rota aceita
+`page`, `limit` ou `offset` — e corta a resposta num teto que não documenta,
+sem erro e sem nada indicando que faltou registro. É o pior tipo de falha:
+silenciosa e plausível.
+
+O contorno está no código e roda sozinho: a faixa de datas do catálogo é
+**fatiada por bisseção** até cada resposta caber sob o teto, e o estoque é lido
+em lotes de produtos por `cod_prod`. O log conta o que aconteceu:
+
+```bash
+docker compose -f docker-compose.prod.yml logs app | grep -E "Catálogo varrido|grade lida|truncada"
+```
+
+**Esperado:** `Catálogo varrido` com `produtos` perto de 21.683 e um punhado de
+`chamadas`. Se `produtos` ainda vier curto, o teto configurado está alto demais
+para esta instalação — baixe no `.env` e rode de novo:
+
+```
+SELLBIE_PAGE_LIMIT=2000
+```
+
+Duas linhas de log merecem atenção:
+
+- `Catálogo possivelmente incompleto: dia único acima do teto` — um único dia de
+  cadastro tem mais produtos que o teto. A bisseção chegou ao fim do que o
+  filtro de data permite; aí só a Sellbie resolve.
+- `Estoque: produtos criados a partir da grade (catálogo incompleto)` — a rede
+  de segurança agiu. `cds/estoquegrade` não tem filtro de data e enxerga
+  produtos que o catálogo não devolveu; em vez de descartar a posição de
+  estoque (foi assim que 4.268 sumiram), o produto é criado a partir da própria
+  grade, com descrição, grupo e preço, **sem custo**. Com o catálogo completo
+  este número é zero.
+
 E confira quantos DIAS de venda vieram — é a resposta para a dúvida que
 atravessou o projeto inteiro:
 
