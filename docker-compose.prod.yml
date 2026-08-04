@@ -24,28 +24,40 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # O .env INTEIRO vai para o container, em vez de uma lista escrita à mão.
+    #
+    # A lista à mão falhou em produção (04/08/2026): eu enumerei as variáveis
+    # que achei que importavam e 21 das 38 do schema da API ficaram de fora.
+    # A que doeu primeiro foi SELLBIE_IGNORE_WINDOW — estava no .env, o código
+    # a lia, e ela chegava `undefined` no processo. O sintoma foi "sincronização
+    # fora da janela permitida" com a variável configurada corretamente, que é o
+    # tipo de contradição que custa uma hora para diagnosticar.
+    #
+    # Enumeração à mão sempre esquece, e esquece em silêncio: a variável some,
+    # o default entra no lugar e nada indica que houve substituição. `env_file`
+    # não tem como esquecer.
+    env_file:
+      - .env
+    # `environment` vence o `env_file`, e é aqui que ficam só os valores
+    # COMPOSTOS ou que a produção precisa forçar.
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: postgresql://${POSTGRES_USER:-nova_otica}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-nova_otica}?schema=public
       # Sem defaults inseguros: o compose falha se estes não forem definidos.
       JWT_SECRET: ${JWT_SECRET:?defina um JWT_SECRET forte (>= 24 caracteres)}
-      SELLBIE_MODE: ${SELLBIE_MODE:-mock}
-      SYNC_ON_BOOT: ${SYNC_ON_BOOT:-true}
       WEB_ORIGIN: ${WEB_ORIGIN:?defina WEB_ORIGIN com origens explicitas, sem curinga}
-      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@novaotica.com}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:?defina uma SEED_ADMIN_PASSWORD própria}
-      # Credenciais da CDS/Sellbie. Só existem no .env da VPS, com permissão
-      # 600 — nunca no Git, seja ele público ou privado (repositório privado
-      # ganha colaborador, vira público de novo e é clonado para notebook).
-      # Ficam vazias enquanto SELLBIE_MODE=mock; quando o modo vira `live`, a
-      # própria API valida a presença delas e se recusa a subir sem.
-      SELLBIE_BASE_URL: ${SELLBIE_BASE_URL:-}
-      SELLBIE_API_KEY: ${SELLBIE_API_KEY:-}
-      SELLBIE_API_TOKEN: ${SELLBIE_API_TOKEN:-}
-      SELLBIE_CLIENT_ID: ${SELLBIE_CLIENT_ID:-}
-      SELLBIE_WINDOW_START: "${SELLBIE_WINDOW_START:-06:00}"
-      SELLBIE_WINDOW_END: "${SELLBIE_WINDOW_END:-07:00}"
-      SYNC_CRON: "${SYNC_CRON:-0 6 * * *}"
+      # As credenciais da CDS e todo o resto do SELLBIE_* chegam pelo env_file
+      # acima. Elas só existem no .env da VPS, com permissão 600 — nunca no
+      # Git, seja ele público ou privado.
+      #
+      # Atrás do Caddy, sem TRUST_PROXY o Express vê o IP do proxy em toda
+      # requisição: o limite de 10 tentativas de login por 15 minutos passaria a
+      # ser compartilhado por TODOS os usuários da rede, e um operador
+      # distraído trancaria as 19 lojas.
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      # O fuso do agendador é o de Natal, não o de São Paulo do default.
+      SYNC_TIMEZONE: ${SYNC_TIMEZONE:-America/Recife}
       # O lote das 6h é 6h EM NATAL. Sem fuso explícito o container roda em UTC
       # e o sync cai às 03h local — antes de a rede abrir e depois do
       # fechamento do dia anterior, que é o pior dos dois mundos.
