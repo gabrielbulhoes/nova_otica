@@ -231,29 +231,122 @@ Entre no console e **troque a senha do admin** no primeiro login.
 
 ---
 
-## 7. Ligar o CDS (só depois da rotação)
+## 7. Ligar o CDS
 
-Ordem que importa — inverter deixa credencial válida circulando com IP aberto:
+Cinco coisas, e a ordem **importa**. Inverter deixa credencial válida
+circulando com IP aberto, ou mistura dado fictício com dado real no banco.
 
-1. **Rotacionar** com a Sellbie: `x_api_key`, `x_api_token`, `x_cliente_id`.
-   As antigas circularam durante o desenvolvimento e devem morrer.
-2. **Pedir allowlist** do IP da droplet no conector. Ele é o único IP de saída
-   da API — não há proxy na frente, então é o que a Sellbie vê.
-3. Só então, na VPS:
+### 7.0 · A pergunta que vem antes de todas — a droplet ALCANÇA o conector?
+
+O `RUNBOOK-ARGOS.md` descreve o conector como *"host interno HTTP em porta
+alta"*, e foi escrito quando o plano era rodar **dentro da rede da ótica**.
+A produção agora está numa droplet em **Nova York**. São coisas diferentes, e
+esta é a única pergunta que pode inviabilizar tudo o que vem depois.
+
+Teste antes de qualquer outra providência (a base URL está com o Gabriel):
 
 ```bash
-sudo -u deploy nano .env      # SELLBIE_MODE=live + as três credenciais novas
+curl -sS -o /dev/null -w 'HTTP:%{http_code} em %{time_total}s\n' \
+  --max-time 15 'http://<host-cds>:<porta>/conectorCDS'
+```
+
+| Resultado | Significa | O que fazer |
+|---|---|---|
+| `HTTP:200`, `401`, `403` ou `404` | **alcança** — há rota até lá | seguir para 7.1 |
+| `HTTP:000` (timeout) | **não alcança** | parar; ver as opções abaixo |
+
+Se não alcançar, o conector está atrás do firewall da rede e existem três
+saídas, em ordem de preferência:
+
+1. **Túnel/VPN** entre a droplet e a rede da ótica (WireGuard). Mantém o
+   conector fechado para a internet e cifra o tráfego.
+2. **Expor o conector** com TLS e allowlist do IP da droplet.
+3. Mover a API para dentro da rede — desfaz a decisão de infraestrutura.
+
+> **HTTP em claro é um problema mesmo se alcançar.** As credenciais viajam nos
+> cabeçalhos `x_api_key`/`x_api_token`. Dentro da LAN isso era discutível; entre
+> Nova York e Natal, atravessando a internet aberta, é interceptável por
+> qualquer intermediário. Se a opção for expor o conector, que seja com
+> **HTTPS** — e a base URL passa a começar com `https://`.
+
+### 7.1 · Rotacionar as credenciais
+
+Com a Sellbie: `x_api_key`, `x_api_token`, `x_cliente_id`. As atuais circularam
+durante o desenvolvimento e devem morrer.
+
+### 7.2 · Pedir a allowlist do IP
+
+O IP da droplet é o **único** IP de saída da API — não há proxy na frente, então
+é o que a Sellbie enxerga.
+
+### 7.3 · Limpar o banco antes da primeira sincronização real
+
+**Este passo não é opcional, e a razão é o próprio desenho do sync: ele só faz
+upsert por `externalId`, nunca apaga.**
+
+A instalação subiu em `SELLBIE_MODE=mock`, e o mock gerou 5 lojas fictícias
+(São Paulo, Campinas, Rio de Janeiro, Belo Horizonte, Curitiba), 60 produtos e
+24 vendas por loja. As lojas fictícias usam `codigo_loja` 1 a 5 — e as reais
+também começam em 1.
+
+Sem a limpeza, ao virar para `live`: as cinco primeiras lojas são sobrescritas
+pelas reais, e todo o resto do lixo **fica no banco para sempre** — produtos
+fantasma na curva ABC, vendas fictícias somando ao faturamento, estoque que não
+existe em lugar nenhum. Um console com dado misturado que ninguém sabe explicar,
+e que só se resolve depois refazendo tudo.
+
+```bash
+cd /srv/nova-otica
+COMPOSE="docker compose -f docker-compose.prod.yml"
+
+# 1. Dump de segurança — custa nada e já salvou gente
+$COMPOSE exec -T db pg_dump -U nova_otica -Fc nova_otica > /tmp/antes-do-live.dump
+ls -lh /tmp/antes-do-live.dump
+
+# 2. Zera o que veio do ERP. A ordem respeita as chaves estrangeiras, e
+#    User/decisões ficam de fora de propósito: o admin e a senha sobrevivem.
+$COMPOSE exec -T db psql -U nova_otica -d nova_otica -c \
+'TRUNCATE "Payment","SaleItem","Sale","StockItem","Customer","Product","Seller","Size","Color","Store" CASCADE;'
+
+# 3. Confirma
+$COMPOSE exec -T app node -e '
+const {PrismaClient}=require("@prisma/client");(async()=>{const p=new PrismaClient();
+console.log("lojas:",await p.store.count(),"| produtos:",await p.product.count(),"| usuarios:",await p.user.count());
+await p.$disconnect();})()'
+```
+
+**Esperado no passo 3:** `lojas: 0 | produtos: 0 | usuarios: 1`.
+
+### 7.4 · Virar a chave
+
+```bash
+sudo -u deploy nano .env    # SELLBIE_MODE=live + base URL + as 3 credenciais
 sudo -u deploy ./scripts/deploy.sh
 ```
 
 A API valida na subida: com `live` e credencial faltando, ela **se recusa a
 iniciar** em vez de subir e falhar silenciosamente às 6h.
 
-Primeira sincronização à mão, sem esperar o lote:
+### 7.5 · Primeira sincronização, à mão
 
 ```bash
 docker compose -f docker-compose.prod.yml exec app node apps/api/dist/sync/runOnce.js
 ```
+
+Confira o resultado — e compare com o que a rede tem de verdade:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T app node -e '
+const {PrismaClient}=require("@prisma/client");(async()=>{const p=new PrismaClient();
+console.log("lojas:",await p.store.count(),"| produtos:",await p.product.count());
+const e=await p.stockItem.aggregate({_sum:{quantity:true}});
+console.log("unidades em estoque:",e._sum.quantity);
+await p.$disconnect();})()'
+```
+
+**Esperado:** ~22 lojas, ~21.683 produtos e ~211.026 unidades. Se vier 5 lojas e
+60 produtos, o modo continua `mock`. Se vier um número entre os dois, a limpeza
+do 7.3 não aconteceu — **pare e reporte**, porque o banco está misturado.
 
 > As credenciais **não** entram no GitHub, em print, em log ou no Telegram.
 > Vivem só no `.env` da VPS, com permissão 600.
