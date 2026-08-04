@@ -50,6 +50,14 @@ services:
       # e o sync cai às 03h local — antes de a rede abrir e depois do
       # fechamento do dia anterior, que é o pior dos dois mundos.
       TZ: ${TZ:-America/Recife}
+      # Saída fixada em IPv4. A droplet tem IPv6 público, e o Node prefere IPv6
+      # quando o destino resolve nos dois. Como a allowlist do conector CDS é
+      # por IP, uma saída que alterna entre IPv4 e IPv6 produz o pior tipo de
+      # falha: "liberamos o IP e continua dando 403", sem nada no log apontando
+      # para o motivo. Um endereço para liberar, um caminho para depurar.
+      # Sem ${NODE_OPTIONS:-...} de propósito: com a forma de default, um
+      # NODE_OPTIONS definido no host vence e a fixação de IPv4 some sem aviso.
+      NODE_OPTIONS: --dns-result-order=ipv4first
     # Também sem `ports:`. Quem publica é o Caddy; a API só é alcançável por
     # dentro da rede do compose. É isso que impede alguém de chegar em
     # http://IP:3333 e pular o TLS.
