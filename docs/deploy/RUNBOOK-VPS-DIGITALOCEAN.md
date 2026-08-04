@@ -317,7 +317,13 @@ await p.$disconnect();})()'
 
 **Esperado no passo 3:** `lojas: 0 | produtos: 0 | usuarios: 1`.
 
-### 7.4 · Virar a chave
+### 7.4 · Virar a chave — **entre 06:00 e 07:00, horário de Natal**
+
+A CDS só aceita consumo nessa janela (documentação da Sellbie, 04/08/2026:
+*"Horário permitido para uso: 06:00 até 07:00"*). A API valida isso antes de
+cada chamada: fora da janela o run vai a `FAILED` e nada é lido — inclusive a
+sincronização manual do 7.5. A virada é numa manhã marcada, não "quando estiver
+pronto".
 
 ```bash
 sudo -u deploy nano .env    # SELLBIE_MODE=live + base URL + as 3 credenciais
@@ -327,7 +333,7 @@ sudo -u deploy ./scripts/deploy.sh
 A API valida na subida: com `live` e credencial faltando, ela **se recusa a
 iniciar** em vez de subir e falhar silenciosamente às 6h.
 
-### 7.5 · Primeira sincronização, à mão
+### 7.5 · Primeira sincronização, à mão (ainda dentro da janela)
 
 ```bash
 docker compose -f docker-compose.prod.yml exec app node apps/api/dist/sync/runOnce.js
@@ -347,6 +353,21 @@ await p.$disconnect();})()'
 **Esperado:** ~22 lojas, ~21.683 produtos e ~211.026 unidades. Se vier 5 lojas e
 60 produtos, o modo continua `mock`. Se vier um número entre os dois, a limpeza
 do 7.3 não aconteceu — **pare e reporte**, porque o banco está misturado.
+
+E confira quantos DIAS de venda vieram — é a resposta para a dúvida que
+atravessou o projeto inteiro:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T app node -e '
+const {PrismaClient}=require("@prisma/client");(async()=>{const p=new PrismaClient();
+const r=await p.sale.aggregate({_min:{saleDate:true},_max:{saleDate:true},_count:true});
+console.log("vendas:",r._count,"| de",r._min.saleDate,"ate",r._max.saleDate);
+await p.$disconnect();})()'
+```
+
+O padrão da rota `vendas` é **o último mês**. Se vierem ~30 dias, a amostra de
+7 dias da demo era artefato da extração, e os avisos de "janela curta" das telas
+somem sozinhos em produção. Se vierem 7, a rede vendeu naqueles dias mesmo.
 
 > As credenciais **não** entram no GitHub, em print, em log ou no Telegram.
 > Vivem só no `.env` da VPS, com permissão 600.

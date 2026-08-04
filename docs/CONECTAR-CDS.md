@@ -14,7 +14,10 @@ SELLBIE_BASE_URL=http://<host-cds>:<porta>/conectorCDS
 SELLBIE_API_KEY=<x_api_key>
 SELLBIE_API_TOKEN=<x_api_token>
 SELLBIE_CLIENT_ID=<x_cliente_id>
-SELLBIE_IGNORE_WINDOW=true
+SELLBIE_IGNORE_WINDOW=false
+SELLBIE_WINDOW_START=06:00
+SELLBIE_WINDOW_END=07:00
+TZ=America/Recife
 ```
 
 > Os valores reais de host/porta e das três chaves foram enviados
@@ -24,9 +27,47 @@ SELLBIE_IGNORE_WINDOW=true
 > da CDS. O `.env` é ignorado pelo Git (`.gitignore`) — as credenciais nunca
 > vão para o repositório.
 >
-> **Janela de horário:** a documentação da CDS não define janela de consumo,
-> por isso `SELLBIE_IGNORE_WINDOW=true`. Se a CDS impuser uma janela, ajuste
-> `SELLBIE_WINDOW_START`/`_END` e volte para `false`.
+> **Janela de horário — 06:00 às 07:00, e ela é real.** Este documento afirmava
+> que a CDS não definia janela e mandava `SELLBIE_IGNORE_WINDOW=true`. Estava
+> errado: a documentação de filtros enviada pela Sellbie (04/08/2026) termina com
+> *"Horário permitido para uso: 06:00 até 07:00"*.
+>
+> `TZ=America/Recife` não é detalhe: sem fuso explícito o container roda em UTC e
+> a janela cai às 03h em Natal, antes de a rede abrir.
+>
+> **Consequência operacional:** o sync fora da janela é recusado — o run vai a
+> `FAILED` com o motivo registrado, e nada é lido. Isso vale também para a
+> primeira sincronização manual (`runOnce.js`). **A virada para `live` tem que
+> acontecer entre 06:00 e 07:00**, não "quando estiver pronto".
+
+## 1.1 Filtros de cada rota, e o que acontece sem eles
+
+Da documentação da Sellbie. Os padrões importam mais que os filtros:
+
+| Rota | Filtros | Sem filtro, devolve |
+|---|---|---|
+| `lojas`, `cores`, `tamanhos` | nenhum | tudo |
+| `produtos` | `date_start`, `date_end` (`dataInclusao`) | **só o último mês** |
+| `clientes` | `date_start`, `date_end`, `cod_client` | tudo |
+| `vendedores` | `date_start`, `date_end`, `seller` | tudo |
+| `vendas`, `detalhesVendas`, `pagamentosVendas` | `date_start`, `date_end` (`dataVenda`) | **só o último mês** |
+| `estoque` | `cod_loja` **obrigatório**, `cod_prod`, `only_disp` | — |
+
+Datas em `aaaa-mm-dd`. Informar só uma das duas filtra **aquele dia**, não um
+intervalo aberto.
+
+Três coisas que decorrem disso:
+
+1. **O catálogo inteiro exige data explícita.** `syncProducts` passa
+   `date_start: '2000-01-01'` de propósito. Sem isso viriam só os produtos
+   cadastrados nos últimos 30 dias, e a curva ABC nasceria pela metade — sem
+   erro nenhum aparecendo.
+2. **O padrão de vendas é um mês.** É a explicação mais provável para a amostra
+   de 7 dias que apareceu na fotografia de 13/07: ou a rede vendeu só naqueles
+   dias, ou a sonda passou filtro. O primeiro sync real resolve a dúvida — se
+   vier um mês inteiro, era da extração.
+3. **Estoque é uma chamada por loja.** São 22 lojas, dentro de uma janela de uma
+   hora. Vale cronometrar o primeiro sync completo.
 
 ## 2. Sondar a CDS (captura de amostras + teste de conexão)
 
