@@ -71,6 +71,11 @@ const schema = z.object({
   // rede é lido em pedaços. 250 códigos ≈ 1.750 caracteres de query string,
   // bem abaixo do limite de URL de qualquer servidor.
   SELLBIE_STOCK_CHUNK: z.coerce.number().int().positive().default(250),
+  // Janela de vendas do sync diário. O padrão do conector é "último mês", mas
+  // implícito: sem faixa explícita não há como fatiar quando a resposta é
+  // truncada, e detalhesVendas já chega perto do teto com 30 dias de rede.
+  // 35 e não 30 para o lote das 06h ter folga se um dia falhar.
+  SELLBIE_SALES_WINDOW_DAYS: z.coerce.number().int().positive().default(35),
   SELLBIE_WINDOW_START: z.string().regex(timeRegex).default('06:00'),
   SELLBIE_WINDOW_END: z.string().regex(timeRegex).default('07:00'),
   // A doc da CDS não define janela de horário — em live, deixe true a menos

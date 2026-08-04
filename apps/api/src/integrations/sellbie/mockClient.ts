@@ -327,8 +327,10 @@ export class SellbieMockClient implements SellbieClient {
     return filterByDate(data.produtos, (p) => p.data_cadastro, params);
   }
 
-  async getClientes(): Promise<SellbieCliente[]> {
-    return data.clientes;
+  async getClientes(params?: SellbieDateRange): Promise<SellbieCliente[]> {
+    // Como em produtos: o filtro é sobre `data_inclusao`, e um mock que o
+    // ignorasse faria a varredura de clientes parecer correta no teste.
+    return filterByDate(data.clientes, (c) => c.data_inclusao, params);
   }
 
   async getVendas(params?: SellbieDateRange): Promise<SellbieVenda[]> {
