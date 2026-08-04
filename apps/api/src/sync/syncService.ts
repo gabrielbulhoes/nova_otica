@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
@@ -776,7 +777,7 @@ async function syncStock(client: Client) {
     });
   }
 
-  let written = 0;
+  const resolvidas: { storeId: string; productId: string; quantity: number }[] = [];
   let skipped = 0;
   for (const [key, quantity] of acc.posicoes) {
     const [externalStoreId, externalProductId] = key.split('|');
@@ -786,15 +787,54 @@ async function syncStock(client: Client) {
       skipped += 1; // loja ainda não cadastrada (ex.: registro de teste do ERP)
       continue;
     }
-    await prisma.stockItem.upsert({
-      where: { storeId_productId: { storeId, productId } },
-      create: { storeId, productId, quantity, available: quantity, syncedAt: new Date() },
-      update: { quantity, available: quantity, syncedAt: new Date() },
-    });
-    written += 1;
+    resolvidas.push({ storeId, productId, quantity });
   }
   if (skipped > 0) log.warn('Posições de estoque ignoradas (loja desconhecida)', { skipped });
+
+  const written = await gravarEstoque(resolvidas);
   return { read: acc.linhas, written };
+}
+
+/**
+ * Grava as posições de estoque em lote.
+ *
+ * Era um `upsert` do Prisma por posição, dentro de um laço. Com a leitura por
+ * filial a rede devolveu 1,1 MILHÃO de posições — 22 filiais × ~50 mil linhas —
+ * e um milhão de idas e voltas ao banco, a poucos milissegundos cada, é a
+ * diferença entre o sync durar um minuto e durar uma hora. Todo dia.
+ *
+ * `INSERT ... ON CONFLICT` faz o mesmo trabalho em mil instruções em vez de um
+ * milhão. `reserved` fica de FORA do UPDATE de propósito: ele é das
+ * movimentações internas pendentes, não do ERP, e sobrescrevê-lo aqui apagaria
+ * a reserva de toda transferência em andamento.
+ */
+async function gravarEstoque(posicoes: { storeId: string; productId: string; quantity: number }[]): Promise<number> {
+  // 4 parâmetros por linha (a quantidade serve a `quantity` e a `available`),
+  // bem abaixo do teto de 65.535 parâmetros por instrução do Postgres.
+  const POR_LOTE = 1_000;
+  let written = 0;
+  for (const lote of emLotes(posicoes, POR_LOTE)) {
+    const valores: string[] = [];
+    const params: unknown[] = [];
+    for (const p of lote) {
+      const i = params.length;
+      valores.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 4},0,NOW(),NOW(),NOW())`);
+      params.push(randomUUID(), p.storeId, p.productId, p.quantity);
+    }
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "StockItem"
+         ("id","storeId","productId","quantity","available","reserved","syncedAt","createdAt","updatedAt")
+       VALUES ${valores.join(',')}
+       ON CONFLICT ("storeId","productId") DO UPDATE SET
+         "quantity"  = EXCLUDED."quantity",
+         "available" = EXCLUDED."available",
+         "syncedAt"  = EXCLUDED."syncedAt",
+         "updatedAt" = NOW()`,
+      ...params,
+    );
+    written += lote.length;
+  }
+  return written;
 }
 
 async function syncSales(client: Client, range?: { date_start: string; date_end: string }) {
