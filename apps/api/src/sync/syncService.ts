@@ -434,8 +434,79 @@ async function varrerCatalogo(client: Client) {
   return r.itens;
 }
 
+/**
+ * Varredura genérica de uma rota do conector, com log padronizado.
+ *
+ * Existe porque o teto não é exclusividade de `produtos`: a carga de
+ * 04/08/2026 mostrou `clientes` parando em 5.000 e `pagamentosVendas` em
+ * 5.115. Números diferentes na mesma instalação — o corte não é por contagem
+ * de linhas, é por tamanho de resposta. Por isso o teto configurado fica
+ * abaixo de todos eles, e por isso toda rota com filtro de data é varrida em
+ * vez de chamada uma vez.
+ */
+async function varrer<T>(
+  entidade: string,
+  inicio: string,
+  fim: string,
+  buscar: (janela: { date_start: string; date_end: string }) => Promise<T[]>,
+  chave: (item: T) => string,
+): Promise<T[]> {
+  const r = await varrerPorJanelas({
+    entidade,
+    inicio,
+    fim,
+    limite: env.SELLBIE_PAGE_LIMIT,
+    maxChamadas: env.SELLBIE_SWEEP_MAX_CALLS,
+    buscar,
+    chave,
+    aoRegistrar: (e) => {
+      if (e.lidos === 0) return; // janela vazia é o caso comum; não polui o log
+      log.info(`${entidade}: janela lida`, {
+        de: e.janela.date_start,
+        ate: e.janela.date_end,
+        lidos: e.lidos,
+        ...(e.fatiada ? { acao: 'fatiada' } : {}),
+      });
+    },
+  });
+
+  log.info(`${entidade}: varredura concluída`, {
+    registros: r.itens.length,
+    chamadas: r.chamadas,
+    janelasFatiadas: r.janelasTruncadas,
+  });
+  if (r.janelasIndivisiveis > 0) {
+    log.warn(`${entidade}: possivelmente incompleto — dia único acima do teto`, {
+      janelas: r.janelasIndivisiveis,
+      teto: env.SELLBIE_PAGE_LIMIT,
+    });
+  }
+  if (r.tetoAtingido) {
+    log.warn(`${entidade}: varredura interrompida pelo teto de chamadas`, {
+      maxChamadas: env.SELLBIE_SWEEP_MAX_CALLS,
+    });
+  }
+  return r.itens;
+}
+
+/** Faixa padrão das vendas do lote diário: os últimos N dias, explícita. */
+function janelaDeVendas(): { date_start: string; date_end: string } {
+  const fim = new Date();
+  const inicio = new Date(fim.getTime() - env.SELLBIE_SALES_WINDOW_DAYS * 86_400_000);
+  return { date_start: inicio.toISOString().slice(0, 10), date_end: isoToday() };
+}
+
 async function syncCustomers(client: Client) {
-  const rows = await client.getClientes();
+  // `clientes` parou em exatos 5.000 na carga de 04/08/2026 — truncada. Sem a
+  // varredura, toda venda de cliente fora dos 5.000 primeiros fica órfã: o
+  // join é por CPF, e sem o cliente cadastrado a venda perde a ligação.
+  const rows = await varrer(
+    'clientes',
+    env.SELLBIE_CATALOG_START,
+    isoToday(),
+    (janela) => client.getClientes(janela),
+    (c) => map.digits(c.cpf) ?? String(c.cpf ?? ''),
+  );
   let written = 0;
   for (const raw of rows) {
     const d = map.mapCliente(raw);
@@ -450,82 +521,178 @@ async function syncCustomers(client: Client) {
   return { read: rows.length, written };
 }
 
+/** Acumulador do estoque: dobra cada lote na hora, em vez de guardar a grade. */
+export interface AcumuladorDeEstoque {
+  /** "loja|produto" -> quantidade somada entre as variantes (GRADE). */
+  posicoes: Map<string, number>;
+  /** Produtos que a grade conhece e o catálogo não. */
+  orfaos: Map<string, SellbieEstoqueGrade>;
+  /** "produto|variante" já contabilizados — a soma entre lotes não repete. */
+  vistas: Set<string>;
+  linhas: number;
+}
+
+function novoAcumulador(): AcumuladorDeEstoque {
+  return { posicoes: new Map(), orfaos: new Map(), vistas: new Set(), linhas: 0 };
+}
+
+/**
+ * Dobra um lote da grade no acumulador e o descarta.
+ *
+ * Dobrar na hora, em vez de juntar tudo e processar no fim, é o que mantém o
+ * consumo de memória proporcional ao número de POSIÇÕES (produto × loja) e não
+ * ao de linhas cruas — cada linha da grade carrega um objeto aninhado com as
+ * 22 filiais, e a rede tem dezenas de milhares delas. Numa droplet que também
+ * roda o Postgres, segurar a grade inteira é como o processo morre.
+ */
+function absorverGrade(
+  acc: AcumuladorDeEstoque,
+  parte: SellbieEstoqueGrade[],
+  produtosConhecidos: Map<string, string>,
+  pedidos?: Set<string>,
+): void {
+  for (const raw of parte) {
+    const codigo = map.idStr(raw.CODIGO);
+    // Só entra o que foi PEDIDO neste lote. As quantidades são somadas entre
+    // variantes, então uma linha que aparece em dois lotes é contada duas
+    // vezes — e estoque inflado é pior que estoque a menos, porque nada no
+    // painel denuncia. Descartar o excedente aqui torna a soma dupla
+    // impossível por construção, em vez de depender da guarda heurística
+    // abaixo acertar sempre.
+    if (pedidos && !pedidos.has(codigo)) continue;
+
+    // A identidade da linha é produto×variante: variantes diferentes do mesmo
+    // produto SOMAM no saldo da loja, a mesma variante repetida não.
+    const identidade = `${codigo}|${map.idStr(raw.GRADE)}`;
+    if (acc.vistas.has(identidade)) continue;
+    acc.vistas.add(identidade);
+
+    acc.linhas += 1;
+    if (codigo && !produtosConhecidos.has(codigo) && !acc.orfaos.has(codigo)) {
+      acc.orfaos.set(codigo, raw);
+    }
+    for (const pos of map.mapEstoqueGrade(raw)) {
+      const key = `${pos.externalStoreId}|${pos.externalProductId}`;
+      acc.posicoes.set(key, (acc.posicoes.get(key) ?? 0) + pos.quantity);
+    }
+  }
+}
+
 /**
  * Lê /cds/estoquegrade em lotes de produtos.
  *
- * A rota devolve o estoque da rede inteira aninhado por filial, mas está
- * sujeita ao mesmo teto silencioso das outras: uma chamada única traria só o
- * começo. Ela não aceita filtro de data — o que ela aceita é `cod_prod` como
- * lista CSV, e é esse o pedaço com que se fatia.
+ * A rota devolve o estoque da rede aninhado por filial, e está sujeita ao mesmo
+ * teto silencioso das outras: uma chamada única traz só o começo. Ela não
+ * aceita filtro de data — o que aceita é `cod_prod` como lista CSV, e é esse o
+ * pedaço com que se fatia.
  *
- * O catálogo local é a lista de códigos a pedir. Sem catálogo (primeira carga,
- * ordem invertida), cai na chamada única de antes: melhor um estoque parcial
- * que nenhum.
+ * O tamanho do lote é ADAPTATIVO. Não sabemos quantos códigos o conector
+ * aceita numa lista, e o modo como ele recusa (400? URL longa demais? erro
+ * genérico?) também não está documentado. Em vez de adivinhar um número que
+ * pode estar errado para sempre, um lote que falha é partido ao meio e
+ * recolocado na fila: se ele aceita 60 e não 250, a leitura converge sozinha
+ * na primeira falha em vez de derrubar o estoque inteiro.
  */
-async function lerEstoqueGrade(codigos: string[], client: Client) {
-  if (codigos.length === 0) {
-    log.warn('Estoque: catálogo local vazio, lendo a grade em chamada única');
-    return client.getEstoqueGrade();
-  }
+// Exportada só para teste: é a lógica com mais chance de estar errada contra o
+// conector real (tamanho de lote, recusa, filtro ignorado) e a única aqui que
+// não depende do banco — deixá-la privada seria deixá-la sem cobertura.
+export async function lerEstoqueEmLotes(
+  client: Client,
+  codigos: string[],
+  produtosConhecidos: Map<string, string>,
+): Promise<AcumuladorDeEstoque> {
+  let acc = novoAcumulador();
 
-  const lotes = emLotes(codigos, env.SELLBIE_STOCK_CHUNK);
-  const porLinha = new Map<string, SellbieEstoqueGrade>();
+  const chamadaUnica = async (motivo: string) => {
+    log.warn(`Estoque: ${motivo}; lendo a grade em chamada única`);
+    // Zera antes: o que veio dos lotes e o que vem da chamada única se
+    // sobrepõem, e as quantidades são SOMADAS entre variantes — misturar as
+    // duas leituras dobraria o saldo dos produtos já lidos.
+    acc = novoAcumulador();
+    absorverGrade(acc, await client.getEstoqueGrade(), produtosConhecidos);
+    return acc;
+  };
+
+  if (codigos.length === 0) return chamadaUnica('catálogo local vazio');
+
+  const fila = emLotes(codigos, env.SELLBIE_STOCK_CHUNK);
+  const totalDeLotes = fila.length;
   let chamadas = 0;
+  let partidos = 0;
+  let desistidos = 0;
 
-  for (const lote of lotes) {
-    const parte = await client.getEstoqueGrade({ cod_prod: lote.join(',') });
-    chamadas += 1;
+  while (fila.length > 0) {
+    const lote = fila.shift()!;
+    let parte: SellbieEstoqueGrade[];
+    try {
+      parte = await client.getEstoqueGrade({ cod_prod: lote.join(',') });
+      chamadas += 1;
+    } catch (err) {
+      if (lote.length === 1) {
+        // Um código que o conector recusa sozinho não pode derrubar a rede
+        // inteira — mas se forem muitos, o problema é a rota, não o código.
+        desistidos += 1;
+        if (desistidos > 20) {
+          throw new Error(
+            `estoquegrade recusou ${desistidos} códigos individualmente — a rota está falhando, não o tamanho do lote`,
+          );
+        }
+        continue;
+      }
+      const meio = Math.ceil(lote.length / 2);
+      fila.unshift(lote.slice(0, meio), lote.slice(meio));
+      partidos += 1;
+      log.warn('Estoque: lote recusado, partindo ao meio', {
+        tamanho: lote.length,
+        erro: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
 
-    // Guarda contra filtro ignorado: se o conector devolver majoritariamente
-    // códigos que não foram pedidos, `cod_prod` não está sendo aplicado e
-    // repetir isso 87 vezes seria puxar a mesma resposta truncada 87 vezes.
-    // A verificação roda só no primeiro lote — é onde ela decide alguma coisa.
+    const pedidos = new Set(lote);
+
+    // Guarda contra filtro ignorado. Não é sobre correção — o descarte dentro
+    // de `absorverGrade` já garante isso — é sobre custo: se `cod_prod` não
+    // estiver sendo aplicado, cada um dos 240 lotes traz a rede inteira de
+    // volta, e uma chamada só faz o mesmo trabalho. Um conector que filtra
+    // direito devolve ZERO forasteiros; a tolerância de 10% existe só para
+    // absorver normalização de código (padding, zero à esquerda).
     if (chamadas === 1 && parte.length > 0) {
-      const pedidos = new Set(lote);
       const forasteiros = parte.filter((g) => !pedidos.has(map.idStr(g.CODIGO))).length;
-      if (forasteiros > parte.length / 2) {
-        log.warn('Estoque: o conector ignorou cod_prod; voltando à chamada única', {
-          pedidos: lote.length,
-          recebidos: parte.length,
-          forasteiros,
-        });
-        return client.getEstoqueGrade();
+      if (forasteiros > parte.length / 10) {
+        return chamadaUnica(`o conector ignorou cod_prod (${forasteiros}/${parte.length} forasteiros)`);
       }
     }
 
-    // Identidade da linha é produto×variante (GRADE) — o mesmo produto tem
-    // uma linha por cor/tamanho e todas somam no mesmo saldo por loja.
-    for (const g of parte) porLinha.set(`${map.idStr(g.CODIGO)}|${map.idStr(g.GRADE)}`, g);
+    absorverGrade(acc, parte, produtosConhecidos, pedidos);
   }
 
   log.info('Estoque: grade lida em lotes', {
-    lotes: lotes.length,
+    lotesPlanejados: totalDeLotes,
     chamadas,
+    lotesPartidos: partidos,
+    codigosDesistidos: desistidos,
     produtosPedidos: codigos.length,
-    linhas: porLinha.size,
+    linhas: acc.linhas,
+    posicoes: acc.posicoes.size,
   });
-  return [...porLinha.values()];
+  if (desistidos > 0) {
+    log.warn('Estoque: códigos que o conector recusou individualmente', { desistidos });
+  }
+  return acc;
 }
 
 async function syncStock(client: Client) {
-  // Fonte: /cds/estoquegrade — cada linha é produto×variante com o estoque
-  // aninhado por filial. As variantes (GRADE) do mesmo produto são somadas
-  // por loja.
   const stores = await storeIdMap();
   const products = await productIdMap();
-  const rows = await lerEstoqueGrade([...products.keys()], client);
+  const acc = await lerEstoqueEmLotes(client, [...products.keys()], products);
 
   // Produtos que a grade conhece e o catálogo não. Antes eles viravam posição
   // descartada; agora viram um cadastro magro derivado da própria grade, e a
   // unidade que existe na prateleira passa a existir no painel. Se o catálogo
   // vier completo, este laço não faz nada — é fallback, não caminho normal.
-  const orfaos = new Map<string, SellbieEstoqueGrade>();
-  for (const raw of rows) {
-    const codigo = map.idStr(raw.CODIGO);
-    if (codigo && !products.has(codigo) && !orfaos.has(codigo)) orfaos.set(codigo, raw);
-  }
-  if (orfaos.size > 0) {
-    for (const raw of orfaos.values()) {
+  if (acc.orfaos.size > 0) {
+    for (const raw of acc.orfaos.values()) {
       const d = map.mapProdutoDaGrade(raw);
       const criado = await prisma.product.upsert({
         where: { externalId: d.externalId },
@@ -538,21 +705,13 @@ async function syncStock(client: Client) {
       products.set(d.externalId, criado.id);
     }
     log.warn('Estoque: produtos criados a partir da grade (catálogo incompleto)', {
-      criados: orfaos.size,
+      criados: acc.orfaos.size,
     });
-  }
-
-  const byStoreProduct = new Map<string, number>(); // "loja|produto" -> qtd
-  for (const raw of rows) {
-    for (const pos of map.mapEstoqueGrade(raw)) {
-      const key = `${pos.externalStoreId}|${pos.externalProductId}`;
-      byStoreProduct.set(key, (byStoreProduct.get(key) ?? 0) + pos.quantity);
-    }
   }
 
   let written = 0;
   let skipped = 0;
-  for (const [key, quantity] of byStoreProduct) {
+  for (const [key, quantity] of acc.posicoes) {
     const [externalStoreId, externalProductId] = key.split('|');
     const storeId = stores.get(externalStoreId);
     const productId = products.get(externalProductId);
@@ -568,11 +727,17 @@ async function syncStock(client: Client) {
     written += 1;
   }
   if (skipped > 0) log.warn('Posições de estoque ignoradas (loja desconhecida)', { skipped });
-  return { read: rows.length, written };
+  return { read: acc.linhas, written };
 }
 
 async function syncSales(client: Client, range?: { date_start: string; date_end: string }) {
-  const rows = await client.getVendas(range);
+  // Sem faixa explícita o conector devolve "o último mês" — mas implícito, e o
+  // que não tem faixa não pode ser fatiado quando vem truncado. A janela
+  // explícita é o que torna a varredura possível.
+  const janela = range ?? janelaDeVendas();
+  const rows = await varrer('vendas', janela.date_start, janela.date_end, (j) => client.getVendas(j), (v) =>
+    map.saleExternalId(v.codigo_loja, v.codigo_venda),
+  );
   const stores = await storeIdMap();
   const sellers = await prisma.seller.findMany({ select: { id: true, externalId: true } });
   const sellerMap = new Map(sellers.map((s) => [s.externalId, s.id]));
@@ -603,7 +768,19 @@ async function syncSales(client: Client, range?: { date_start: string; date_end:
 }
 
 async function syncSaleItems(client: Client, range?: { date_start: string; date_end: string }) {
-  const rows = await client.getDetalhesVendas(range);
+  // A rota mais perigosa das três: são vários itens por venda, então ela bate
+  // no teto antes de `vendas`. Com 2.379 vendas em 30 dias a resposta já
+  // chegava perto de 5.000 — e item de venda é a base de TODO o BI de produto
+  // (curva ABC, giro, categoria). Truncar aqui erra tudo o que vem depois, com
+  // o total de vendas parecendo certo.
+  const janela = range ?? janelaDeVendas();
+  const rows = await varrer(
+    'detalhesVendas',
+    janela.date_start,
+    janela.date_end,
+    (j) => client.getDetalhesVendas(j),
+    (d) => map.mapDetalheVenda(d).externalId,
+  );
   const sales = await prisma.sale.findMany({ select: { id: true, externalId: true } });
   const saleMap = new Map(sales.map((s) => [s.externalId, s.id]));
   const products = await productIdMap();
@@ -636,7 +813,17 @@ async function syncSaleItems(client: Client, range?: { date_start: string; date_
 }
 
 async function syncPayments(client: Client, range?: { date_start: string; date_end: string }) {
-  const rows = await client.getPagamentosVendas(range);
+  // Parou em 5.115 na carga de 04/08/2026 — truncada. É a fonte da dimensão
+  // "forma de pagamento" do BI: truncada, ela não fica vazia, fica ENVIESADA
+  // para o começo do período, que é pior porque parece um dado.
+  const janela = range ?? janelaDeVendas();
+  const rows = await varrer(
+    'pagamentosVendas',
+    janela.date_start,
+    janela.date_end,
+    (j) => client.getPagamentosVendas(j),
+    (p) => map.mapPagamento(p).externalId,
+  );
   const sales = await prisma.sale.findMany({ select: { id: true, externalId: true } });
   const saleMap = new Map(sales.map((s) => [s.externalId, s.id]));
   let written = 0;
