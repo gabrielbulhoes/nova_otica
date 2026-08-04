@@ -180,7 +180,15 @@ async function contagemDeSkus(
   const comVenda = new Set(
     grouped.map((g) => g.productId).filter((id): id is string => !!id && noRecorte.has(id)),
   );
-  return { skusComVenda: comVenda.size, skusNoCatalogo: await prisma.product.count({ where: scoped }) };
+  // Denominador só com produto ATIVO. O catálogo real do ERP guarda o cadastro
+  // inteiro, inclusive o que saiu de linha há anos: quando a varredura passou a
+  // trazê-lo (piso em 1900-01-01, que é a data-nula do conector), o cadastro
+  // saltou de 5.318 para 60.610. Contar descontinuado aqui divide a cobertura
+  // por três e faz a rede parecer que vende 4% do que tem, quando o número real
+  // é sobre o que ela pode vender. Produto fora de linha não é cobertura
+  // perdida — é histórico.
+  const ativos: Prisma.ProductWhereInput = { ...(scoped ?? {}), active: true };
+  return { skusComVenda: comVenda.size, skusNoCatalogo: await prisma.product.count({ where: ativos }) };
 }
 
 // ─── Cobertura de estoque geral e por marca (feedback 06) ────────────────────

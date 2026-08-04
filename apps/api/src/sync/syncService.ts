@@ -550,6 +550,7 @@ function absorverGrade(
   parte: SellbieEstoqueGrade[],
   produtosConhecidos: Map<string, string>,
   pedidos?: Set<string>,
+  escopo = '',
 ): void {
   for (const raw of parte) {
     const codigo = map.idStr(raw.CODIGO);
@@ -563,7 +564,12 @@ function absorverGrade(
 
     // A identidade da linha é produto×variante: variantes diferentes do mesmo
     // produto SOMAM no saldo da loja, a mesma variante repetida não.
-    const identidade = `${codigo}|${map.idStr(raw.GRADE)}`;
+    //
+    // O `escopo` entra na chave por causa da leitura por LOJA: ali a mesma
+    // linha produto×variante volta uma vez por filial, cada uma com o ESTOQUE
+    // daquela filial. Sem o escopo, a segunda loja em diante seria descartada
+    // como repetição e a rede inteira ficaria com o estoque de uma filial só.
+    const identidade = `${escopo}|${codigo}|${map.idStr(raw.GRADE)}`;
     if (acc.vistas.has(identidade)) continue;
     acc.vistas.add(identidade);
 
@@ -600,6 +606,7 @@ export async function lerEstoqueEmLotes(
   client: Client,
   codigos: string[],
   produtosConhecidos: Map<string, string>,
+  lojas: string[] = [],
 ): Promise<AcumuladorDeEstoque> {
   let acc = novoAcumulador();
 
@@ -613,7 +620,43 @@ export async function lerEstoqueEmLotes(
     return acc;
   };
 
-  if (codigos.length === 0) return chamadaUnica('catálogo local vazio');
+  /**
+   * Segundo degrau da escada: uma chamada por FILIAL.
+   *
+   * Se `cod_prod` não funciona, ainda resta `cod_loja` — o outro filtro que a
+   * rota aceita. São 22 chamadas em vez de 240, cada uma trazendo a grade de
+   * uma filial só, o que já é pequeno o bastante para caber sob o teto. É
+   * muito melhor que a chamada única, que volta truncada.
+   */
+  const porLoja = async (motivo: string) => {
+    log.warn(`Estoque: ${motivo}; tentando ler a grade por filial`, { filiais: lojas.length });
+    acc = novoAcumulador();
+    for (const loja of lojas) {
+      let parte: SellbieEstoqueGrade[];
+      try {
+        parte = await client.getEstoqueGrade({ cod_loja: loja });
+      } catch (err) {
+        // Se `cod_loja` também é recusado, os dois filtros da rota estão fora
+        // e só sobra pedir tudo. Truncado é ruim; nada é pior.
+        return chamadaUnica(
+          `cod_loja também recusado (${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
+      // `escopo` = a filial: a mesma linha produto×variante volta uma vez por
+      // loja, e sem isso só a primeira seria contada.
+      absorverGrade(acc, parte, produtosConhecidos, undefined, loja);
+    }
+    log.info('Estoque: grade lida por filial', {
+      filiais: lojas.length,
+      linhas: acc.linhas,
+      posicoes: acc.posicoes.size,
+    });
+    return acc;
+  };
+
+  if (codigos.length === 0) {
+    return lojas.length > 0 ? porLoja('catálogo local vazio') : chamadaUnica('catálogo local vazio');
+  }
 
   const fila = emLotes(codigos, env.SELLBIE_STOCK_CHUNK);
   const totalDeLotes = fila.length;
@@ -629,13 +672,18 @@ export async function lerEstoqueEmLotes(
       chamadas += 1;
     } catch (err) {
       if (lote.length === 1) {
-        // Um código que o conector recusa sozinho não pode derrubar a rede
-        // inteira — mas se forem muitos, o problema é a rota, não o código.
+        // Recusa de UM código isolado é a evidência decisiva: uma lista com um
+        // item não é longa demais nem pesada demais. O que está sendo recusado
+        // é o parâmetro `cod_prod`, não o tamanho do lote — foi o que a rede
+        // mostrou em 04/08/2026, com HTTP 500 de 250 códigos até 2.
+        //
+        // Continuar bisseccionando 60 mil produtos aqui seria fazer 60 mil
+        // chamadas para colher 60 mil erros. Desce um degrau na escada.
         desistidos += 1;
-        if (desistidos > 20) {
-          throw new Error(
-            `estoquegrade recusou ${desistidos} códigos individualmente — a rota está falhando, não o tamanho do lote`,
-          );
+        if (desistidos >= 3) {
+          return lojas.length > 0
+            ? porLoja(`cod_prod recusado até em código isolado (${desistidos}x)`)
+            : chamadaUnica(`cod_prod recusado até em código isolado (${desistidos}x)`);
         }
         continue;
       }
@@ -685,7 +733,7 @@ export async function lerEstoqueEmLotes(
 async function syncStock(client: Client) {
   const stores = await storeIdMap();
   const products = await productIdMap();
-  const acc = await lerEstoqueEmLotes(client, [...products.keys()], products);
+  const acc = await lerEstoqueEmLotes(client, [...products.keys()], products, [...stores.keys()]);
 
   // Produtos que a grade conhece e o catálogo não. Antes eles viravam posição
   // descartada; agora viram um cadastro magro derivado da própria grade, e a
