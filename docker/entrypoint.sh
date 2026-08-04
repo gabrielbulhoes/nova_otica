@@ -20,5 +20,16 @@ else
   exit 1
 fi
 
+# Primeiro administrador. Idempotente: cria só se não existir, e nunca
+# sobrescreve a senha de um admin que já está lá — senão todo deploy desfaria a
+# troca de senha feita no primeiro login.
+#
+# Antes disto, uma instalação nova subia com o banco migrado e SEM nenhum
+# usuário: ninguém conseguia entrar, com senha alguma. Quem criava o admin era
+# o `seed`, que é de demonstração (cria 19 gestores com a senha fixa `loja123`)
+# e por isso não pode rodar em produção.
+echo "Garantindo o administrador inicial…"
+node apps/api/dist/db/bootstrapAdmin.js
+
 echo "Iniciando a API…"
 node apps/api/dist/server.js
