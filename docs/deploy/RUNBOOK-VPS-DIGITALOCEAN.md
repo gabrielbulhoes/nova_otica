@@ -303,10 +303,24 @@ COMPOSE="docker compose -f docker-compose.prod.yml"
 $COMPOSE exec -T db pg_dump -U nova_otica -Fc nova_otica > /tmp/antes-do-live.dump
 ls -lh /tmp/antes-do-live.dump
 
-# 2. Zera o que veio do ERP. A ordem respeita as chaves estrangeiras, e
-#    User/decisões ficam de fora de propósito: o admin e a senha sobrevivem.
-$COMPOSE exec -T db psql -U nova_otica -d nova_otica -c \
-'TRUNCATE "Payment","SaleItem","Sale","StockItem","Customer","Product","Seller","Size","Color","Store" CASCADE;'
+# 2. Zera o que veio do ERP.
+#
+#    NÃO use `TRUNCATE ... CASCADE` aqui. Foi o que este runbook mandava, e o
+#    resultado em produção (03/08/2026) foi o admin apagado junto: `User` tem
+#    `storeId` referenciando `Store`, e o CASCADE derruba TODA tabela com
+#    chave estrangeira apontando para a lista — não importa se há linha
+#    referenciando ou não.
+#
+#    DELETE em ordem reversa de dependência, dentro de uma transação: qualquer
+#    erro no meio desfaz tudo, em vez de deixar o banco meio limpo.
+$COMPOSE exec -T db psql -U nova_otica -d nova_otica -c '
+BEGIN;
+UPDATE "User" SET "storeId" = NULL;
+DELETE FROM "Payment"; DELETE FROM "SaleItem"; DELETE FROM "Sale";
+DELETE FROM "InventoryMovement"; DELETE FROM "StockItem";
+DELETE FROM "Customer"; DELETE FROM "Product";
+DELETE FROM "Seller"; DELETE FROM "Size"; DELETE FROM "Color"; DELETE FROM "Store";
+COMMIT;'
 
 # 3. Confirma
 $COMPOSE exec -T app node -e '
