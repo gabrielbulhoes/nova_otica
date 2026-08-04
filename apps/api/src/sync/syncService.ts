@@ -658,6 +658,25 @@ export async function lerEstoqueEmLotes(
     return lojas.length > 0 ? porLoja('catálogo local vazio') : chamadaUnica('catálogo local vazio');
   }
 
+  // SONDA DECISIVA, antes de qualquer bisseção.
+  //
+  // A bisseção existe para o caso "a lista ficou longa demais". Ela é péssima
+  // para o caso "a rota não aceita este parâmetro": desceria de 250 a 1 em oito
+  // divisões e, como o cliente HTTP repete erro 5xx quatro vezes com espera
+  // exponencial (2s+4s+8s+16s), cada recusa custa mais de meio minuto. Foi o
+  // que a rede mostrou em 04/08/2026 — dez minutos moendo, com HTTP 500 em
+  // todos os tamanhos.
+  //
+  // Um código só responde a pergunta em uma chamada: se nem UM é aceito, o
+  // problema é o parâmetro, e insistir é desperdício puro.
+  try {
+    await client.getEstoqueGrade({ cod_prod: codigos[0] });
+  } catch (err) {
+    return lojas.length > 0
+      ? porLoja(`cod_prod recusado já com um único código (${err instanceof Error ? err.message : String(err)})`)
+      : chamadaUnica('cod_prod recusado já com um único código');
+  }
+
   const fila = emLotes(codigos, env.SELLBIE_STOCK_CHUNK);
   const totalDeLotes = fila.length;
   let chamadas = 0;
@@ -874,30 +893,48 @@ async function syncPayments(client: Client, range?: { date_start: string; date_e
   );
   const sales = await prisma.sale.findMany({ select: { id: true, externalId: true } });
   const saleMap = new Map(sales.map((s) => [s.externalId, s.id]));
-  let written = 0;
+
+  // Identidade montada, com sufixo de ordem para o empate residual (mesmo meio
+  // e mesma parcela repetidos na mesma venda).
+  const porId = new Map<string, { externalId: string; saleId: string; method?: string; amount: number; installments?: number; paidAt?: Date }>();
+  const vendasTocadas = new Set<string>();
   for (const raw of rows) {
     const d = map.mapPagamento(raw);
     const saleId = saleMap.get(d.externalSaleId);
     if (!saleId) continue;
-    const data = {
+    let externalId = d.externalId;
+    for (let n = 2; porId.has(externalId); n += 1) externalId = `${d.externalId}#${n}`;
+    porId.set(externalId, {
+      externalId,
       saleId,
       method: d.method,
       amount: d.amount,
       installments: d.installments,
       paidAt: d.paidAt,
-    };
-    if (d.externalId) {
-      await prisma.payment.upsert({
-        where: { externalId: d.externalId },
-        create: { externalId: d.externalId, ...data },
-        update: data,
-      });
-    } else {
-      await prisma.payment.create({ data });
-    }
-    written += 1;
+    });
+    vendasTocadas.add(saleId);
   }
-  return { read: rows.length, written };
+
+  // A janela é REESCRITA, não sobreposta. Duas razões, e as duas importam:
+  //
+  // 1. A chave de identidade mudou nesta versão. Um upsert deixaria as linhas
+  //    do esquema antigo para trás, e elas somariam junto com as novas — o
+  //    faturamento por forma de pagamento dobraria, em silêncio.
+  // 2. Pagamento cancelado ou corrigido no ERP some da resposta, e upsert não
+  //    tem como saber disso: a linha velha ficaria no banco para sempre.
+  //
+  // `Payment` não tem dependentes no schema, então apagar é seguro. Em lotes,
+  // porque a janela de 35 dias já traz milhares de vendas.
+  const ids = [...vendasTocadas];
+  for (const lote of emLotes(ids, 5_000)) {
+    await prisma.payment.deleteMany({ where: { saleId: { in: lote } } });
+  }
+  const novos = [...porId.values()];
+  for (const lote of emLotes(novos, 5_000)) {
+    await prisma.payment.createMany({ data: lote, skipDuplicates: true });
+  }
+
+  return { read: rows.length, written: novos.length };
 }
 
 /**

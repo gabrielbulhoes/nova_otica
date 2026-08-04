@@ -54,7 +54,9 @@ describe('lerEstoqueEmLotes', () => {
     const { client, chamadas } = conector(codigos(600));
     const acc = await lerEstoqueEmLotes(client, codigos(600), new Map());
 
-    expect(chamadas).toEqual([250, 250, 100]);
+    // A primeira chamada é a sonda de UM código, que decide se `cod_prod`
+    // funciona antes de investir 243 lotes nele.
+    expect(chamadas).toEqual([1, 250, 250, 100]);
     expect(acc.linhas).toBe(600);
     // Cada produto tem posição em 2 filiais.
     expect(acc.posicoes.size).toBe(1200);
@@ -87,7 +89,7 @@ describe('lerEstoqueEmLotes', () => {
     expect(acc.posicoes.size).toBe(6000);
     // Detectou no primeiro lote e caiu na chamada única, em vez de repetir
     // a mesma resposta gigante mais onze vezes.
-    expect(chamadas).toEqual([250, 0]);
+    expect(chamadas).toEqual([1, 250, 0]);
   });
 
   it('ignora linha não pedida sem corromper o saldo', async () => {
@@ -128,6 +130,30 @@ describe('lerEstoqueEmLotes', () => {
     const conhecidos = new Map([['a', 'id-a']]);
     const acc = await lerEstoqueEmLotes(client, ['a', 'b', 'c'], conhecidos);
     expect([...acc.orfaos.keys()].sort()).toEqual(['b', 'c']);
+  });
+
+  it('decide em UMA chamada que cod_prod não funciona, sem bisseccionar', async () => {
+    // O caso real: HTTP 500 em qualquer lista. Bisseccionar de 250 a 1 custaria
+    // oito divisões, e cada recusa carrega quatro tentativas com espera
+    // exponencial — mais de meio minuto por recusa. A sonda de um código
+    // responde a mesma pergunta em uma chamada.
+    const chamadas: string[] = [];
+    const client = {
+      async getEstoqueGrade(query?: { cod_prod?: string; cod_loja?: string }) {
+        if (query?.cod_prod) {
+          chamadas.push(`prod:${query.cod_prod.split(',').length}`);
+          throw new Error('Request failed with status code 500');
+        }
+        chamadas.push('loja');
+        return [linha('p0')];
+      },
+    } as never;
+
+    await lerEstoqueEmLotes(client, codigos(5000), new Map(), ['1', '2']);
+
+    // Exatamente uma tentativa com cod_prod — a sonda. Nenhuma bisseção.
+    expect(chamadas.filter((c) => c.startsWith('prod:'))).toEqual(['prod:1']);
+    expect(chamadas.filter((c) => c === 'loja')).toHaveLength(2);
   });
 
   it('cai para leitura por filial quando cod_prod é recusado até isolado', async () => {
