@@ -531,10 +531,16 @@ export interface AcumuladorDeEstoque {
   /** "produto|variante" já contabilizados — a soma entre lotes não repete. */
   vistas: Set<string>;
   linhas: number;
+  /**
+   * Alguma resposta bateu no teto DURO do conector. Enquanto isto for true, o
+   * que não veio na leitura não pode ser interpretado como "zerou": pode ter
+   * sido apenas cortado.
+   */
+  truncou: boolean;
 }
 
 function novoAcumulador(): AcumuladorDeEstoque {
-  return { posicoes: new Map(), orfaos: new Map(), vistas: new Set(), linhas: 0 };
+  return { posicoes: new Map(), orfaos: new Map(), vistas: new Set(), linhas: 0, truncou: false };
 }
 
 /**
@@ -632,16 +638,50 @@ export async function lerEstoqueEmLotes(
   const porLoja = async (motivo: string) => {
     log.warn(`Estoque: ${motivo}; tentando ler a grade por filial`, { filiais: lojas.length });
     acc = novoAcumulador();
+
+    // `only_disp: 1` = só produto COM saldo.
+    //
+    // Sem ele, a filial devolve uma linha para cada produto do catálogo, tenha
+    // saldo ou não: com 60 mil produtos, a rede bateu no teto DURO do conector
+    // — exatas 50.000 linhas em cada uma das 22 filiais, em 04/08/2026. O que
+    // passava de 50 mil era descartado sem aviso, e o que vinha era, na maior
+    // parte, zero.
+    //
+    // Com o filtro, a filial devolve só o que existe na prateleira: menos
+    // linhas, longe do teto, e é exatamente o dado que interessa. O preço é que
+    // o produto que ZEROU deixa de aparecer — tratado pela zeragem em
+    // `syncStock`, que só roda quando a leitura veio inteira.
+    let somenteComSaldo = true;
     for (const loja of lojas) {
       let parte: SellbieEstoqueGrade[];
       try {
-        parte = await client.getEstoqueGrade({ cod_loja: loja });
+        parte = await client.getEstoqueGrade(
+          somenteComSaldo ? { cod_loja: loja, only_disp: 1 } : { cod_loja: loja },
+        );
       } catch (err) {
+        if (somenteComSaldo) {
+          // O conector recusou `only_disp`. Recomeça sem ele, aceitando o
+          // volume — e a zeragem fica desligada se o teto for atingido.
+          log.warn('Estoque: only_disp recusado; relendo as filiais sem o filtro', {
+            erro: err instanceof Error ? err.message : String(err),
+          });
+          somenteComSaldo = false;
+          acc = novoAcumulador();
+          return porLojaSemFiltro();
+        }
         // Se `cod_loja` também é recusado, os dois filtros da rota estão fora
         // e só sobra pedir tudo. Truncado é ruim; nada é pior.
         return chamadaUnica(
           `cod_loja também recusado (${err instanceof Error ? err.message : String(err)})`,
         );
+      }
+      if (parte.length >= env.SELLBIE_STOCK_HARD_CAP) {
+        acc.truncou = true;
+        log.warn('Estoque: filial no teto duro do conector — leitura incompleta', {
+          loja,
+          linhas: parte.length,
+          teto: env.SELLBIE_STOCK_HARD_CAP,
+        });
       }
       // `escopo` = a filial: a mesma linha produto×variante volta uma vez por
       // loja, e sem isso só a primeira seria contada.
@@ -649,8 +689,31 @@ export async function lerEstoqueEmLotes(
     }
     log.info('Estoque: grade lida por filial', {
       filiais: lojas.length,
+      somenteComSaldo,
       linhas: acc.linhas,
       posicoes: acc.posicoes.size,
+      truncou: acc.truncou,
+    });
+    return acc;
+  };
+
+  /** Releitura por filial sem `only_disp`, quando o conector o recusa. */
+  const porLojaSemFiltro = async () => {
+    for (const loja of lojas) {
+      let parte: SellbieEstoqueGrade[];
+      try {
+        parte = await client.getEstoqueGrade({ cod_loja: loja });
+      } catch (err) {
+        return chamadaUnica(`cod_loja recusado (${err instanceof Error ? err.message : String(err)})`);
+      }
+      if (parte.length >= env.SELLBIE_STOCK_HARD_CAP) acc.truncou = true;
+      absorverGrade(acc, parte, produtosConhecidos, undefined, loja);
+    }
+    log.info('Estoque: grade lida por filial (sem only_disp)', {
+      filiais: lojas.length,
+      linhas: acc.linhas,
+      posicoes: acc.posicoes.size,
+      truncou: acc.truncou,
     });
     return acc;
   };
@@ -791,7 +854,37 @@ async function syncStock(client: Client) {
   }
   if (skipped > 0) log.warn('Posições de estoque ignoradas (loja desconhecida)', { skipped });
 
-  const written = await gravarEstoque(resolvidas);
+  const carimbo = new Date();
+  const written = await gravarEstoque(resolvidas, carimbo);
+
+  // ZERAGEM — o outro lado do `only_disp`.
+  //
+  // Pedindo só o que tem saldo, o produto que ZEROU simplesmente não vem na
+  // resposta. Sem isto, ele ficaria no banco com o saldo da véspera para
+  // sempre: o painel mostraria 6 unidades de uma armação que já saiu toda, e a
+  // sugestão de remanejamento mandaria buscar o que não existe.
+  //
+  // Quem não foi tocado por esta leitura não tem saldo. Uma instrução, contra
+  // o carimbo desta execução.
+  //
+  // Só roda com a leitura INTEIRA. Se alguma filial bateu no teto do conector,
+  // "não veio" deixa de significar "zerou" e passa a significar "foi cortado"
+  // — e zerar aí apagaria estoque real.
+  if (acc.truncou) {
+    log.warn('Estoque: zeragem pulada — alguma filial veio truncada', {
+      teto: env.SELLBIE_STOCK_HARD_CAP,
+    });
+  } else {
+    const zeradas = await prisma.$executeRawUnsafe(
+      `UPDATE "StockItem"
+          SET "quantity" = 0, "available" = 0, "syncedAt" = $1, "updatedAt" = NOW()
+        WHERE ("syncedAt" IS NULL OR "syncedAt" < $1)
+          AND ("quantity" <> 0 OR "available" <> 0)`,
+      carimbo,
+    );
+    if (zeradas > 0) log.info('Estoque: posições sem saldo zeradas', { zeradas });
+  }
+
   return { read: acc.linhas, written };
 }
 
@@ -808,7 +901,10 @@ async function syncStock(client: Client) {
  * movimentações internas pendentes, não do ERP, e sobrescrevê-lo aqui apagaria
  * a reserva de toda transferência em andamento.
  */
-async function gravarEstoque(posicoes: { storeId: string; productId: string; quantity: number }[]): Promise<number> {
+async function gravarEstoque(
+  posicoes: { storeId: string; productId: string; quantity: number }[],
+  carimbo: Date,
+): Promise<number> {
   // 4 parâmetros por linha (a quantidade serve a `quantity` e a `available`),
   // bem abaixo do teto de 65.535 parâmetros por instrução do Postgres.
   const POR_LOTE = 1_000;
@@ -818,8 +914,8 @@ async function gravarEstoque(posicoes: { storeId: string; productId: string; qua
     const params: unknown[] = [];
     for (const p of lote) {
       const i = params.length;
-      valores.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 4},0,NOW(),NOW(),NOW())`);
-      params.push(randomUUID(), p.storeId, p.productId, p.quantity);
+      valores.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 4},0,$${i + 5},NOW(),NOW())`);
+      params.push(randomUUID(), p.storeId, p.productId, p.quantity, carimbo);
     }
     await prisma.$executeRawUnsafe(
       `INSERT INTO "StockItem"

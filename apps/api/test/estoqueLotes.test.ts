@@ -188,6 +188,42 @@ describe('lerEstoqueEmLotes', () => {
     expect(acc.posicoes.get('3|p0')).toBe(7);
   });
 
+  it('pede só o que tem saldo por filial, e marca truncamento no teto duro', async () => {
+    // Sem `only_disp`, a filial devolve uma linha por produto do catálogo,
+    // tenha saldo ou não — foi assim que as 22 filiais da rede vieram cortadas
+    // em exatas 50.000 linhas. Com o filtro, vem só o que está na prateleira.
+    const pedidos: Array<{ loja?: string; only?: number }> = [];
+    const client = {
+      async getEstoqueGrade(q?: { cod_prod?: string; cod_loja?: string; only_disp?: number }) {
+        if (q?.cod_prod) throw new Error('Request failed with status code 500');
+        pedidos.push({ loja: q?.cod_loja, only: q?.only_disp });
+        return [linha('p0'), linha('p1')];
+      },
+    } as never;
+
+    const acc = await lerEstoqueEmLotes(client, ['p0', 'p1'], new Map(), ['1', '2']);
+
+    expect(pedidos).toEqual([
+      { loja: '1', only: 1 },
+      { loja: '2', only: 1 },
+    ]);
+    expect(acc.truncou).toBe(false);
+  });
+
+  it('marca truncamento quando a filial bate no teto duro', async () => {
+    // 20.000 linhas numa filial: acima do teto configurado. A leitura não pode
+    // ser tratada como completa — "não veio" deixa de significar "zerou".
+    const muitas = Array.from({ length: 20_000 }, (_, i) => linha(`p${i}`));
+    const client = {
+      async getEstoqueGrade(q?: { cod_prod?: string }) {
+        if (q?.cod_prod) throw new Error('Request failed with status code 500');
+        return muitas;
+      },
+    } as never;
+    const acc = await lerEstoqueEmLotes(client, ['p0'], new Map(), ['1']);
+    expect(acc.truncou).toBe(true);
+  });
+
   it('só sobra a chamada única quando os dois filtros são recusados', async () => {
     const universo = codigos(10);
     const client = {
