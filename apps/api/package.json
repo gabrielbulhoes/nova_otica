@@ -19,7 +19,8 @@
     "cds:probe": "tsx src/integrations/sellbie/probe.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "sync:backfill": "tsx src/sync/backfill.ts"
+    "sync:backfill": "tsx src/sync/backfill.ts",
+    "bootstrap:admin": "tsx src/db/bootstrapAdmin.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { DEMO } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Mark } from '../brand/Brand';
 import { Icon } from '../brand/Icon';
@@ -116,15 +117,25 @@ export function Login() {
           {loading ? 'Entrando…' : 'Entrar'}
         </button>
 
-        <p className="muted" style={{ fontSize: 12, marginTop: 16, marginBottom: 0 }}>
-          {import.meta.env.VITE_DEMO_USERS
-            ? 'Acesso restrito: use o login e a senha que você recebeu.'
-            : (
+        {/* A dica de credencial só existe em DEMONSTRAÇÃO.
+            O gate estava em VITE_DEMO_USERS — "esta demo tem contas nomeadas?"
+            — e não em VITE_DEMO — "isto é uma demo?". Como o build de produção
+            não define nenhuma das duas, ele caía no `else` e a tela de login em
+            https://app.novaotica.gb.app.br anunciava
+            "Demo: admin@novaotica.com / senha admin123". A senha não funciona
+            lá, mas a frase entrega um nome de usuário válido e convida a
+            tentativa — além de parecer amadorismo para quem paga pelo sistema. */}
+        {DEMO && (
+          <p className="muted" style={{ fontSize: 12, marginTop: 16, marginBottom: 0 }}>
+            {import.meta.env.VITE_DEMO_USERS ? (
+              'Acesso restrito: use o login e a senha que você recebeu.'
+            ) : (
               <>
                 Demo: <strong>admin@novaotica.com</strong> / senha <strong>admin123</strong>
               </>
             )}
-        </p>
+          </p>
+        )}
       </form>
     </div>
   );
