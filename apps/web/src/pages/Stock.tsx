@@ -73,7 +73,10 @@ export function Stock() {
   const [search, setSearch] = useState('');
   const [storeIds, setStoreIds] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
-  const [onlyAvailable, setOnlyAvailable] = useState(false);
+  // Ligado por padrão. A rede tem mais de um milhão de posições produto×loja
+  // e a esmagadora maioria tem saldo zero — abrir a tela de estoque numa
+  // lista de zeros não é um estado neutro, é um estado errado.
+  const [onlyAvailable, setOnlyAvailable] = useState(true);
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
   const categoryList = useQuery({ queryKey: ['categories', scope], queryFn: () => getCategories({ group: scope }) });

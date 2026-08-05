@@ -17,8 +17,20 @@ dashboardRouter.get(
     since.setDate(since.getDate() - 30);
 
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    const stockWhere: Prisma.StockItemWhereInput = storeId ? { storeId } : {};
-    const salesWhere: Prisma.SaleWhereInput = { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) };
+    // Mesmo universo do resto do produto: só lojas planejáveis.
+    //
+    // Estes indicadores somavam as 22 unidades da rede — incluindo GMAIS,
+    // ASSISTENCIA e ESTOQUE COMPRAS, que são retaguarda, não prateleira —
+    // enquanto a cobertura, logo abaixo na mesma tela, já usava as 19 lojas.
+    // Dois números para a mesma pergunta, a centímetros um do outro. É assim
+    // que um painel perde a confiança de quem o lê.
+    const stockWhere: Prisma.StockItemWhereInput = storeId
+      ? { storeId }
+      : { store: PLANNED_STORE_WHERE };
+    const salesWhere: Prisma.SaleWhereInput = {
+      saleDate: { gte: since },
+      ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }),
+    };
     const pendingWhere: Prisma.InventoryMovementWhereInput = {
       status: { in: ['REQUESTED', 'PENDING'] },
       ...(storeId ? { OR: [{ fromStoreId: storeId }, { toStoreId: storeId }] } : {}),
@@ -33,7 +45,7 @@ dashboardRouter.get(
       pendingMovements,
       lastSync,
     ] = await Promise.all([
-      storeId ? Promise.resolve(1) : prisma.store.count(),
+      storeId ? Promise.resolve(1) : prisma.store.count({ where: PLANNED_STORE_WHERE }),
       // Só os ativos. O cadastro do ERP guarda tudo o que já existiu — 60.610
       // linhas, das quais boa parte saiu de linha —, e o painel diz "produtos
       // no catálogo", que o gestor lê como "o que eu tenho para vender".

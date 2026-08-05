@@ -883,6 +883,23 @@ async function syncStock(client: Client) {
       carimbo,
     );
     if (zeradas > 0) log.info('Estoque: posições sem saldo zeradas', { zeradas });
+
+    // E as descarta. Posição com saldo zero, reserva zero e sem mínimo próprio
+    // não carrega informação nenhuma — se o produto voltar à prateleira, a
+    // linha é recriada pela próxima leitura.
+    //
+    // Sem isto a tabela só cresce: a leitura sem `only_disp` deixou 1.108.423
+    // posições em produção, das quais a esmagadora maioria eram zeros. Isso
+    // inflava a contagem da tela de estoque, o total da paginação e qualquer
+    // indicador que conte POSIÇÕES em vez de somar unidades.
+    //
+    // `minStock` preservado: é ajuste manual do lojista para aquela posição, e
+    // apagá-lo seria descartar uma decisão humana junto com o lixo.
+    const removidas = await prisma.$executeRawUnsafe(
+      `DELETE FROM "StockItem"
+        WHERE "quantity" = 0 AND "available" = 0 AND "reserved" = 0 AND "minStock" IS NULL`,
+    );
+    if (removidas > 0) log.info('Estoque: posições vazias removidas', { removidas });
   }
 
   return { read: acc.linhas, written };

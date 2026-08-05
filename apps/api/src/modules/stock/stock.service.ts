@@ -89,6 +89,17 @@ export async function listStock(filter: StockFilter): Promise<{ total: number; r
   const where: Prisma.StockItemWhereInput = {};
   if (filter.storeIds?.length) where.storeId = { in: filter.storeIds };
   if (filter.productId) where.productId = filter.productId;
+  // "Só com saldo" precisa entrar na CONSULTA, não só na página devolvida.
+  //
+  // Era um filtro aplicado depois da paginação: o `total` continuava sendo o
+  // da rede inteira — 1.108.423 posições em produção, quase todas zeradas —
+  // e a página de 50 linhas voltava com 5. Marcar a caixa fazia a lista
+  // encolher e o contador não mudar, o que parece defeito de dados e é
+  // defeito de consulta.
+  //
+  // `quantity > 0` é o que o banco sabe. O ajuste fino por movimentação
+  // pendente continua abaixo, sobre um conjunto já muito menor.
+  if (filter.onlyAvailable) where.quantity = { gt: 0 };
   // Recorte de produto do console: lente e tratamento saem por padrão das
   // telas de operação (são do laboratório), mas seguem consultáveis.
   // O filtro de categoria do usuário se COMBINA com o recorte, não o
