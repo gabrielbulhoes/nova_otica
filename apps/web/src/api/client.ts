@@ -102,6 +102,13 @@ export interface DashboardSummary {
   productsNetwork?: number;
   customers: number;
   stockUnits: number;
+  /**
+   * Unidades nas unidades de RETAGUARDA (centro de distribuição, assistência,
+   * estoque de compras). Nunca somadas a `stockUnits`: não estão em prateleira
+   * e não entram em giro nem reposição. Exibidas à parte para não sumirem da
+   * tela sem explicação. Ausente na demo.
+   */
+  backofficeUnits?: number;
   pendingMovements: number;
   sales30d: { count: number; total: number };
   lastSync: {

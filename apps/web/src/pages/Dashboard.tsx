@@ -169,11 +169,21 @@ export function Dashboard() {
             {/* NÍVEL 2 — o saldo bruto. Continua sendo o primeiro número da
                 grade (é a leitura natural: quanto eu tenho, depois por quantos
                 meses dá), mas em assinatura de apoio. */}
+            {/* O saldo é o das LOJAS. A retaguarda (centro de distribuição,
+                assistência, estoque de compras) fica na frase de apoio, nunca
+                somada: são 76 mil unidades que não estão em prateleira nenhuma
+                e não podem entrar na conta de giro. Mas também não podem
+                simplesmente sumir da tela — quem conhece a operação nota a
+                falta e volta a desconfiar do painel, com razão. */}
             <StatCard
               label="Unidades em estoque"
               value={summary.data.stockUnits.toLocaleString('pt-BR')}
               unidade="un."
-              hint="Saldo da rede, ao vivo."
+              hint={
+                summary.data.backofficeUnits
+                  ? `Nas lojas, ao vivo. Retaguarda: +${summary.data.backofficeUnits.toLocaleString('pt-BR')} un.`
+                  : 'Saldo das lojas, ao vivo.'
+              }
             />
             <StatCard
               nivel={1}

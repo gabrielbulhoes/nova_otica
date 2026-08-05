@@ -17,8 +17,20 @@ dashboardRouter.get(
     since.setDate(since.getDate() - 30);
 
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    const stockWhere: Prisma.StockItemWhereInput = storeId ? { storeId } : {};
-    const salesWhere: Prisma.SaleWhereInput = { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) };
+    // Mesmo universo do resto do produto: só lojas planejáveis.
+    //
+    // Estes indicadores somavam as 22 unidades da rede — incluindo GMAIS,
+    // ASSISTENCIA e ESTOQUE COMPRAS, que são retaguarda, não prateleira —
+    // enquanto a cobertura, logo abaixo na mesma tela, já usava as 19 lojas.
+    // Dois números para a mesma pergunta, a centímetros um do outro. É assim
+    // que um painel perde a confiança de quem o lê.
+    const stockWhere: Prisma.StockItemWhereInput = storeId
+      ? { storeId }
+      : { store: PLANNED_STORE_WHERE };
+    const salesWhere: Prisma.SaleWhereInput = {
+      saleDate: { gte: since },
+      ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }),
+    };
     const pendingWhere: Prisma.InventoryMovementWhereInput = {
       status: { in: ['REQUESTED', 'PENDING'] },
       ...(storeId ? { OR: [{ fromStoreId: storeId }, { toStoreId: storeId }] } : {}),
@@ -32,8 +44,9 @@ dashboardRouter.get(
       salesAgg,
       pendingMovements,
       lastSync,
+      backofficeAgg,
     ] = await Promise.all([
-      storeId ? Promise.resolve(1) : prisma.store.count(),
+      storeId ? Promise.resolve(1) : prisma.store.count({ where: PLANNED_STORE_WHERE }),
       // Só os ativos. O cadastro do ERP guarda tudo o que já existiu — 60.610
       // linhas, das quais boa parte saiu de linha —, e o painel diz "produtos
       // no catálogo", que o gestor lê como "o que eu tenho para vender".
@@ -47,6 +60,22 @@ dashboardRouter.get(
       }),
       prisma.inventoryMovement.count({ where: pendingWhere }),
       prisma.syncRun.findFirst({ orderBy: { startedAt: 'desc' } }),
+      // Retaguarda medida à PARTE, nunca somada ao número principal.
+      //
+      // São 76.920 unidades em GMAIS, ASSISTENCIA e ESTOQUE COMPRAS. Somá-las
+      // ao estoque das lojas inflava o painel em 46% — mas simplesmente
+      // removê-las trocaria um erro por outro: o estoque existe, é da rede, e
+      // some da tela sem explicação. O gestor que conhece a operação nota a
+      // falta e volta a desconfiar do painel, com razão.
+      //
+      // Duas linhas, dois significados: o que está na prateleira e o que está
+      // na retaguarda. Só a primeira entra nas contas de giro e reposição.
+      storeId
+        ? Promise.resolve(null)
+        : prisma.stockItem.aggregate({
+            where: { store: { excludeFromPlanning: true } },
+            _sum: { quantity: true },
+          }),
     ]);
 
     res.json({
@@ -54,6 +83,8 @@ dashboardRouter.get(
       products,
       customers,
       stockUnits: stockAgg._sum.quantity ?? 0,
+      /** Unidades em unidades de retaguarda (CD, assistência). Fora das contas. */
+      backofficeUnits: backofficeAgg ? backofficeAgg._sum.quantity ?? 0 : 0,
       pendingMovements,
       sales30d: {
         count: salesAgg._count,
@@ -145,11 +176,17 @@ dashboardRouter.get(
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     const grouped = await prisma.sale.groupBy({
       by: ['storeId'],
-      where: { saleDate: { gte: since }, ...(storeId ? { storeId } : {}) },
+      where: {
+        saleDate: { gte: since },
+        ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }),
+      },
       _sum: { total: true },
       _count: true,
     });
-    const stores = await prisma.store.findMany({ select: { id: true, name: true } });
+    const stores = await prisma.store.findMany({
+      where: PLANNED_STORE_WHERE,
+      select: { id: true, name: true },
+    });
     const nameById = new Map(stores.map((s) => [s.id, s.name]));
 
     const rows = grouped
@@ -173,9 +210,15 @@ dashboardRouter.get(
     const rawThreshold = Number(req.query.threshold);
     const threshold = Number.isFinite(rawThreshold) && rawThreshold >= 0 ? rawThreshold : 3;
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    // Só o que está na PRATELEIRA conta para ruptura.
+    //
+    // Somando a retaguarda, um produto zerado nas 19 lojas mas com 50 unidades
+    // na GMAIS não aparecia aqui — a ruptura ficava mascarada pelo estoque do
+    // centro de distribuição, que é justamente o estoque que o cliente na loja
+    // não alcança. É o alerta deixando de disparar exatamente quando deveria.
     const grouped = await prisma.stockItem.groupBy({
       by: ['productId'],
-      where: storeId ? { storeId } : {},
+      where: storeId ? { storeId } : { store: PLANNED_STORE_WHERE },
       _sum: { quantity: true },
     });
     const low = grouped

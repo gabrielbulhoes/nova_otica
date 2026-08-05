@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { PLANNED_STORE_WHERE } from '../stores/store.scope.js';
 import { env } from '../../config/env.js';
 import { toNumber } from '../../http/helpers.js';
 import { productWhereForGroup, scopeCategories } from '../products/product.scope.js';
@@ -75,13 +76,34 @@ function periodStart(days: number): Date {
 }
 
 /** Indicadores agregados da rede/loja no período. */
+
+/**
+ * ESCOPO DE LOJA — a regra que faltava aqui.
+ *
+ * Planejamento, relatórios, alertas e a cobertura do painel já ignoravam as
+ * unidades marcadas `excludeFromPlanning` (GMAIS, ASSISTENCIA, ESTOQUE
+ * COMPRAS): são centros de distribuição e retaguarda, não pontos de venda.
+ * O BI não ignorava — nenhuma consulta deste arquivo filtrava loja.
+ *
+ * O resultado era o pior tipo de erro num painel: a MESMA grandeza com
+ * números DIFERENTES em telas diferentes. "Unidades em estoque" no painel não
+ * batia com o giro do relatório, e o ranking por loja trazia um CD disputando
+ * posição com loja de rua. Quem confere duas telas e vê divergência para de
+ * confiar nas duas — e está certo.
+ *
+ * Um universo só: as lojas planejáveis. O estoque de retaguarda continua no
+ * banco e continua consultável; ele só deixa de ser somado como se fosse
+ * prateleira.
+ */
+const LOJA_PLANEJADA = { store: PLANNED_STORE_WHERE } as const;
+
 export async function getKpis(days: number, storeId?: string, scope?: BiScope): Promise<Kpis> {
   const start = periodStart(days);
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start } };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
-  const stockWhere: Prisma.StockItemWhereInput = {};
+  const stockWhere: Prisma.StockItemWhereInput = { ...LOJA_PLANEJADA };
   if (storeId) stockWhere.storeId = storeId;
   if (produto) stockWhere.product = produto;
 
@@ -137,7 +159,7 @@ export async function getSalesTimeseries(
   scope?: BiScope,
 ): Promise<{ days: number; granularity: 'day'; points: DayBucket[] }> {
   const start = periodStart(days);
-  const where: Prisma.SaleWhereInput = { saleDate: { gte: start } };
+  const where: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
   if (storeId) where.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -181,7 +203,7 @@ export async function getSalesByDimension(
   scope?: BiScope,
 ): Promise<{ by: Dimension; rows: DimensionRow[]; aproximado?: boolean }> {
   const start = periodStart(days);
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start } };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -280,7 +302,7 @@ export async function getSalesFlow(
   scope?: BiScope,
 ): Promise<{ nodes: SankeyNode[]; links: SankeyLink[] }> {
   const start = periodStart(days);
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start } };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -349,7 +371,7 @@ export async function getHeatmap(
   scope?: BiScope,
 ): Promise<{ xLabels: string[]; yLabels: string[]; cells: [number, number, number][] }> {
   const start = periodStart(days);
-  const where: Prisma.SaleWhereInput = { saleDate: { gte: start } };
+  const where: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
   if (storeId) where.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
