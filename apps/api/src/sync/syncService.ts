@@ -1055,8 +1055,29 @@ async function syncPayments(client: Client, range?: { date_start: string; date_e
     const d = map.mapPagamento(raw);
     const saleId = saleMap.get(d.externalSaleId);
     if (!saleId) continue;
-    let externalId = d.externalId;
-    for (let n = 2; porId.has(externalId); n += 1) externalId = `${d.externalId}#${n}`;
+    // Sufixo de ordem só para pagamento REALMENTE distinto.
+    //
+    // A identidade já inclui a forma, então um empate aqui é "mesma venda,
+    // mesma parcela, mesma forma". Se o VALOR também for igual, é a mesma
+    // linha reportada duas vezes pelo conector — e criar `#2` para ela soma o
+    // pagamento em dobro. Foi o que a rede mostrou: 3 vendas com a soma das
+    // parcelas MAIOR que o total.
+    //
+    // Valor diferente é pagamento diferente (duas entradas em dinheiro na
+    // mesma parcela, por exemplo) e aí o sufixo é o certo. A troca do
+    // subcontado pelo sobrecontado seria um mau negócio: faltar dinheiro no
+    // relatório levanta pergunta, sobrar dinheiro passa despercebido.
+    const base = d.externalId;
+    let externalId = base;
+    let duplicado = false;
+    for (let n = 2; porId.has(externalId); n += 1) {
+      if (porId.get(externalId)!.amount === d.amount) {
+        duplicado = true;
+        break;
+      }
+      externalId = `${base}#${n}`;
+    }
+    if (duplicado) continue;
     porId.set(externalId, {
       externalId,
       saleId,
