@@ -221,7 +221,40 @@ function isoToday(): string {
  * explícita; upserts por externalId tornam a repetição inofensiva.
  */
 export async function backfillSalesHistory(months: number): Promise<SyncResult['entities']> {
-  const client = getSellbieClient();
+  // TRAVA — o backfill não tinha nenhuma, e o sync tem.
+  //
+  // Em 06/08/2026 duas execuções rodaram em paralelo por engano e disputaram
+  // as mesmas linhas: dois deadlocks do Postgres. `syncPayments` REESCREVE a
+  // janela (apaga e recria), então a corrida não é só lenta, é perigosa — se
+  // o `delete` de uma execução cair depois do `create` da outra e o seu
+  // próprio `create` falhar, a janela fica sem pagamento nenhum e nada acusa.
+  //
+  // A trava em memória não serve aqui: o backfill roda em processo próprio
+  // (`docker exec`), separado da API. Quem protege entre processos é a linha
+  // RUNNING no banco, a mesma que o sync usa.
+  if (syncInFlight) throw new SyncInProgressError();
+  const emAndamento = await prisma.syncRun.findFirst({
+    where: { status: 'RUNNING', startedAt: { gte: new Date(Date.now() - STALE_RUN_MS) } },
+  });
+  if (emAndamento) throw new SyncInProgressError();
+
+  syncInFlight = true;
+  const run = await prisma.syncRun.create({
+    data: { entity: 'backfill', status: 'RUNNING', window: `${months}m`, trigger: 'manual' },
+  });
+  try {
+    // Cliente resolvido só aqui: a trava falha antes de tocar a rede.
+    return await backfillLocked(getSellbieClient(), months, run.id);
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+async function backfillLocked(
+  client: Client,
+  months: number,
+  runId: string,
+): Promise<SyncResult['entities']> {
   const entities: SyncResult['entities'] = {};
   const now = new Date();
   for (let i = months; i >= 0; i -= 1) {
@@ -246,7 +279,23 @@ export async function backfillSalesHistory(months: number): Promise<SyncResult['
       entities[label] = { read: 0, written: 0, error: message };
       log.error('Backfill de vendas: mês falhou', { mes: label, error: message });
     }
+    // Batimento: a trava entre processos considera abandonado um RUNNING mais
+    // velho que 15 minutos, e um backfill de 24 meses passa disso. Sem isto, a
+    // própria execução envelheceria e deixaria de proteger contra a segunda.
+    await prisma.syncRun.update({ where: { id: runId }, data: { startedAt: new Date() } });
   }
+
+  const comErro = Object.values(entities).filter((e) => e.error).length;
+  await prisma.syncRun.update({
+    where: { id: runId },
+    data: {
+      status: comErro > 0 ? 'PARTIAL' : 'SUCCESS',
+      finishedAt: new Date(),
+      recordsRead: Object.values(entities).reduce((a, e) => a + e.read, 0),
+      recordsWritten: Object.values(entities).reduce((a, e) => a + e.written, 0),
+      error: comErro > 0 ? `${comErro} mês(es) com erro` : null,
+    },
+  });
   return entities;
 }
 
