@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Só confere; não emite. Por isso `rootDir` pode abraçar a raiz do pacote
+    // sem mexer no layout de `dist/`.
+    "noEmit": true,
+    "rootDir": "."
+  },
+  /**
+   * OS TESTES PRECISAM SER CONFERIDOS PELO COMPILADOR.
+   *
+   * O vitest roda por esbuild, que APAGA os tipos sem olhar para eles. Com
+   * `test/**` fora do typecheck, um teste podia chamar uma função com a
+   * assinatura antiga indefinidamente — e ninguém saberia.
+   *
+   * Não é hipotético: ao trocar `days: number` por um objeto de período no BI,
+   * os testes continuaram passando um número. `p.de` virou `undefined`, o
+   * filtro de data sumiu da consulta, e a suíte só acusou porque uma soma deu
+   * exatamente zero. Se tivesse dado um número plausível — e daria, na maioria
+   * das asserções — o teste teria passado medindo o período errado.
+   */
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

@@ -27,7 +27,14 @@ import {
 import { toCsv, downloadCsv } from '../bi/csv';
 import { useAuth } from '../auth/AuthContext';
 import { useScope } from '../lib/scope';
-import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { periodoInicial } from '../lib/periodo';
+import {
+  FiltroDePeriodo,
+  chaveDePeriodo,
+  paramsDePeriodo,
+  periodoPadrao,
+  type PeriodoEscolhido,
+} from '../components/FiltroDePeriodo';
 import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
 
 /** Recortes desta tela. O filtro só oferece os que a base responde. */
@@ -36,6 +43,10 @@ const PERIODOS = [
   { dias: 30, label: 'Últimos 30 dias' },
   { dias: 90, label: 'Últimos 90 dias' },
   { dias: 180, label: 'Últimos 180 dias' },
+  // O ano fechado. Antes do backfill este degrau seria uma promessa vazia — a
+  // base tinha 35 dias de venda. Com 2,8 anos no banco ele passou a medir algo,
+  // e é o recorte que compara um mês com o mesmo mês do ano anterior.
+  { dias: 365, label: 'Últimos 365 dias · 1 ano' },
 ];
 
 /**
@@ -72,7 +83,9 @@ const COR = {
 export function BI() {
   const { isAdmin } = useAuth();
   const { scope } = useScope();
-  const [days, setDays] = useState(() => periodoInicial(PERIODOS, 90));
+  const [periodo, setPeriodo] = useState<PeriodoEscolhido>(() =>
+    periodoPadrao(periodoInicial(PERIODOS, 90)),
+  );
   const [storeId, setStoreId] = useState('');
   const [categorias, setCategorias] = useState<string[]>([]);
 
@@ -95,12 +108,12 @@ export function BI() {
      metades do defeito estão nesta linha e nas chaves abaixo.
   */
   const p = {
-    days,
+    ...paramsDePeriodo(periodo),
     storeId: storeId || undefined,
     group: scope,
     category: tipos.length > 0 ? tipos.join(',') : undefined,
   };
-  const chave = [days, storeId, scope, tipos.join(',')];
+  const chave = [chaveDePeriodo(periodo), storeId, scope, tipos.join(',')];
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
   const kpis = useQuery({ queryKey: ['bi-kpis', ...chave], queryFn: () => getBiKpis(p) });
@@ -111,7 +124,10 @@ export function BI() {
   const flow = useQuery({ queryKey: ['bi-flow', ...chave], queryFn: () => getBiSalesFlow(p) });
   const transferFlow = useQuery({ queryKey: ['bi-transfer', ...chave], queryFn: () => getBiTransferFlow(p) });
   const heatmap = useQuery({ queryKey: ['bi-heat', ...chave], queryFn: () => getBiHeatmap(p) });
-  const arStats = useQuery({ queryKey: ['ar-stats', days], queryFn: () => getArStats(Number(days)) });
+  // A rota de provador só recebe dias; num intervalo à mão vale o TAMANHO
+  // dele, que é a leitura mais próxima do que foi pedido.
+  const arDias = kpis.data?.days ?? 90;
+  const arStats = useQuery({ queryKey: ['ar-stats', arDias], queryFn: () => getArStats(arDias) });
 
   /*
      Cópias locais das respostas.
@@ -154,7 +170,7 @@ export function BI() {
   const exportTimeseries = () => {
     if (!serie) return;
     downloadCsv(
-      `faturamento-${days}d`,
+      `faturamento-${chaveDePeriodo(periodo)}`,
       toCsv(serie.points, [
         { key: 'date', label: 'Data' },
         { key: 'total', label: 'Faturamento' },
@@ -192,13 +208,7 @@ export function BI() {
       />
 
       <div className="toolbar">
-        <select value={days} onChange={(e) => setDays(e.target.value)} aria-label="Período">
-          {opcoesDePeriodo(PERIODOS).map((o) => (
-            <option key={o.value} value={o.value} disabled={o.disabled}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <FiltroDePeriodo periodos={PERIODOS} value={periodo} onChange={setPeriodo} />
         {isAdmin && (
           <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Loja">
             <option value="">Toda a rede</option>
@@ -221,7 +231,7 @@ export function BI() {
         />
       </div>
 
-      <LegendaDaAmostra days={days} />
+      <LegendaDaAmostra days={String(kpis.data?.days ?? '')} />
 
       {kpis.isLoading || !indicadores ? (
         <Loading />
@@ -360,7 +370,7 @@ export function BI() {
               <EChart
                 option={(tema) => timeSeriesOption(serie.points, { tema, unidade: 'moeda' })}
                 height={280}
-                exportName={`faturamento-${days}d`}
+                exportName={`faturamento-${chaveDePeriodo(periodo)}`}
               />
             )}
             {serie?.aproximado && <NotaProporcional o_que="a curva diária" />}

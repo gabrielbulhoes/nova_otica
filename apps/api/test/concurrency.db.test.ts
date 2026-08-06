@@ -92,7 +92,7 @@ describe.skipIf(!RUN)('concorrência de estoque (integração com Postgres)', ()
     const { storeId, productId } = await scenario(1);
     const manager: Actor = { id: 'system-test', role: 'STORE_MANAGER', storeId };
     const transfer = await createMovement(
-      { type: 'TRANSFER', productId, fromStoreId: storeId, toStoreId: store2.id, quantity: 1 },
+      { type: 'TRANSFER', productId, fromStoreId: storeId, toStoreId: store2.id, quantity: 1, confirm: false },
       manager,
     );
     const results = await Promise.allSettled([
