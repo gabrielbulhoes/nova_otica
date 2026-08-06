@@ -16,4 +16,4 @@ UPDATE "Store" SET "externalErp" = true WHERE "name" ILIKE '%ZEISS%';
 -- O escopo planejável passa a filtrar pelos DOIS campos; o índice composto é o
 -- que serve às consultas de planejamento, BI e relatórios.
 CREATE INDEX "Store_externalErp_idx" ON "Store"("externalErp");
-CREATE INDEX "Store_planned_idx" ON "Store"("excludeFromPlanning", "externalErp");
+CREATE INDEX "Store_excludeFromPlanning_externalErp_idx" ON "Store"("excludeFromPlanning", "externalErp");
