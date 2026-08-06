@@ -422,6 +422,12 @@ const cdPattern = env.PLANNING_EXCLUDED_STORE_PATTERN.trim()
   ? new RegExp(env.PLANNING_EXCLUDED_STORE_PATTERN, 'i')
   : null;
 
+// Filiais em outro ERP (ZEISS): o CDS responde por elas, com dado atrasado.
+// Marcação separada da de retaguarda — ver store.scope.ts.
+const outroErpPattern = env.EXTERNAL_ERP_STORE_PATTERN.trim()
+  ? new RegExp(env.EXTERNAL_ERP_STORE_PATTERN, 'i')
+  : null;
+
 async function syncStores(client: Client) {
   const rows = await client.getLojas();
   let written = 0;
@@ -429,10 +435,11 @@ async function syncStores(client: Client) {
     const d = map.mapLoja(raw);
     if (!d.externalId) continue;
     const excludeFromPlanning = cdPattern ? cdPattern.test(d.name ?? '') : false;
+    const externalErp = outroErpPattern ? outroErpPattern.test(d.name ?? '') : false;
     await prisma.store.upsert({
       where: { externalId: d.externalId },
-      create: { ...d, excludeFromPlanning, syncedAt: new Date() },
-      update: { ...d, excludeFromPlanning, syncedAt: new Date() },
+      create: { ...d, excludeFromPlanning, externalErp, syncedAt: new Date() },
+      update: { ...d, excludeFromPlanning, externalErp, syncedAt: new Date() },
     });
     written += 1;
   }

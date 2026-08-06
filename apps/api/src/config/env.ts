@@ -31,6 +31,10 @@ const schema = z.object({
   // Regex (case-insensitive) casada com o nome da loja no sync; vazio desliga
   // a marcação automática.
   PLANNING_EXCLUDED_STORE_PATTERN: z.string().default('GMAIS|ASSISTENCIA|ESTOQUE COMPRAS'),
+  // Filiais que operam em OUTRO ERP (ZEISS VISION CENTER): o CDS devolve dados
+  // delas, mas desatualizados. Ficam fora de TODO número da plataforma, não só
+  // do planejamento. Regex casada com o nome da loja no sync; vazio desliga.
+  EXTERNAL_ERP_STORE_PATTERN: z.string().default('ZEISS'),
   // Caminho do catálogo de marcas (fornecedor + mix por loja). Vazio = procura
   // em apps/api/data/brand-catalog.json. Ausente = sem restrição de mix.
   BRAND_CATALOG_PATH: z.string().optional().default(''),

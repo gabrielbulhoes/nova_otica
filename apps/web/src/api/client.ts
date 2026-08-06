@@ -109,6 +109,13 @@ export interface DashboardSummary {
    * tela sem explicação. Ausente na demo.
    */
   backofficeUnits?: number;
+  /**
+   * Unidades nas filiais que rodam em OUTRO ERP (ZEISS VISION CENTER). O CDS
+   * responde por elas com dado atrasado, então elas ficam fora de todas as
+   * contas — mas o número vem para a tela poder dizer isso. Feedback 6.0/01.
+   */
+  externalErpUnits?: number;
+  externalErpStores?: number;
   pendingMovements: number;
   sales30d: { count: number; total: number };
   lastSync: {
@@ -593,9 +600,13 @@ export interface DecisionCard {
   type: DecisionType;
   title: string;
   priority: DecisionPriority;
+  /** De onde veio a prioridade: urgência, confiança ou valor em jogo. */
+  priorityReason?: string;
   productId: string;
   description: string;
   brand: string | null;
+  /** Grife de análise (extraída da descrição) — é por ela que a tela filtra. */
+  brandLabel?: string | null;
   target: string;
   fromStoreId?: string;
   toStoreId?: string;
@@ -787,6 +798,54 @@ export const getPurchaseOrderHistory = () =>
   api.get<{ total: number; rows: PurchaseOrderRecord[] }>('/planning/purchase-orders/history').then((r) => r.data);
 export const settlePurchaseOrder = (id: string, action: 'receive' | 'cancel') =>
   api.post<PurchaseOrderRecord>(`/planning/purchase-orders/${id}/${action}`).then((r) => r.data);
+
+// ─── Distribuição do recebimento (feedback 6.0 · item 06) ────────────────────
+
+/** De qual base saiu o rateio de um item — quanto mais abaixo, mais grossa. */
+export type DistributionBasis = 'sku' | 'marca' | 'categoria' | 'rede';
+
+export interface DistributionRow {
+  storeId: string;
+  storeName: string;
+  quantity: number;
+  sharePct: number;
+  unitsSold: number;
+}
+
+export interface DistributionItem {
+  productId: string;
+  description: string;
+  quantity: number;
+  basis: DistributionBasis;
+  basisLabel: string;
+  rows: DistributionRow[];
+  /** Lojas fora do rateio por não trabalharem a grife (catálogo de mix). */
+  excludedByMix?: string[];
+}
+
+export interface DistributionPlan {
+  orderId: string;
+  supplier: string;
+  status: string;
+  units: number;
+  items: DistributionItem[];
+  /** Unidades sem rateio possível — declaradas, nunca evaporadas. */
+  unassigned: number;
+}
+
+export const getDistributionPlan = (id: string) =>
+  api.get<DistributionPlan>(`/planning/purchase-orders/${id}/distribution`).then((r) => r.data);
+export const getReceivingUnits = () =>
+  api
+    .get<{ rows: { id: string; name: string }[] }>('/planning/receiving-units')
+    .then((r) => r.data);
+export const distributeOrder = (id: string, fromStoreId: string) =>
+  api
+    .post<{ created: number; units: number; movementIds: string[] }>(
+      `/planning/purchase-orders/${id}/distribute`,
+      { fromStoreId },
+    )
+    .then((r) => r.data);
 export const getSupplierSettings = () =>
   api.get<{ defaultLeadTimeDays: number; rows: SupplierSetting[] }>('/planning/suppliers').then((r) => r.data);
 export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) =>

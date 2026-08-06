@@ -143,7 +143,14 @@ const allStores: Store[] = real
 // estoque de compras) ficam fora da matemática de lojas, igual ao backend
 // real (Store.excludeFromPlanning / PLANNING_EXCLUDED_STORE_PATTERN).
 const PLANNING_EXCLUDED_STORE_PATTERN = /gmais|assistencia|estoque compras/i;
-const stores: Store[] = allStores.filter((s) => !PLANNING_EXCLUDED_STORE_PATTERN.test(s.name));
+// Feedback 6.0 · item 01 — as lojas ZEISS VISION CENTER rodam em outro ERP e o
+// CDS não as atualiza em tempo real. Mesma marcação do backend
+// (Store.externalErp / EXTERNAL_ERP_STORE_PATTERN): a demonstração precisa
+// mostrar a mesma rede que a produção, senão volta a ser uma segunda verdade.
+const EXTERNAL_ERP_STORE_PATTERN = /zeiss/i;
+const stores: Store[] = allStores.filter(
+  (s) => !PLANNING_EXCLUDED_STORE_PATTERN.test(s.name) && !EXTERNAL_ERP_STORE_PATTERN.test(s.name),
+);
 
 const products: Product[] = real
   ? real.products.map((p) => ({

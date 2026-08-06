@@ -1,7 +1,12 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { toNumber } from '../../http/helpers.js';
-import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
+import {
+  PLANNED_STORE_IDS_SQL,
+  PLANNED_STORE_WHERE,
+  plannedStoreSql,
+  stockPlannedWhere,
+} from '../stores/store.scope.js';
 import { productWhereForGroup, scopeCategories } from '../products/product.scope.js';
 import {
   abcFromItems,
@@ -301,7 +306,7 @@ export async function salesAnalysis(
   // GMAIS/CDs fora da análise por loja; loja específica já delimita o escopo.
   const storeCond = storeId
     ? Prisma.sql`AND s."storeId" = ${storeId}`
-    : Prisma.sql`AND s."storeId" IN (SELECT id FROM "Store" WHERE "excludeFromPlanning" = false)`;
+    : Prisma.sql`AND s."storeId" IN (${PLANNED_STORE_IDS_SQL})`;
 
   // SKU agrupa pelo ID do produto (descrições colidem entre modelos).
   if (by === 'product') {
@@ -514,7 +519,7 @@ export async function brandMix(days: number) {
       SELECT st."storeId" AS "storeId", p.description AS description, p.brand AS brand,
              p.category AS category, COALESCE(SUM(st.quantity), 0)::bigint AS units
       FROM "StockItem" st
-      JOIN "Store" lo ON lo.id = st."storeId" AND lo."excludeFromPlanning" = false
+      JOIN "Store" lo ON lo.id = st."storeId" AND ${plannedStoreSql('lo')}
       LEFT JOIN "Product" p ON p.id = st."productId"
       GROUP BY st."storeId", p.description, p.brand, p.category
     `),
@@ -523,7 +528,7 @@ export async function brandMix(days: number) {
              p.category AS category, COALESCE(SUM(si.quantity), 0)::bigint AS units
       FROM "SaleItem" si
       JOIN "Sale" s ON s.id = si."saleId"
-      JOIN "Store" lo ON lo.id = s."storeId" AND lo."excludeFromPlanning" = false
+      JOIN "Store" lo ON lo.id = s."storeId" AND ${plannedStoreSql('lo')}
       LEFT JOIN "Product" p ON p.id = si."productId"
       WHERE s."saleDate" >= ${periodStart(days)}
       GROUP BY s."storeId", p.description, p.brand, p.category

@@ -12,6 +12,11 @@ import {
 } from './decisions.service.js';
 import { batchHistory } from './batches.service.js';
 import {
+  createDistributionMovements,
+  distributionPlan,
+  receivingUnits,
+} from './distribution.service.js';
+import {
   commercialStrategy,
   decisionBoard,
   fairSplit,
@@ -22,7 +27,7 @@ import {
   purchaseSuggestions,
   rebalancePlan,
   registerPurchaseOrder,
-  setSupplierLeadTime,
+  setSupplierSetting,
   settlePurchaseOrder,
 } from './planning.service.js';
 
@@ -167,6 +172,53 @@ planningRouter.post(
   }),
 );
 
+// ─── Distribuição do recebimento (feedback 6.0 · item 06) ────────────────────
+
+/**
+ * GET /api/planning/purchase-orders/:id/distribution — como dividir a
+ * mercadoria recebida entre as lojas. Só proposta; não escreve nada.
+ */
+planningRouter.get(
+  '/purchase-orders/:id/distribution',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    res.json(await distributionPlan(req.params.id));
+  }),
+);
+
+/** GET /api/planning/receiving-units — de onde a carga pode sair (retaguarda). */
+planningRouter.get(
+  '/receiving-units',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    res.json(await receivingUnits());
+  }),
+);
+
+const distributeSchema = z.object({ fromStoreId: z.string().min(1) });
+
+/**
+ * POST /api/planning/purchase-orders/:id/distribute — executa o plano, criando
+ * uma transferência por (item × loja) a partir da unidade que recebeu.
+ *
+ * A origem vem no corpo porque o pedido não registra onde a carga desembarcou,
+ * e há três unidades de retaguarda candidatas.
+ */
+planningRouter.post(
+  '/purchase-orders/:id/distribute',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const { fromStoreId } = distributeSchema.parse(req.body);
+    const r = await createDistributionMovements(req.params.id, fromStoreId, {
+      id: req.user!.id,
+      role: req.user!.role,
+      storeId: req.user!.storeId,
+    });
+    publish({ type: 'purchase-order.changed', recordId: req.params.id });
+    res.status(201).json(r);
+  }),
+);
+
 /** GET /api/planning/suppliers — fornecedores (marcas) e seus prazos. */
 planningRouter.get(
   '/suppliers',
@@ -178,15 +230,21 @@ planningRouter.get(
 const supplierSchema = z.object({
   brand: z.string().min(1).max(120),
   leadTimeDays: z.number().int().min(1).max(365).nullable(),
+  /** Grife fora do mix atual da rede — corta a sugestão de compra. */
+  discontinued: z.boolean().optional(),
 });
 
-/** PUT /api/planning/suppliers — define o prazo de um fornecedor (ADMIN). */
+/**
+ * PUT /api/planning/suppliers — prazo do fornecedor e/ou marcação de mix
+ * (ADMIN). Marcar `discontinued` é decisão comercial: nenhum dado do ERP diz
+ * que a rede parou de trabalhar uma grife, então ela precisa ser declarada.
+ */
 planningRouter.put(
   '/suppliers',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const input = supplierSchema.parse(req.body);
-    res.json(await setSupplierLeadTime(input.brand, input.leadTimeDays));
+    res.json(await setSupplierSetting(input.brand, input.leadTimeDays, input.discontinued));
   }),
 );
 
