@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma.js';
+import { periodoDeDias } from '../src/http/periodo.js';
 import { getKpis, getSalesByDimension } from '../src/modules/bi/bi.service.js';
 import { stockPlannedWhere } from '../src/modules/stores/store.scope.js';
 
@@ -45,7 +46,7 @@ d('escopo de loja · o mesmo universo em todas as telas', () => {
   });
 
   it('KPI de estoque ignora a retaguarda', async () => {
-    const kpis = await getKpis(JANELA);
+    const kpis = await getKpis(periodoDeDias(JANELA));
     const rede = await prisma.stockItem.aggregate({ _sum: { quantity: true } });
     const retaguarda = await prisma.stockItem.aggregate({
       where: { storeId: cdId },
@@ -60,7 +61,7 @@ d('escopo de loja · o mesmo universo em todas as telas', () => {
     // `stockPlannedWhere` é o contrato compartilhado. Enquanto o BI não o
     // usava, o painel e o relatório respondiam números diferentes para a
     // mesma pergunta — e é isso que o usuário confere olhando duas telas.
-    const kpis = await getKpis(JANELA);
+    const kpis = await getKpis(periodoDeDias(JANELA));
     const planejadas = await prisma.stockItem.aggregate({
       where: stockPlannedWhere,
       _sum: { quantity: true },
@@ -69,15 +70,15 @@ d('escopo de loja · o mesmo universo em todas as telas', () => {
   });
 
   it('a retaguarda não aparece no ranking de lojas', async () => {
-    const r = await getSalesByDimension(JANELA, 'store');
+    const r = await getSalesByDimension(periodoDeDias(JANELA), 'store');
     expect(r.rows.length).toBeGreaterThan(0);
     expect(r.rows.map((x) => x.label)).not.toContain(cdNome);
   });
 
   it('faturamento cai ao excluir a retaguarda, e volta ao reincluí-la', async () => {
-    const semCd = await getKpis(JANELA);
+    const semCd = await getKpis(periodoDeDias(JANELA));
     await prisma.store.update({ where: { id: cdId }, data: { excludeFromPlanning: false } });
-    const comCd = await getKpis(JANELA);
+    const comCd = await getKpis(periodoDeDias(JANELA));
     await prisma.store.update({ where: { id: cdId }, data: { excludeFromPlanning: true } });
 
     expect(comCd.stockUnits).toBeGreaterThan(semCd.stockUnits);

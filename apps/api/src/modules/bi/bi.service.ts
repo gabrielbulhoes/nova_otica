@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { PLANNED_STORE_WHERE } from '../stores/store.scope.js';
 import { env } from '../../config/env.js';
 import { toNumber } from '../../http/helpers.js';
+import type { Periodo } from '../../http/periodo.js';
 import { productWhereForGroup, scopeCategories } from '../products/product.scope.js';
 import type { ProductGroup } from '../planning/planning.math.js';
 import {
@@ -68,11 +69,14 @@ function vendaQueTocaORecorte(
   return produto ? { ...saleWhere, items: { some: { product: produto } } } : saleWhere;
 }
 
-function periodStart(days: number): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - (days - 1));
-  return d;
+/**
+ * Filtro de data do recorte. Era `{ gte: hoje - N }`, sem limite superior —
+ * o que basta para "últimos N dias" e não permite intervalo nenhum que termine
+ * no passado. Agora é fechado dos dois lados, e o `lte` cai no FIM do último
+ * dia (ver `Periodo`), senão o dia escolhido pelo usuário sairia vazio.
+ */
+function noPeriodo(p: Periodo): Prisma.DateTimeFilter {
+  return { gte: p.de, lte: p.ate };
 }
 
 /** Indicadores agregados da rede/loja no período. */
@@ -97,9 +101,8 @@ function periodStart(days: number): Date {
  */
 const LOJA_PLANEJADA = { store: PLANNED_STORE_WHERE } as const;
 
-export async function getKpis(days: number, storeId?: string, scope?: BiScope): Promise<Kpis> {
-  const start = periodStart(days);
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
+export async function getKpis(p: Periodo, storeId?: string, scope?: BiScope): Promise<Kpis> {
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -154,12 +157,11 @@ export async function getKpis(days: number, storeId?: string, scope?: BiScope): 
 
 /** Série temporal diária de vendas (com dias sem venda preenchidos com zero). */
 export async function getSalesTimeseries(
-  days: number,
+  p: Periodo,
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ days: number; granularity: 'day'; points: DayBucket[] }> {
-  const start = periodStart(days);
-  const where: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
+  const where: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
   if (storeId) where.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -182,8 +184,11 @@ export async function getSalesTimeseries(
         })
       ).map((s) => ({ saleDate: s.saleDate, total: toNumber(s.total) ?? 0 }));
 
-  const points = bucketSalesByDay(linhas, days, new Date());
-  return { days, granularity: 'day', points };
+  // A série é semeada a partir do FIM do recorte, não de hoje: num período
+  // personalizado que termina no passado, semear a partir de hoje produziria
+  // uma faixa de zeros à direita e nenhum dos dias pedidos.
+  const points = bucketSalesByDay(linhas, p.dias, p.ate);
+  return { days: p.dias, granularity: 'day', points };
 }
 
 export type Dimension = 'store' | 'category' | 'brand' | 'payment';
@@ -197,13 +202,12 @@ export interface DimensionRow {
 
 /** Vendas agregadas por dimensão (loja, categoria, marca ou pagamento). */
 export async function getSalesByDimension(
-  days: number,
+  p: Periodo,
   by: Dimension,
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ by: Dimension; rows: DimensionRow[]; aproximado?: boolean }> {
-  const start = periodStart(days);
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -297,12 +301,11 @@ export async function getSalesByDimension(
 
 /** Sankey do fluxo de vendas: Categoria → Loja (receita por item). */
 export async function getSalesFlow(
-  days: number,
+  p: Periodo,
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ nodes: SankeyNode[]; links: SankeyLink[] }> {
-  const start = periodStart(days);
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -326,15 +329,14 @@ export async function getSalesFlow(
 
 /** Sankey do fluxo de transferências entre lojas (Origem → Destino). */
 export async function getTransferFlow(
-  days: number,
+  p: Periodo,
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ nodes: SankeyNode[]; links: SankeyLink[] }> {
-  const start = periodStart(days);
   const where: Prisma.InventoryMovementWhereInput = {
     type: 'TRANSFER',
     status: { in: ['PENDING', 'CONFIRMED', 'RECONCILED'] },
-    createdAt: { gte: start },
+    createdAt: noPeriodo(p),
     fromStoreId: { not: null },
     toStoreId: { not: null },
   };
@@ -366,12 +368,11 @@ const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 /** Heatmap de receita: Loja (linhas) × dia da semana (colunas). */
 export async function getHeatmap(
-  days: number,
+  p: Periodo,
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ xLabels: string[]; yLabels: string[]; cells: [number, number, number][] }> {
-  const start = periodStart(days);
-  const where: Prisma.SaleWhereInput = { saleDate: { gte: start }, ...LOJA_PLANEJADA };
+  const where: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
   if (storeId) where.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 

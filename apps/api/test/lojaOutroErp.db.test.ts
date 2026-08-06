@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma.js';
+import { periodoDeDias } from '../src/http/periodo.js';
 import { getKpis, getSalesByDimension } from '../src/modules/bi/bi.service.js';
 import {
   PLANNED_STORE_WHERE,
@@ -55,7 +56,7 @@ d('lojas em outro ERP · fora das contas, sem virar retaguarda', () => {
   });
 
   it('sai do estoque do painel e do BI', async () => {
-    const kpis = await getKpis(JANELA);
+    const kpis = await getKpis(periodoDeDias(JANELA));
     const planejadas = await prisma.stockItem.aggregate({
       where: stockPlannedWhere,
       _sum: { quantity: true },
@@ -69,7 +70,7 @@ d('lojas em outro ERP · fora das contas, sem virar retaguarda', () => {
   });
 
   it('sai do ranking de lojas', async () => {
-    const r = await getSalesByDimension(JANELA, 'store');
+    const r = await getSalesByDimension(periodoDeDias(JANELA), 'store');
     expect(r.rows.map((x) => x.label)).not.toContain(zeissNome);
   });
 

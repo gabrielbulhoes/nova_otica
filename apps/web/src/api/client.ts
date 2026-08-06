@@ -860,6 +860,11 @@ export const setSupplierLeadTime = (
 
 export interface BiKpis {
   days: number;
+  /** Pontas do recorte de fato aplicado (AAAA-MM-DD). */
+  de?: string;
+  ate?: string;
+  /** O recorte veio de datas escolhidas à mão, não de um "últimos N dias". */
+  personalizado?: boolean;
   revenue: number;
   salesCount: number;
   avgTicket: number;

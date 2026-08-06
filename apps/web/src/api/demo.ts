@@ -1343,7 +1343,20 @@ const one = (v?: string | string[]) => (Array.isArray(v) ? v[0] : v);
 export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest): unknown {
   const m = method.toUpperCase();
   const p = (re: RegExp) => re.exec(url);
-  const days = Number(one(params.days)) || 30;
+  // Período: `?days=N` ou `?de=&ate=` (o intervalo à mão do BI). A demo mede
+  // sobre uma FOTOGRAFIA de dias contados, não sobre datas — então o intervalo
+  // é convertido no seu TAMANHO e recortado pela cobertura da amostra, que é o
+  // mesmo tratamento que `effectiveDays` já dá a qualquer recorte grande.
+  // Traduzir em vez de ignorar é o que impede a demo de responder um mês
+  // inteiro quando o usuário pediu três dias.
+  const diasEntre = (de?: string, ate?: string): number | null => {
+    if (!de || !ate) return null;
+    const a = Date.parse(`${de}T00:00:00Z`);
+    const b = Date.parse(`${ate}T00:00:00Z`);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return null;
+    return Math.round((b - a) / 86_400_000) + 1;
+  };
+  const days = diasEntre(one(params.de), one(params.ate)) ?? (Number(one(params.days)) || 30);
 
   // Auth — com contas nomeadas (build de dados reais) o login é validado;
   // sem elas, a demo pública continua aceitando qualquer credencial.

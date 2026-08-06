@@ -5,6 +5,12 @@
     "outDir": "dist",
     "types": ["node"]
   },
+  // Só `src` — este arquivo define o BUILD, e o que ele emite é o que roda em
+  // produção. Incluir `test/**` aqui muda o `rootDir` para a raiz do pacote e
+  // o resultado vira `dist/src/server.js`, enquanto o `package.json` e o
+  // Dockerfile procuram `dist/server.js`. O contêiner sobe e morre.
+  //
+  // Os testes são conferidos por `tsconfig.test.json`, que não emite nada.
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

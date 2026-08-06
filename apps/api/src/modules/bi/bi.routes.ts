@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { asyncHandler, badRequest, parseDays, parseList } from '../../http/helpers.js';
+import { asyncHandler, badRequest, parseList } from '../../http/helpers.js';
+import { parsePeriodo, periodoNaResposta } from '../../http/periodo.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
 import { parseGroup } from '../products/product.scope.js';
 import {
@@ -31,9 +32,9 @@ const recorte = (req: { query: Record<string, unknown> }) => ({
 biRouter.get(
   '/kpis',
   asyncHandler(async (req, res) => {
-    const days = parseDays(req.query.days);
+    const p = parsePeriodo(req.query);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json({ days, ...(await getKpis(days, storeId, recorte(req))) });
+    res.json({ ...periodoNaResposta(p), ...(await getKpis(p, storeId, recorte(req))) });
   }),
 );
 
@@ -41,9 +42,9 @@ biRouter.get(
 biRouter.get(
   '/sales-timeseries',
   asyncHandler(async (req, res) => {
-    const days = parseDays(req.query.days);
+    const p = parsePeriodo(req.query);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await getSalesTimeseries(days, storeId, recorte(req)));
+    res.json(await getSalesTimeseries(p, storeId, recorte(req)));
   }),
 );
 
@@ -51,13 +52,13 @@ biRouter.get(
 biRouter.get(
   '/sales-by-dimension',
   asyncHandler(async (req, res) => {
-    const days = parseDays(req.query.days);
+    const p = parsePeriodo(req.query);
     const by = (req.query.by as Dimension) ?? 'store';
     if (!DIMENSIONS.includes(by)) {
       throw badRequest(`Dimensão inválida. Use uma de: ${DIMENSIONS.join(', ')}.`);
     }
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await getSalesByDimension(days, by, storeId, recorte(req)));
+    res.json(await getSalesByDimension(p, by, storeId, recorte(req)));
   }),
 );
 
@@ -65,9 +66,9 @@ biRouter.get(
 biRouter.get(
   '/sales-flow',
   asyncHandler(async (req, res) => {
-    const days = parseDays(req.query.days);
+    const p = parsePeriodo(req.query);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await getSalesFlow(days, storeId, recorte(req)));
+    res.json(await getSalesFlow(p, storeId, recorte(req)));
   }),
 );
 
@@ -75,9 +76,9 @@ biRouter.get(
 biRouter.get(
   '/transfer-flow',
   asyncHandler(async (req, res) => {
-    const days = parseDays(req.query.days);
+    const p = parsePeriodo(req.query);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await getTransferFlow(days, storeId, recorte(req)));
+    res.json(await getTransferFlow(p, storeId, recorte(req)));
   }),
 );
 
@@ -85,8 +86,8 @@ biRouter.get(
 biRouter.get(
   '/heatmap',
   asyncHandler(async (req, res) => {
-    const days = parseDays(req.query.days);
+    const p = parsePeriodo(req.query);
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await getHeatmap(days, storeId, recorte(req)));
+    res.json(await getHeatmap(p, storeId, recorte(req)));
   }),
 );
