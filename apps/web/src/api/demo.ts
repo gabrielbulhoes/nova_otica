@@ -234,6 +234,11 @@ const demoLeadTimes = new Map<string, number>([
   [MARCAS[1], 7],
 ]);
 
+// Grifes fora do mix atual da rede (feedback 6.0 · item 03). Começa vazia de
+// propósito: é uma declaração comercial, e inventar uma na demonstração seria
+// mostrar ao cliente uma decisão que ele não tomou.
+const demoForaDoMix = new Set<string>();
+
 // Histórico de pedidos de compra (enviado/recebido) da demo
 interface DemoOrderRecord {
   id: string;
@@ -1996,6 +2001,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         leadTimeDays: demoLeadTimes.get(brand) ?? null,
         products: products.filter((x) => x.brand === brand).length,
         isDefault: !demoLeadTimes.has(brand),
+        discontinued: demoForaDoMix.has(brand),
       })),
     };
   }
@@ -2004,7 +2010,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const lt = body.leadTimeDays;
     if (lt === null) demoLeadTimes.delete(brand);
     else demoLeadTimes.set(brand, Number(lt));
-    return { brand, leadTimeDays: lt };
+    // Feedback 6.0 · item 03 — grife fora do mix atual da rede.
+    if (body.discontinued === true) demoForaDoMix.add(brand);
+    else if (body.discontinued === false) demoForaDoMix.delete(brand);
+    return { brand, leadTimeDays: lt, discontinued: demoForaDoMix.has(brand) };
   }
 
   // Mix de marcas por bandeira (feedback 04 fase 2)

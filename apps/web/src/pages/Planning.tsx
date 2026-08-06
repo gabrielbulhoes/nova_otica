@@ -841,6 +841,7 @@ function SupplierRow({
   isDefault,
   defaultDays,
   canEdit,
+  discontinued,
 }: {
   brand: string;
   leadTimeDays: number | null;
@@ -848,15 +849,17 @@ function SupplierRow({
   isDefault: boolean;
   defaultDays: number;
   canEdit: boolean;
+  discontinued: boolean;
 }) {
   const qc = useQueryClient();
   const [value, setValue] = useState(leadTimeDays === null ? '' : String(leadTimeDays));
+  const [foraDoMix, setForaDoMix] = useState(discontinued);
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const save = async () => {
     setState('saving');
     try {
-      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value));
+      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value), foraDoMix);
       setState('saved');
       qc.invalidateQueries({ queryKey: ['planning-suppliers'] });
       qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
@@ -885,6 +888,31 @@ function SupplierRow({
           />
         ) : (
           <span>{leadTimeDays ?? defaultDays} dias{isDefault ? ' (padrão)' : ''}</span>
+        )}
+      </td>
+      {/* Feedback 6.0 · item 03 — "grifes que não fazem mais parte de nosso mix
+          de produto". Nenhum dado do ERP diz isso: é decisão comercial, e por
+          isso precisa ser declarada aqui. Marcar corta a SUGESTÃO DE COMPRA e
+          nada mais — a liquidação continua (descontinuado com saldo é o que se
+          quer escoar) e o remanejamento também. */}
+      <td className="num">
+        {canEdit ? (
+          <label
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+            title="Marcada: o motor para de sugerir compra desta grife. A liquidação e o remanejamento continuam."
+          >
+            <input
+              type="checkbox"
+              checked={foraDoMix}
+              onChange={(e) => setForaDoMix(e.target.checked)}
+              aria-label={`${brand} está fora do mix atual da rede`}
+            />
+            fora do mix
+          </label>
+        ) : foraDoMix ? (
+          <Selo tom="amber" icone="atencao">Fora do mix</Selo>
+        ) : (
+          <span className="muted">—</span>
         )}
       </td>
       {canEdit && (
@@ -1446,7 +1474,7 @@ export function Planning() {
       <AberturaDeSecao
         eyebrow="Prazos"
         titulo="Prazos dos fornecedores (lead time)"
-        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias.`}
+        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias. Marque “fora do mix” nas grifes que a rede não trabalha mais: o motor para de sugerir compra delas, mas continua sugerindo liquidação do saldo.`}
       />
       <div className="card">
         {suppliers.isLoading || !suppliers.data ? (
@@ -1458,6 +1486,7 @@ export function Planning() {
                 <th>Fornecedor (marca)</th>
                 <th className="num">Produtos</th>
                 <th className="num">Prazo de entrega</th>
+                <th className="num">Mix</th>
                 {isAdmin && <th className="right">Ação</th>}
               </tr>
             </thead>
@@ -1471,6 +1500,7 @@ export function Planning() {
                   isDefault={s.isDefault}
                   defaultDays={suppliers.data!.defaultLeadTimeDays}
                   canEdit={isAdmin}
+                  discontinued={s.discontinued ?? false}
                 />
               ))}
             </tbody>

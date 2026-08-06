@@ -558,6 +558,8 @@ export interface SupplierSetting {
   leadTimeDays: number | null;
   products: number;
   isDefault: boolean;
+  /** Grife fora do mix atual da rede — corta a sugestão de compra. */
+  discontinued?: boolean;
 }
 
 export interface PurchaseOrderItem {
@@ -848,8 +850,11 @@ export const distributeOrder = (id: string, fromStoreId: string) =>
     .then((r) => r.data);
 export const getSupplierSettings = () =>
   api.get<{ defaultLeadTimeDays: number; rows: SupplierSetting[] }>('/planning/suppliers').then((r) => r.data);
-export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) =>
-  api.put('/planning/suppliers', { brand, leadTimeDays }).then((r) => r.data);
+export const setSupplierLeadTime = (
+  brand: string,
+  leadTimeDays: number | null,
+  discontinued?: boolean,
+) => api.put('/planning/suppliers', { brand, leadTimeDays, discontinued }).then((r) => r.data);
 
 // ─── BI ──────────────────────────────────────────────────────────────────────
 
