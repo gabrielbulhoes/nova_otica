@@ -48,6 +48,28 @@ d('backfill (integração com Postgres)', () => {
     await prisma.syncRun.delete({ where: { id: run.id } });
   });
 
+  it('fecha o RUNNING abandonado em vez de deixá-lo mentindo na tabela', async () => {
+    // Os "fantasmas" nunca bloquearam — a trava só olha RUNNING recente. Mas
+    // ficavam para sempre e levaram a operação a diagnosticar um bug de trava
+    // que não existia. Registro que mente sobre o próprio estado custa caro
+    // mesmo quando é inócuo.
+    const fantasma = await prisma.syncRun.create({
+      data: {
+        entity: 'backfill',
+        status: 'RUNNING',
+        window: 'tudo',
+        trigger: 'manual',
+        startedAt: new Date(Date.now() - 4 * 60 * 60_000),
+      },
+    });
+    await backfillSalesHistory({ meses: 1 });
+    const depois = await prisma.syncRun.findUnique({ where: { id: fantasma.id } });
+    expect(depois?.status).toBe('FAILED');
+    expect(depois?.finishedAt).not.toBeNull();
+    expect(depois?.error).toContain('abandonado');
+    await prisma.syncRun.delete({ where: { id: fantasma.id } });
+  });
+
   it('um RUNNING velho não bloqueia — processo que morreu não pode travar a rede', async () => {
     const velho = await prisma.syncRun.create({
       data: {

@@ -32,6 +32,31 @@ export function isSyncRunning(): boolean {
   return syncInFlight;
 }
 
+/**
+ * Fecha os runs que ficaram RUNNING para sempre — processo morto, container
+ * reiniciado, `docker exec` interrompido.
+ *
+ * Eles nunca bloquearam nada: a trava só olha RUNNING mais novo que
+ * STALE_RUN_MS, e um run de horas atrás não casa com isso. Mas ficavam na
+ * tabela indefinidamente e, em 06/08/2026, levaram a operação a diagnosticar
+ * um bug de trava que não existia — o que bloqueava eram as próprias
+ * tentativas anteriores, ainda vivas dentro do container.
+ *
+ * Registro que mente sobre o próprio estado custa caro mesmo quando é inócuo.
+ */
+async function fecharRunsAbandonados(): Promise<number> {
+  const r = await prisma.syncRun.updateMany({
+    where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - STALE_RUN_MS) } },
+    data: {
+      status: 'FAILED',
+      finishedAt: new Date(),
+      error: 'abandonado: o processo terminou sem fechar o run',
+    },
+  });
+  if (r.count > 0) log.warn('Runs abandonados fechados', { quantidade: r.count });
+  return r.count;
+}
+
 export interface SyncResult {
   ok: boolean;
   window: string;
@@ -48,6 +73,7 @@ type Trigger = 'schedule' | 'boot' | 'manual';
  */
 export async function runFullSync(trigger: Trigger = 'manual'): Promise<SyncResult> {
   if (syncInFlight) throw new SyncInProgressError();
+  await fecharRunsAbandonados();
   // Trava entre processos: um run RUNNING recente indica sync ativo em outra
   // instância (scheduler × manual, ou múltiplas réplicas da API).
   const activeRun = await prisma.syncRun.findFirst({
@@ -248,6 +274,7 @@ export async function backfillSalesHistory(
   // (`docker exec`), separado da API. Quem protege entre processos é a linha
   // RUNNING no banco, a mesma que o sync usa.
   if (syncInFlight) throw new SyncInProgressError();
+  await fecharRunsAbandonados();
   const emAndamento = await prisma.syncRun.findFirst({
     where: { status: 'RUNNING', startedAt: { gte: new Date(Date.now() - STALE_RUN_MS) } },
   });
@@ -313,7 +340,7 @@ async function backfillLocked(
       // encerraria a varredura no primeiro soluço do conector e deixaria anos
       // de fora, com a aparência de ter terminado direito.
       vaziosSeguidos = 0;
-      await bater(runId);
+      await bater(runId, entities);
       continue;
     }
 
@@ -331,7 +358,7 @@ async function backfillLocked(
         break;
       }
     }
-    await bater(runId);
+    await bater(runId, entities);
   }
 
   if (descobrir && ultimoComVenda === null) {
@@ -358,8 +385,20 @@ async function backfillLocked(
  * execução envelheceria no meio do caminho e deixaria de proteger contra uma
  * segunda.
  */
-async function bater(runId: string): Promise<void> {
-  await prisma.syncRun.update({ where: { id: runId }, data: { startedAt: new Date() } });
+async function bater(runId: string, entities: SyncResult['entities']): Promise<void> {
+  // Além de renovar a trava, o batimento grava o PROGRESSO. A saída do
+  // backfill vai para o terminal que chamou o `docker exec`, não para o log do
+  // container — quando a conexão cai, some. A linha do SyncRun passa a ser a
+  // fonte de acompanhamento que sobrevive à desconexão.
+  await prisma.syncRun.update({
+    where: { id: runId },
+    data: {
+      startedAt: new Date(),
+      recordsRead: Object.values(entities).reduce((a, e) => a + e.read, 0),
+      recordsWritten: Object.values(entities).reduce((a, e) => a + e.written, 0),
+      error: `em andamento: ${Object.keys(entities).length} meses processados`,
+    },
+  });
 }
 
 // ─── Helpers de lookup externalId -> id interno ──────────────────────────────
