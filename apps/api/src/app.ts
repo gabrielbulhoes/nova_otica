@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { env } from './config/env.js';
+import { getFrescor } from './sync/syncHealth.js';
 import { prisma } from './lib/prisma.js';
 import { errorMiddleware } from './http/errorMiddleware.js';
 import { requireAuth } from './modules/auth/auth.middleware.js';
@@ -43,7 +44,25 @@ export function createApp() {
   app.get('/health', async (_req, res) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
-      res.json({ status: 'ok', service: 'nova-otica-api', mode: env.SELLBIE_MODE, db: 'up' });
+      // O frescor do sync entra aqui para que QUALQUER monitor externo (e o
+      // próprio Argos, com um curl) enxergue a base vencida sem precisar
+      // entrar no banco. Continua devolvendo 200 de propósito: o healthcheck
+      // do container e o rollback do deploy usam esta rota, e derrubar a
+      // aplicação porque o ERP não respondeu às 6h seria trocar um problema
+      // de dado por um problema de disponibilidade.
+      const sync = await getFrescor();
+      res.json({
+        status: 'ok',
+        service: 'nova-otica-api',
+        mode: env.SELLBIE_MODE,
+        db: 'up',
+        sync: {
+          ultimoSucesso: sync.ultimoSucesso?.toISOString() ?? null,
+          horas: sync.horas === null ? null : Math.round(sync.horas * 10) / 10,
+          vencido: sync.vencido,
+          limiteHoras: sync.limiteHoras,
+        },
+      });
     } catch {
       res.status(503).json({ status: 'degraded', service: 'nova-otica-api', mode: env.SELLBIE_MODE, db: 'down' });
     }

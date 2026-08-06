@@ -89,8 +89,23 @@ const schema = z.object({
   // que a CDS imponha uma janela de consumo.
   SELLBIE_IGNORE_WINDOW: boolish.default('false'),
 
-  // Webhook genérico para alertas operacionais (falha do sync das 06h).
+  // ─── Alertas operacionais ────────────────────────────────────────────────
+  // Webhook genérico (Slack/Discord/n8n/Zapier): POST JSON com um campo `text`
+  // legível, para não precisar de template do outro lado.
   ALERT_WEBHOOK_URL: z.string().optional().default(''),
+  // Telegram como canal de primeira classe. O webhook genérico pressupõe que
+  // exista um endpoint para recebê-lo, e enquanto ele não existe o alerta não
+  // sai de lugar nenhum — que é a situação de hoje. O Telegram é onde a
+  // operação já vive, e configurar são duas variáveis.
+  ALERT_TELEGRAM_BOT_TOKEN: z.string().optional().default(''),
+  ALERT_TELEGRAM_CHAT_ID: z.string().optional().default(''),
+  // Horas sem um sync BEM-SUCEDIDO antes de a base ser considerada vencida.
+  // 26 e não 24: o lote é diário, e um atraso de duas horas não é incidente.
+  SYNC_STALE_HOURS: z.coerce.number().positive().default(26),
+  // Quando o vigia confere o frescor. Padrão 09:00 — três horas depois do lote
+  // das 06h, tempo suficiente para ele ter terminado e cedo o bastante para
+  // alguém agir antes de a rede abrir por completo.
+  SYNC_WATCHDOG_CRON: z.string().default('0 9 * * *'),
 
   PAYMENT_PROVIDER: z.enum(['mock', 'mercadopago']).default('mock'),
 
