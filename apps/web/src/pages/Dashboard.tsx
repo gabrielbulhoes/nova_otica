@@ -180,9 +180,21 @@ export function Dashboard() {
               value={summary.data.stockUnits.toLocaleString('pt-BR')}
               unidade="un."
               hint={
-                summary.data.backofficeUnits
-                  ? `Nas lojas, ao vivo. Retaguarda: +${summary.data.backofficeUnits.toLocaleString('pt-BR')} un.`
-                  : 'Saldo das lojas, ao vivo.'
+                [
+                  summary.data.backofficeUnits
+                    ? `Nas lojas, ao vivo. Retaguarda: +${summary.data.backofficeUnits.toLocaleString('pt-BR')} un.`
+                    : 'Saldo das lojas, ao vivo.',
+                  // A ZEISS saiu das contas porque roda em outro ERP e o CDS
+                  // não a atualiza em tempo real. O saldo dela é declarado —
+                  // rede que encolhe sem explicação é painel que perde crédito.
+                  summary.data.externalErpUnits
+                    ? `Fora: ${summary.data.externalErpStores ?? ''} loja${
+                        (summary.data.externalErpStores ?? 0) > 1 ? 's' : ''
+                      } em outro ERP (+${summary.data.externalErpUnits.toLocaleString('pt-BR')} un.).`
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')
               }
             />
             <StatCard

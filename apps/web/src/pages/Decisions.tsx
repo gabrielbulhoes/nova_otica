@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getDecisionBoard, createMovement, formatBRL, recordDecision } from '../api/client';
+import { getDecisionBoard, createMovement, formatBRL, getStores, recordDecision } from '../api/client';
 import type {
   DecisionCard,
   DecisionType,
@@ -291,7 +291,15 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
         <Selo tom="blue" icone={t.icone}>
           {t.label}
         </Selo>
-        <Selo tom={p.tom} icone={p.icone} forte={p.forte} title={p.nota}>
+        {/* O motivo entra no `title` do próprio selo: "Alta" sem o porquê foi
+            metade do feedback 6.0 · item 04 — o gestor via o rótulo e não tinha
+            como discordar dele, porque a origem não aparecia em lugar nenhum. */}
+        <Selo
+          tom={p.tom}
+          icone={p.icone}
+          forte={p.forte}
+          title={c.priorityReason ? `${p.nota}\nPor quê: ${c.priorityReason}` : p.nota}
+        >
           {p.label}
         </Selo>
         {/* Idade do card vem do lote de geração: sem isso, um card que
@@ -517,6 +525,17 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
         </div>
       </div>
 
+      {/* Por que esta prioridade — feedback 6.0 · item 04.
+          A prioridade passou a ser a PIOR entre três leituras (urgência,
+          confiança e valor em jogo), e esta linha nomeia a que mandou. Sem ela
+          a mudança seria invisível: o gestor veria outro rótulo no mesmo lugar,
+          sem nada que explicasse por que ele mudou. */}
+      {c.priorityReason && (
+        <p className="muted" style={{ margin: '6px 0 0', fontSize: 11.5, lineHeight: 1.4 }}>
+          Prioridade {p.label.toLowerCase()}: {c.priorityReason}.
+        </p>
+      )}
+
       <hr className="rule" />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -679,21 +698,65 @@ function BatchLine({ board }: { board?: DecisionBoardT }) {
   );
 }
 
+/**
+ * Lojas que um card toca. Remanejamento tem origem e destino; liquidação tem a
+ * loja de escoamento e a de onde a peça sai. Compra NÃO tem loja — comprar é
+ * decisão de rede, e a distribuição vem depois, no recebimento. Devolver a
+ * lista vazia é o que faz o card de compra sair da tela sob um filtro de loja,
+ * e a tela diz isso em vez de deixar o gestor achar que sumiram.
+ */
+function lojasDoCard(c: DecisionCard): string[] {
+  return [c.fromStoreId, c.toStoreId, c.outletStoreId, c.outletFromStoreId].filter(
+    (x): x is string => !!x,
+  );
+}
+
+/** Quantos cards a grade mostra por vez. */
+const PAGINA = 60;
+
 export function Decisions() {
   const [typeF, setTypeF] = useState<TypeFilter>('ALL');
   const [prioF, setPrioF] = useState<PrioFilter>('ALL');
+  // Feedback 6.0 · item 05 — "na Central de Decisões é importante ter o filtro
+  // de loja e grife". Os dois filtram no cliente, sobre o quadro já carregado:
+  // recalcular o motor por loja mudaria os NÚMEROS (a compra é de rede), e o
+  // pedido é para achar cards, não para mudar a conta.
+  const [lojaF, setLojaF] = useState<string>('ALL');
+  const [grifeF, setGrifeF] = useState<string>('ALL');
+  const [visiveis, setVisiveis] = useState(PAGINA);
+
   const params = { days: 90, group: 'principal' };
   const board = useQuery({ queryKey: ['decisions', params], queryFn: () => getDecisionBoard(params) });
+  const lojas = useQuery({ queryKey: ['stores'], queryFn: getStores });
+
+  // As grifes vêm dos próprios cards: um seletor com o catálogo inteiro teria
+  // centenas de opções sem card nenhum atrás.
+  const grifes = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of board.data?.cards ?? []) if (c.brandLabel) set.add(c.brandLabel);
+    return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [board.data]);
 
   const cards = useMemo(() => {
     const all = board.data?.cards ?? [];
     return all.filter(
-      (c) => (typeF === 'ALL' || c.type === typeF) && (prioF === 'ALL' || c.priority === prioF),
+      (c) =>
+        (typeF === 'ALL' || c.type === typeF) &&
+        (prioF === 'ALL' || c.priority === prioF) &&
+        (lojaF === 'ALL' || lojasDoCard(c).includes(lojaF)) &&
+        (grifeF === 'ALL' || c.brandLabel === grifeF),
     );
-  }, [board.data, typeF, prioF]);
+  }, [board.data, typeF, prioF, lojaF, grifeF]);
 
   const s = board.data?.summary;
-  const filtrando = typeF !== 'ALL' || prioF !== 'ALL';
+  const filtrando = typeF !== 'ALL' || prioF !== 'ALL' || lojaF !== 'ALL' || grifeF !== 'ALL';
+  // Compras somem sob filtro de loja porque não têm loja — dito, não escondido.
+  const comprasOcultas =
+    lojaF !== 'ALL' && (board.data?.cards ?? []).some((c) => c.type === 'COMPRA');
+  const trocouFiltro = <T,>(set: (v: T) => void) => (v: T) => {
+    set(v);
+    setVisiveis(PAGINA);
+  };
 
   return (
     <>
@@ -785,14 +848,14 @@ export function Decisions() {
             descricao="Cada card traz a ação em destaque e a justificativa do motor logo abaixo."
           />
 
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
             <div className="segmented" role="group" aria-label="Filtrar por tipo de decisão">
               {(['ALL', 'COMPRA', 'REMANEJAMENTO', 'LIQUIDACAO'] as TypeFilter[]).map((k) => (
                 <button
                   key={k}
                   type="button"
                   className={typeF === k ? 'active' : ''}
-                  onClick={() => setTypeF(k)}
+                  onClick={() => trocouFiltro(setTypeF)(k)}
                   aria-pressed={typeF === k}
                 >
                   {k === 'ALL' ? 'Todos' : typeMeta[k].label}
@@ -805,14 +868,56 @@ export function Decisions() {
                   key={k}
                   type="button"
                   className={prioF === k ? 'active' : ''}
-                  onClick={() => setPrioF(k)}
+                  onClick={() => trocouFiltro(setPrioF)(k)}
                   aria-pressed={prioF === k}
                 >
                   {k === 'ALL' ? 'Todas' : prioMeta[k].label}
                 </button>
               ))}
             </div>
+
+            {/* Loja e grife são LISTAS, não segmentos: 16 lojas e dezenas de
+                grifes não cabem numa barra de botões. */}
+            <select
+              className="input"
+              style={{ maxWidth: 230 }}
+              aria-label="Filtrar por loja"
+              value={lojaF}
+              onChange={(e) => trocouFiltro(setLojaF)(e.target.value)}
+            >
+              <option value="ALL">Todas as lojas</option>
+              {(lojas.data?.rows ?? []).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="input"
+              style={{ maxWidth: 230 }}
+              aria-label="Filtrar por grife"
+              value={grifeF}
+              onChange={(e) => trocouFiltro(setGrifeF)(e.target.value)}
+            >
+              <option value="ALL">Todas as grifes</option>
+              {grifes.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* Comprar é decisão de REDE — o card não tem loja, e por isso some
+              quando se filtra por uma. Dizer isso custa uma linha; não dizer
+              custa a confiança de quem acha que o filtro comeu os cards. */}
+          {comprasOcultas && (
+            <p className="hint" style={{ margin: '0 0 12px' }}>
+              Os cards de compra não aparecem com filtro de loja: comprar é decisão de rede, e a
+              divisão entre as lojas acontece no recebimento do pedido.
+            </p>
+          )}
 
           {cards.length === 0 ? (
             <div className="empty" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
@@ -824,11 +929,29 @@ export function Decisions() {
               </span>
             </div>
           ) : (
-            <div className="grid grid-3">
-              {cards.map((c) => (
-                <Card key={c.id} c={c} onDecided={() => board.refetch()} />
-              ))}
-            </div>
+            <>
+              <div className="grid grid-3">
+                {cards.slice(0, visiveis).map((c) => (
+                  <Card key={c.id} c={c} onDecided={() => board.refetch()} />
+                ))}
+              </div>
+              {/* A grade desenhava os 1.377 cards de uma vez: a tela demorava a
+                  responder e a impressão saía com centenas de páginas. Como o
+                  quadro vem ordenado por prioridade e impacto, os primeiros já
+                  são os que importam. */}
+              {cards.length > visiveis && (
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+                  <Botao
+                    variante="discreto"
+                    icone="mais"
+                    onClick={() => setVisiveis((v) => v + PAGINA)}
+                  >
+                    Ver mais {Math.min(PAGINA, cards.length - visiveis)} de {cards.length - visiveis}{' '}
+                    restantes
+                  </Botao>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

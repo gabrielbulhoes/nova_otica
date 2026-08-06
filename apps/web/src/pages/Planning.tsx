@@ -7,6 +7,9 @@ import {
   getFairSplit,
   getPlanningOverview,
   getPurchaseOrderHistory,
+  getDistributionPlan,
+  getReceivingUnits,
+  distributeOrder,
   getPurchaseOrders,
   getPurchaseSuggestions,
   getRebalancePlan,
@@ -30,6 +33,7 @@ import {
   Botao,
   BotaoPrimario,
   AberturaDeSecao,
+  Unidade,
   type TomDeSelo,
 } from '../components/ui';
 import { Icon, type IconName } from '../brand/Icon';
@@ -486,10 +490,175 @@ const recordStatusMeta: Record<PurchaseOrderRecord['status'], EstadoOperacional>
   CANCELLED: { label: 'Cancelado', tom: 'gray', icone: 'limpar' },
 };
 
+/**
+ * Plano de distribuição de um pedido recebido — feedback 6.0 · item 06.
+ *
+ * "Ela confirmou o recebimento, mas ele não diz como deve distribuir essa
+ *  mercadoria." O ciclo parava aqui: o pedido chegava, e a pergunta de operação
+ *  — quantas para cada loja — voltava a ser resolvida no olho.
+ *
+ * A base de cada item aparece na tela, e não só o número: um rateio pela venda
+ * DA PEÇA e um pela venda da CATEGORIA são estimativas de precisões muito
+ * diferentes, e mostrar os dois com a mesma cara venderia certeza que não
+ * temos.
+ */
+function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: string }) {
+  const qc = useQueryClient();
+  const plano = useQuery({
+    queryKey: ['distribution', orderId],
+    queryFn: () => getDistributionPlan(orderId),
+  });
+  const unidades = useQuery({ queryKey: ['receiving-units'], queryFn: getReceivingUnits });
+  const [origem, setOrigem] = useState('');
+  const [estado, setEstado] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [erro, setErro] = useState('');
+  const [criadas, setCriadas] = useState(0);
+
+  const executar = async () => {
+    if (!origem) return;
+    setEstado('loading');
+    setErro('');
+    try {
+      const r = await distributeOrder(orderId, origem);
+      setCriadas(r.created);
+      setEstado('done');
+      qc.invalidateQueries({ queryKey: ['movements'] });
+      qc.invalidateQueries({ queryKey: ['stock'] });
+    } catch (e) {
+      setEstado('error');
+      const ex = e as { response?: { data?: { error?: string } } };
+      setErro(ex.response?.data?.error ?? 'Não foi possível criar as transferências.');
+    }
+  };
+
+  if (plano.isLoading) return <Loading />;
+  if (!plano.data) return <div className="empty">Não foi possível montar o plano.</div>;
+
+  return (
+    <div style={{ padding: '4px 0 8px' }}>
+      <p className="hint" style={{ margin: '0 0 10px' }}>
+        Cada item é dividido pela participação de cada loja nas vendas — a mesma lógica do Modo
+        Feira, agora aplicada ao pedido inteiro de uma vez. A soma fecha com a quantidade comprada.
+      </p>
+
+      {plano.data.items.map((item) => (
+        <div key={item.productId} style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <strong style={{ fontSize: 13 }}>{item.description}</strong>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {item.quantity}
+              <Unidade>un.</Unidade> a dividir
+            </span>
+            {/* A base é selo informativo, nunca de estado: dizer que o rateio
+                saiu da categoria não é um alerta, é uma ressalva de precisão. */}
+            <Selo tom="blue" icone="ideia" title={item.basisLabel}>
+              por {item.basis}
+            </Selo>
+          </div>
+
+          {item.rows.length === 0 ? (
+            <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+              Nenhuma loja com venda nesta base — divisão manual.
+            </p>
+          ) : (
+            <table style={{ marginTop: 6 }}>
+              <thead>
+                <tr>
+                  <th>Loja</th>
+                  <th className="num">Vendeu (12 m)</th>
+                  <th className="num">Participação</th>
+                  <th className="num">Mandar</th>
+                </tr>
+              </thead>
+              <tbody>
+                {item.rows.map((r) => (
+                  <tr key={r.storeId}>
+                    <td>{r.storeName}</td>
+                    <td className="num">{r.unitsSold}</td>
+                    <td className="num">{r.sharePct}%</td>
+                    <td className="num">
+                      <strong>{r.quantity}</strong>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {/* Loja que some da lista sem motivo visível é o tipo de silêncio que
+              faz alguém desconfiar do resto da tela. */}
+          {item.excludedByMix && item.excludedByMix.length > 0 && (
+            <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+              Fora do rateio por não trabalharem a grife: {item.excludedByMix.join(', ')}.
+            </p>
+          )}
+        </div>
+      ))}
+
+      {plano.data.unassigned > 0 && (
+        <p className="hint" style={{ margin: '0 0 10px' }}>
+          {plano.data.unassigned} un. sem rateio possível — nenhuma loja tem histórico em base
+          nenhuma. Essas ficam para divisão manual.
+        </p>
+      )}
+
+      <hr className="rule" />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        {estado === 'done' ? (
+          <Selo tom="green" icone="aprovar">
+            {criadas} transferência{criadas > 1 ? 's' : ''} criada{criadas > 1 ? 's' : ''}
+          </Selo>
+        ) : (
+          <>
+            {/* A origem é PERGUNTADA: o pedido não registra onde a carga
+                desembarcou, e há três unidades de retaguarda candidatas.
+                Escolher uma sozinho seria inventar um fato de operação. */}
+            <label className="muted" style={{ fontSize: 12.5 }} htmlFor={`origem-${orderId}`}>
+              A mercadoria chegou em:
+            </label>
+            <select
+              id={`origem-${orderId}`}
+              className="input"
+              style={{ maxWidth: 240 }}
+              value={origem}
+              onChange={(e) => setOrigem(e.target.value)}
+            >
+              <option value="">Escolha a unidade…</option>
+              {(unidades.data?.rows ?? []).map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+            <Botao
+              pequeno
+              icone="transferencias"
+              disabled={!origem || estado === 'loading'}
+              aria-disabled={!origem || estado === 'loading'}
+              onClick={executar}
+              title={`Cria as transferências do pedido ${supplier} a partir da unidade escolhida`}
+            >
+              {estado === 'loading' ? 'Criando…' : 'Criar as transferências'}
+            </Botao>
+          </>
+        )}
+        {estado === 'error' && (
+          <span role="alert" style={{ fontSize: 11.5, color: 'var(--red)' }}>
+            {erro}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Histórico do ciclo de compras: enviado → recebido (ou cancelado). */
 function OrderHistory() {
   const qc = useQueryClient();
   const history = useQuery({ queryKey: ['planning-history'], queryFn: getPurchaseOrderHistory });
+  // Qual pedido está com o plano de distribuição aberto. Um por vez: o plano
+  // tem uma tabela por item, e dois abertos viram uma parede.
+  const [distribuindo, setDistribuindo] = useState<string | null>(null);
 
   const settle = async (id: string, action: 'receive' | 'cancel') => {
     await settlePurchaseOrder(id, action);
@@ -557,12 +726,34 @@ function OrderHistory() {
                         ghost
                       />
                     </span>
+                  ) : r.status === 'RECEIVED' ? (
+                    /* A pergunta que o ciclo deixava sem resposta: chegou, e
+                       agora? Ela só existe depois do recebimento — antes disso
+                       não há mercadoria para dividir. */
+                    <Botao
+                      variante="discreto"
+                      pequeno
+                      icone="transferencias"
+                      aria-expanded={distribuindo === r.id}
+                      onClick={() => setDistribuindo((v) => (v === r.id ? null : r.id))}
+                    >
+                      {distribuindo === r.id ? 'Fechar' : 'Como distribuir'}
+                    </Botao>
                   ) : (
                     <span className="muted">—</span>
                   )}
                 </td>
               </tr>
             ))}
+            {history.data!.rows
+              .filter((r) => r.id === distribuindo)
+              .map((r) => (
+                <tr key={`${r.id}-dist`}>
+                  <td colSpan={8} style={{ background: 'var(--surface-2, transparent)' }}>
+                    <DistributionPanel orderId={r.id} supplier={r.supplier} />
+                  </td>
+                </tr>
+              ))}
           </tbody>
         </table>
       )}
@@ -650,6 +841,7 @@ function SupplierRow({
   isDefault,
   defaultDays,
   canEdit,
+  discontinued,
 }: {
   brand: string;
   leadTimeDays: number | null;
@@ -657,15 +849,17 @@ function SupplierRow({
   isDefault: boolean;
   defaultDays: number;
   canEdit: boolean;
+  discontinued: boolean;
 }) {
   const qc = useQueryClient();
   const [value, setValue] = useState(leadTimeDays === null ? '' : String(leadTimeDays));
+  const [foraDoMix, setForaDoMix] = useState(discontinued);
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const save = async () => {
     setState('saving');
     try {
-      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value));
+      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value), foraDoMix);
       setState('saved');
       qc.invalidateQueries({ queryKey: ['planning-suppliers'] });
       qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
@@ -694,6 +888,31 @@ function SupplierRow({
           />
         ) : (
           <span>{leadTimeDays ?? defaultDays} dias{isDefault ? ' (padrão)' : ''}</span>
+        )}
+      </td>
+      {/* Feedback 6.0 · item 03 — "grifes que não fazem mais parte de nosso mix
+          de produto". Nenhum dado do ERP diz isso: é decisão comercial, e por
+          isso precisa ser declarada aqui. Marcar corta a SUGESTÃO DE COMPRA e
+          nada mais — a liquidação continua (descontinuado com saldo é o que se
+          quer escoar) e o remanejamento também. */}
+      <td className="num">
+        {canEdit ? (
+          <label
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+            title="Marcada: o motor para de sugerir compra desta grife. A liquidação e o remanejamento continuam."
+          >
+            <input
+              type="checkbox"
+              checked={foraDoMix}
+              onChange={(e) => setForaDoMix(e.target.checked)}
+              aria-label={`${brand} está fora do mix atual da rede`}
+            />
+            fora do mix
+          </label>
+        ) : foraDoMix ? (
+          <Selo tom="amber" icone="atencao">Fora do mix</Selo>
+        ) : (
+          <span className="muted">—</span>
         )}
       </td>
       {canEdit && (
@@ -1255,7 +1474,7 @@ export function Planning() {
       <AberturaDeSecao
         eyebrow="Prazos"
         titulo="Prazos dos fornecedores (lead time)"
-        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias.`}
+        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias. Marque “fora do mix” nas grifes que a rede não trabalha mais: o motor para de sugerir compra delas, mas continua sugerindo liquidação do saldo.`}
       />
       <div className="card">
         {suppliers.isLoading || !suppliers.data ? (
@@ -1267,6 +1486,7 @@ export function Planning() {
                 <th>Fornecedor (marca)</th>
                 <th className="num">Produtos</th>
                 <th className="num">Prazo de entrega</th>
+                <th className="num">Mix</th>
                 {isAdmin && <th className="right">Ação</th>}
               </tr>
             </thead>
@@ -1280,6 +1500,7 @@ export function Planning() {
                   isDefault={s.isDefault}
                   defaultDays={suppliers.data!.defaultLeadTimeDays}
                   canEdit={isAdmin}
+                  discontinued={s.discontinued ?? false}
                 />
               ))}
             </tbody>

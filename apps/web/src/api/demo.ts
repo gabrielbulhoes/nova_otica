@@ -143,7 +143,14 @@ const allStores: Store[] = real
 // estoque de compras) ficam fora da matemática de lojas, igual ao backend
 // real (Store.excludeFromPlanning / PLANNING_EXCLUDED_STORE_PATTERN).
 const PLANNING_EXCLUDED_STORE_PATTERN = /gmais|assistencia|estoque compras/i;
-const stores: Store[] = allStores.filter((s) => !PLANNING_EXCLUDED_STORE_PATTERN.test(s.name));
+// Feedback 6.0 · item 01 — as lojas ZEISS VISION CENTER rodam em outro ERP e o
+// CDS não as atualiza em tempo real. Mesma marcação do backend
+// (Store.externalErp / EXTERNAL_ERP_STORE_PATTERN): a demonstração precisa
+// mostrar a mesma rede que a produção, senão volta a ser uma segunda verdade.
+const EXTERNAL_ERP_STORE_PATTERN = /zeiss/i;
+const stores: Store[] = allStores.filter(
+  (s) => !PLANNING_EXCLUDED_STORE_PATTERN.test(s.name) && !EXTERNAL_ERP_STORE_PATTERN.test(s.name),
+);
 
 const products: Product[] = real
   ? real.products.map((p) => ({
@@ -226,6 +233,11 @@ const demoLeadTimes = new Map<string, number>([
   [MARCAS[0], 30],
   [MARCAS[1], 7],
 ]);
+
+// Grifes fora do mix atual da rede (feedback 6.0 · item 03). Começa vazia de
+// propósito: é uma declaração comercial, e inventar uma na demonstração seria
+// mostrar ao cliente uma decisão que ele não tomou.
+const demoForaDoMix = new Set<string>();
 
 // Histórico de pedidos de compra (enviado/recebido) da demo
 interface DemoOrderRecord {
@@ -1989,6 +2001,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         leadTimeDays: demoLeadTimes.get(brand) ?? null,
         products: products.filter((x) => x.brand === brand).length,
         isDefault: !demoLeadTimes.has(brand),
+        discontinued: demoForaDoMix.has(brand),
       })),
     };
   }
@@ -1997,7 +2010,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const lt = body.leadTimeDays;
     if (lt === null) demoLeadTimes.delete(brand);
     else demoLeadTimes.set(brand, Number(lt));
-    return { brand, leadTimeDays: lt };
+    // Feedback 6.0 · item 03 — grife fora do mix atual da rede.
+    if (body.discontinued === true) demoForaDoMix.add(brand);
+    else if (body.discontinued === false) demoForaDoMix.delete(brand);
+    return { brand, leadTimeDays: lt, discontinued: demoForaDoMix.has(brand) };
   }
 
   // Mix de marcas por bandeira (feedback 04 fase 2)

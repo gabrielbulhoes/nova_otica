@@ -30,6 +30,15 @@ model Store {
   // Continuam no cadastro/histórico, mas ficam fora das contas das lojas.
   excludeFromPlanning Boolean @default(false)
 
+  // Filial que opera em OUTRO ERP (ZEISS VISION CENTER): o CDS até devolve
+  // dados dela, mas desatualizados. Fica fora de todo número da plataforma —
+  // planejamento, BI, relatórios e painel.
+  //
+  // É um campo separado de `excludeFromPlanning` de propósito: aquele significa
+  // "retaguarda da rede" e o painel soma essas unidades sob esse rótulo. Juntar
+  // os dois faria uma loja de varejo aparecer como centro de distribuição.
+  externalErp Boolean @default(false)
+
   syncedAt  DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -45,6 +54,8 @@ model Store {
 
   @@index([active])
   @@index([excludeFromPlanning])
+  @@index([externalErp])
+  @@index([excludeFromPlanning, externalErp])
   decisions   DecisionRecord[]
 }
 
@@ -328,8 +339,17 @@ model SupplierSetting {
   id           String   @id @default(cuid())
   brand        String   @unique
   leadTimeDays Int
+
+  /// Grife fora do mix atual da rede (feedback 6.0 · item 03: "sugere grifes
+  /// que inclusive não fazem mais parte de nosso mix de produto"). Corta a
+  /// sugestão de compra; não corta a liquidação — descontinuado com saldo é
+  /// exatamente o que se quer escoar — nem o remanejamento.
+  discontinued Boolean  @default(false)
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  @@index([discontinued])
 }
 
 enum PurchaseOrderStatus {

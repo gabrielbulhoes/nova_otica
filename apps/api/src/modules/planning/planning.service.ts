@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
-import { PLANNED_STORE_WHERE, stockPlannedWhere } from '../stores/store.scope.js';
+import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stores/store.scope.js';
 import { loadBrandCatalog } from './brandCatalog.js';
 import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
@@ -22,6 +22,7 @@ import {
   storeCarriesBrand,
   DEFAULT_PLANNING_CONFIG,
   matchesProductGroup,
+  normBrandKey,
   type FairSplitInput,
   type PlanningConfig,
   type DemandHistory,
@@ -53,6 +54,23 @@ async function supplierConfigResolver(): Promise<(brand: string | null) => Plann
       ? DEFAULT_PLANNING_CONFIG
       : { ...DEFAULT_PLANNING_CONFIG, leadTimeDays };
   };
+}
+
+/**
+ * Grifes fora do mix atual da rede (feedback 6.0 · item 03). Devolve um
+ * predicado que aceita qualquer forma da marca — o campo `brand` do ERP é o
+ * FORNECEDOR e vem vazio na maior parte do catálogo, então quem manda é a
+ * grife extraída da descrição, e a comparação é normalizada (maiúscula, sem
+ * acento) para "Dolce & Gabbana" casar com "DOLCE E GABBANA".
+ */
+export async function discontinuedBrandResolver(): Promise<(brand: string | null) => boolean> {
+  const rows = await prisma.supplierSetting.findMany({
+    where: { discontinued: true },
+    select: { brand: true },
+  });
+  if (rows.length === 0) return () => false;
+  const fora = new Set(rows.map((r) => normBrandKey(r.brand)));
+  return (brand) => (brand ? fora.has(normBrandKey(brand)) : false);
 }
 
 /**
@@ -96,16 +114,48 @@ export async function planningInputs(
   });
   const recentBy = new Map(soldRecent.map((r) => [r.productId as string, r._sum.quantity ?? 0]));
 
+  // Vendas dos ÚLTIMOS 12 MESES, fora da janela de análise.
+  //
+  // É o insumo que faltava para o motor distinguir "não vende" de "não vendeu
+  // nestes 90 dias" (feedback 6.0 · itens 02 e 03). Não dá para derivá-lo da
+  // previsão: `forecastDemand` monta a base a partir de `recentUnits` e
+  // `priorUnits`, os dois medidos DENTRO da janela, e o índice sazonal
+  // multiplica essa base — zero vezes qualquer índice continua zero.
+  //
+  // Escopo de loja proposital: quando o gestor olha a própria loja, "vende no
+  // ano" é vender NAQUELA loja.
+  const anualFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(365) }, store: PLANNED_STORE_WHERE };
+  if (storeId) anualFilter.storeId = storeId;
+
   const ids = Array.from(new Set([...soldBy.keys(), ...stockBy.keys()]));
-  const [products, onOrderBy, monthlyBy] = await Promise.all([
+  const [products, onOrderBy, monthlyBy, anualRows, foraDoMix] = await Promise.all([
     prisma.product.findMany({
       where: { id: { in: ids } },
-      select: { id: true, description: true, brand: true, category: true, price: true, cost: true },
+      select: {
+        id: true,
+        description: true,
+        brand: true,
+        category: true,
+        price: true,
+        cost: true,
+        // Data de cadastro no ERP (`data_cadastro`): a única evidência de
+        // idade que temos da fonte. `createdAt` local não serve — a primeira
+        // carga escreveu o catálogo inteiro no mesmo instante.
+        includedAt: true,
+      },
     }),
     onOrderQuantities(),
     monthlyHistoryByProduct(storeId),
+    prisma.saleItem.groupBy({
+      by: ['productId'],
+      where: { sale: anualFilter, productId: { not: null } },
+      _sum: { quantity: true },
+    }),
+    discontinuedBrandResolver(),
   ]);
+  const anualBy = new Map(anualRows.map((r) => [r.productId as string, r._sum.quantity ?? 0]));
 
+  const agora = Date.now();
   const currentMonth = new Date().getMonth() + 1;
   // Recorte de cobertura: principal (óculos/grau/relógio), lentes ou tudo.
   const scoped = products.filter((p) => matchesProductGroup(p.category, group));
@@ -137,6 +187,14 @@ export async function planningInputs(
       costEstimated: custoReal == null,
       onOrderQty: onOrderBy.get(p.id) ?? 0,
       demandHistory,
+      annualUnitsSold: anualBy.get(p.id) ?? 0,
+      // Sem `includedAt` o motor fica sem saber a idade e NÃO trata a peça como
+      // nova — preferimos deixar passar um card de liquidação a suprimir um
+      // encalhe real por falta de dado.
+      ageDays: p.includedAt ? Math.floor((agora - p.includedAt.getTime()) / 86_400_000) : null,
+      // O mix é da GRIFE (extraída da descrição), não do campo de fornecedor
+      // do ERP — que vem vazio na maior parte do catálogo.
+      brandDiscontinued: foraDoMix(analysisBrand(p.description, p.category, p.brand)),
     };
   });
 }
@@ -167,7 +225,7 @@ async function monthlyHistoryByProduct(
                  SUM(si.quantity)::int AS units
           FROM "SaleItem" si
           JOIN "Sale" s ON s.id = si."saleId"
-          JOIN "Store" st ON st.id = s."storeId" AND st."excludeFromPlanning" = false
+          JOIN "Store" st ON st.id = s."storeId" AND ${plannedStoreSql('st')}
           WHERE si."productId" IS NOT NULL
             AND s."saleDate" >= NOW() - INTERVAL '24 months'
           GROUP BY pid, to_char(s."saleDate", 'YYYY-MM'), month`,
@@ -466,15 +524,31 @@ export async function listSupplierSettings() {
     prisma.product.groupBy({ by: ['brand'], where: { brand: { not: null } }, _count: true }),
     prisma.supplierSetting.findMany(),
   ]);
-  const byBrand = new Map(settings.map((s) => [s.brand, s.leadTimeDays]));
-  const rows = brands
-    .map((b) => ({
-      brand: b.brand as string,
-      leadTimeDays: byBrand.get(b.brand as string) ?? null,
-      products: b._count,
-      isDefault: !byBrand.has(b.brand as string),
-    }))
-    .sort((a, b) => a.brand.localeCompare(b.brand));
+  const cadastrada = new Map(settings.map((s) => [s.brand, s]));
+  const doCatalogo = brands.map((b) => ({
+    brand: b.brand as string,
+    leadTimeDays: cadastrada.get(b.brand as string)?.leadTimeDays ?? null,
+    discontinued: cadastrada.get(b.brand as string)?.discontinued ?? false,
+    products: b._count,
+    isDefault: !cadastrada.has(b.brand as string),
+  }));
+
+  // Uma grife marcada como fora do mix pode não existir no campo `brand` do
+  // ERP — que é o FORNECEDOR e vem vazio na maior parte do catálogo. Sem esta
+  // união, o operador marcaria "MIU MIU" como descontinuada e a linha sumiria
+  // da tela no recarregamento, como se nada tivesse sido salvo.
+  const noCatalogo = new Set(doCatalogo.map((r) => r.brand));
+  const soltas = settings
+    .filter((s) => !noCatalogo.has(s.brand))
+    .map((s) => ({
+      brand: s.brand,
+      leadTimeDays: s.leadTimeDays,
+      discontinued: s.discontinued,
+      products: 0,
+      isDefault: false,
+    }));
+
+  const rows = [...doCatalogo, ...soltas].sort((a, b) => a.brand.localeCompare(b.brand, 'pt-BR'));
   return { defaultLeadTimeDays: DEFAULT_PLANNING_CONFIG.leadTimeDays, rows };
 }
 
@@ -538,23 +612,47 @@ export async function purchaseOrderHistory(limit = 50) {
   return { total: rows.length, rows };
 }
 
-/** Define (ou remove, com null) o prazo de um fornecedor/marca. */
-export async function setSupplierLeadTime(brand: string, leadTimeDays: number | null) {
+/**
+ * Define o prazo e/ou o estado de mix de uma marca. `leadTimeDays: null`
+ * devolve a marca ao prazo padrão da rede; a linha só é APAGADA quando também
+ * não há nada a dizer sobre o mix — senão marcar uma grife como fora do mix
+ * sem informar prazo apagaria o próprio registro que acabou de ser criado.
+ */
+export async function setSupplierSetting(
+  brand: string,
+  leadTimeDays: number | null,
+  discontinued?: boolean,
+) {
   const clean = brand.trim();
   if (!clean) throw badRequest('Informe a marca/fornecedor.');
-  if (leadTimeDays === null) {
-    await prisma.supplierSetting.deleteMany({ where: { brand: clean } });
-    return { brand: clean, leadTimeDays: null };
-  }
-  if (!Number.isInteger(leadTimeDays) || leadTimeDays < 1 || leadTimeDays > 365) {
+  if (leadTimeDays !== null && (!Number.isInteger(leadTimeDays) || leadTimeDays < 1 || leadTimeDays > 365)) {
     throw badRequest('Prazo do fornecedor deve ser um número inteiro entre 1 e 365 dias.');
   }
+
+  const atual = await prisma.supplierSetting.findUnique({ where: { brand: clean } });
+  const foraDoMix = discontinued ?? atual?.discontinued ?? false;
+
+  if (leadTimeDays === null && !foraDoMix) {
+    await prisma.supplierSetting.deleteMany({ where: { brand: clean } });
+    return { brand: clean, leadTimeDays: null, discontinued: false };
+  }
+
   const row = await prisma.supplierSetting.upsert({
     where: { brand: clean },
-    create: { brand: clean, leadTimeDays },
-    update: { leadTimeDays },
+    // Sem prazo próprio a marca fica no padrão da rede — guardamos o padrão
+    // como valor, porque a coluna é obrigatória e o registro precisa existir
+    // para carregar a marcação de mix.
+    create: {
+      brand: clean,
+      leadTimeDays: leadTimeDays ?? DEFAULT_PLANNING_CONFIG.leadTimeDays,
+      discontinued: foraDoMix,
+    },
+    update: {
+      ...(leadTimeDays !== null ? { leadTimeDays } : {}),
+      discontinued: foraDoMix,
+    },
   });
-  return { brand: row.brand, leadTimeDays: row.leadTimeDays };
+  return { brand: row.brand, leadTimeDays: row.leadTimeDays, discontinued: row.discontinued };
 }
 
 // ─── Modo Feira: rateio de compra por loja (feedback 08, MVP) ────────────────
@@ -581,7 +679,7 @@ export async function fairSplit(days: number, filter: FairSplitFilter, totalQty:
       SELECT s."storeId" AS "storeId", COALESCE(SUM(si.quantity), 0)::bigint AS units
       FROM "SaleItem" si
       JOIN "Sale" s ON s.id = si."saleId"
-      JOIN "Store" lo ON lo.id = s."storeId" AND lo."excludeFromPlanning" = false
+      JOIN "Store" lo ON lo.id = s."storeId" AND ${plannedStoreSql('lo')}
       JOIN "Product" p ON p.id = si."productId"
       WHERE s."saleDate" >= ${periodStart(days)} AND ${field} = ${value}
       GROUP BY s."storeId"
@@ -589,7 +687,7 @@ export async function fairSplit(days: number, filter: FairSplitFilter, totalQty:
     prisma.$queryRaw<{ storeId: string; units: bigint }[]>(Prisma.sql`
       SELECT st."storeId" AS "storeId", COALESCE(SUM(st.quantity), 0)::bigint AS units
       FROM "StockItem" st
-      JOIN "Store" lo ON lo.id = st."storeId" AND lo."excludeFromPlanning" = false
+      JOIN "Store" lo ON lo.id = st."storeId" AND ${plannedStoreSql('lo')}
       JOIN "Product" p ON p.id = st."productId"
       WHERE ${field} = ${value}
       GROUP BY st."storeId"

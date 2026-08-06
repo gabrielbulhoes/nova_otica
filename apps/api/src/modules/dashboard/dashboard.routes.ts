@@ -45,6 +45,8 @@ dashboardRouter.get(
       pendingMovements,
       lastSync,
       backofficeAgg,
+      externalAgg,
+      externalStores,
     ] = await Promise.all([
       storeId ? Promise.resolve(1) : prisma.store.count({ where: PLANNED_STORE_WHERE }),
       // Só os ativos. O cadastro do ERP guarda tudo o que já existiu — 60.610
@@ -70,12 +72,26 @@ dashboardRouter.get(
       //
       // Duas linhas, dois significados: o que está na prateleira e o que está
       // na retaguarda. Só a primeira entra nas contas de giro e reposição.
+      //
+      // `externalErp: false` no filtro NÃO é redundante. A ZEISS também está
+      // fora do escopo planejável, e sem esta condição as unidades dela
+      // cairiam neste agregado e apareceriam na tela sob o rótulo
+      // "retaguarda" — três lojas de varejo viradas centro de distribuição.
       storeId
         ? Promise.resolve(null)
         : prisma.stockItem.aggregate({
-            where: { store: { excludeFromPlanning: true } },
+            where: { store: { excludeFromPlanning: true, externalErp: false } },
             _sum: { quantity: true },
           }),
+      // Unidades das filiais em outro ERP (ZEISS). Medidas à parte e
+      // declaradas: elas existem, o número só não é confiável para decidir.
+      storeId
+        ? Promise.resolve(null)
+        : prisma.stockItem.aggregate({
+            where: { store: { externalErp: true } },
+            _sum: { quantity: true },
+          }),
+      storeId ? Promise.resolve(0) : prisma.store.count({ where: { externalErp: true } }),
     ]);
 
     res.json({
@@ -85,6 +101,14 @@ dashboardRouter.get(
       stockUnits: stockAgg._sum.quantity ?? 0,
       /** Unidades em unidades de retaguarda (CD, assistência). Fora das contas. */
       backofficeUnits: backofficeAgg ? backofficeAgg._sum.quantity ?? 0 : 0,
+      /**
+       * Unidades nas filiais que rodam em outro ERP (ZEISS). Fora de todas as
+       * contas — o dado do CDS para elas não é de tempo real. Vai na resposta
+       * para a tela poder DIZER que estão de fora, em vez de deixar o gestor
+       * descobrir sozinho que a rede encolheu.
+       */
+      externalErpUnits: externalAgg ? externalAgg._sum.quantity ?? 0 : 0,
+      externalErpStores: externalStores,
       pendingMovements,
       sales30d: {
         count: salesAgg._count,

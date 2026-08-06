@@ -31,6 +31,37 @@ export interface PlanningConfig {
    * decisões comparáveis entre si.
    */
   carryingCostAnnualPct: number;
+  /**
+   * Dias de "carência" de uma peça recém-cadastrada. Abaixo disso ela não pode
+   * ser julgada parada: não vendeu porque mal chegou.
+   *
+   * Feedback 6.0 · item 02 — "incluindo na sugestão de promoção peças que
+   * chegaram a 10 dias nas lojas". A causa é estrutural: a demanda diária sai
+   * da janela de análise, e peça nova tem zero venda na janela por definição,
+   * o que a torna indistinguível de estoque morto de três anos.
+   */
+  newProductDays: number;
+  /**
+   * Teto de venda em 12 meses para uma peça poder ser chamada de parada. Acima
+   * disso ela vende — só não vendeu NA JANELA.
+   *
+   * Feedback 6.0 · item 02 — "cards sugerindo liquidação para best-sellers".
+   * `forecastDemand` deriva a demanda de `recentUnits`/`priorUnits`, os dois
+   * medidos dentro da janela, e o índice sazonal MULTIPLICA esse valor. Uma
+   * peça sazonal fora de estação tem base zero, e zero vezes qualquer índice
+   * continua zero — o histórico de 24 meses que fomos buscar não chegava a ser
+   * consultado justamente no caso em que ele decide.
+   */
+  deadMaxAnnualUnits: number;
+  /**
+   * Piso de venda em 12 meses para o motor sugerir COMPRA de uma peça já
+   * madura. Abaixo disso, repor é comprar para o estoque, não para o cliente.
+   *
+   * Feedback 6.0 · item 03 — "sugestão de compra sugere grifes que vendemos
+   * pouquíssimo". Sem piso, uma única venda em 90 dias com saldo zero satisfaz
+   * `posição <= ponto de reposição` e vira card de compra de 1 unidade.
+   */
+  buyMinAnnualUnits: number;
 }
 
 export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
@@ -43,6 +74,16 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   // 25%/ano é a faixa usual do varejo de moda (capital ~12% + armazenagem
   // ~5% + obsolescência/perda ~8%). Ajustável por configuração.
   carryingCostAnnualPct: 25,
+  // 45 dias: prazo de entrega (14) + segurança (7) e ainda o dobro disso de
+  // folga. Uma armação precisa passar por vitrine e por fim de semana antes de
+  // alguém dizer que ela não vende.
+  newProductDays: 45,
+  // 6 un./ano — uma a cada dois meses. Acima disso a peça tem giro, ainda que
+  // baixo, e liquidar é destruir margem de algo que sai sozinho.
+  deadMaxAnnualUnits: 6,
+  // 3 un./ano. Abaixo disso o ressuprimento automático não se paga: são as
+  // grifes de ponta de cauda que o feedback chama de "vendemos pouquíssimo".
+  buyMinAnnualUnits: 3,
 };
 
 /**
@@ -278,7 +319,14 @@ export function buildPriceBands(prices: number[]): PriceBand[] {
   return bands;
 }
 
-export type MovementClass = 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
+/**
+ * Classe de giro. `NEW` entrou com o feedback 6.0 · item 02: sem ela, uma peça
+ * cadastrada há dez dias aparecia na tela como `DEAD` — "Parado", selo
+ * vermelho —, que é a etiqueta do encalhe de três anos. Zero venda por falta
+ * de tempo e zero venda por falta de demanda são o mesmo número e coisas
+ * opostas; a classe é o que as separa.
+ */
+export type MovementClass = 'NEW' | 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
 
 // ─── Grupos de cobertura (recorte por categoria) ─────────────────────────────
@@ -561,6 +609,25 @@ export interface ProductMetricsInput {
   onOrderQty?: number;
   /** Histórico para previsão; ausente = média simples (unitsSold/days). */
   demandHistory?: DemandHistory;
+  /**
+   * Unidades vendidas nos últimos 12 meses, INDEPENDENTE da janela de análise.
+   * É o que distingue "não vende" de "não vendeu nestes 90 dias" — e sem ele o
+   * motor confundia peça sazonal fora de estação com estoque morto.
+   * Ausente = o motor não aplica os pisos anuais (comportamento anterior).
+   */
+  annualUnitsSold?: number;
+  /**
+   * Há quantos dias a peça existe na rede (cadastro no ERP). Ausente = o motor
+   * não sabe, e por segurança NÃO trata a peça como nova: preferimos deixar o
+   * card de liquidação passar a suprimir um encalhe real de três anos.
+   */
+  ageDays?: number | null;
+  /**
+   * A grife saiu do mix atual da rede (feedback 6.0 · item 03). Corta a compra;
+   * não corta a liquidação — descontinuado com saldo é exatamente o que se quer
+   * escoar — nem o remanejamento, que só muda de endereço o que já foi pago.
+   */
+  brandDiscontinued?: boolean;
 }
 
 export interface ProductPlan {
@@ -647,8 +714,30 @@ export function decisionConfidence(
   return Math.round(Math.min(0.97, Math.max(0.3, conf)) * 100);
 }
 
+/**
+ * Motivo específico que uma guarda do feedback 6.0 impôs à recomendação. Sem
+ * isto, uma peça de dez dias segurada pela carência recebia o texto genérico
+ * do HOLD — "estoque tranquilo pro ritmo de venda" —, que é uma frase sobre
+ * ritmo de venda dita a respeito de algo que ainda não teve ritmo nenhum.
+ */
+type SituacaoDeGuarda = 'nova' | 'sazonal' | 'fora-do-mix' | 'abaixo-do-piso' | null;
+
 /** Texto curto e amigável explicando a decisão para o lojista. */
-function friendlyReasonFor(rec: Recommendation, ctx: { onOrder: number; coverageDays: number | null }): string {
+function friendlyReasonFor(
+  rec: Recommendation,
+  ctx: { onOrder: number; coverageDays: number | null; ageDays?: number | null; annual?: number },
+  situacao: SituacaoDeGuarda = null,
+): string {
+  switch (situacao) {
+    case 'nova':
+      return `Chegou faz pouco (${ctx.ageDays} dias) — ainda não deu tempo de vender. Deixa em vitrine antes de julgar.`;
+    case 'sazonal':
+      return `Não saiu neste período, mas vendeu ${ctx.annual} un. no ano — é sazonal, não encalhe. Segurar.`;
+    case 'fora-do-mix':
+      return 'Grife que a rede não trabalha mais — não repor; o que está em estoque a gente escoa.';
+    case 'abaixo-do-piso':
+      return `Saiu ${ctx.annual} un. no ano inteiro — repor isso é comprar pro estoque, não pro cliente.`;
+  }
   switch (rec) {
     case 'BUY':
       return 'Vende bem e o estoque está no limite — vale repor pra não deixar cliente na mão.';
@@ -689,9 +778,27 @@ export function analyzeProduct(
   const excessValue = round2(excessUnits * input.unitCost);
   const revenue = round2(input.unitsSold * input.unitPrice);
 
+  // ── Guardas do feedback 6.0 (itens 02 e 03) ───────────────────────────────
+  //
+  // As três perguntas que o motor não fazia antes de julgar uma peça:
+  //
+  //   ehNova     — ela teve tempo de vender?
+  //   giraNoAno  — ela vende, mesmo que não nesta janela?
+  //   foraDoMix  — a rede ainda trabalha esta grife?
+  //
+  // As duas primeiras impedem liquidação indevida; a segunda e a terceira
+  // impedem compra indevida. Todas degradam para o comportamento anterior
+  // quando o dado não vem (undefined), para nenhuma delas mudar silenciosamente
+  // um resultado por falta de insumo.
+  const ehNova = input.ageDays != null && input.ageDays < cfg.newProductDays;
+  const anual = input.annualUnitsSold;
+  const giraNoAno = anual !== undefined && anual > cfg.deadMaxAnnualUnits;
+  const abaixoDoPiso = anual !== undefined && anual < cfg.buyMinAnnualUnits;
+  const foraDoMix = input.brandDiscontinued === true;
+
   // Classe de giro
   let movementClass: MovementClass;
-  if (dailyDemand === 0) movementClass = 'DEAD';
+  if (dailyDemand === 0) movementClass = ehNova ? 'NEW' : 'DEAD';
   else if ((coverageDays as number) < cfg.fastCoverDays) movementClass = 'FAST';
   else if ((coverageDays as number) <= cfg.slowCoverDays) movementClass = 'HEALTHY';
   else movementClass = 'SLOW';
@@ -700,14 +807,42 @@ export function analyzeProduct(
   let recommendation: Recommendation;
   let suggestedQty = 0;
   let reason: string;
+  let situacao: SituacaoDeGuarda = null;
   if (dailyDemand === 0) {
     if (input.currentStock > 0) {
-      recommendation = 'LIQUIDATE';
-      reason = 'Sem vendas no período — capital parado; avaliar liquidação ou remanejamento.';
+      if (ehNova) {
+        // Peça de dias na rede não é encalhe: é peça de dias na rede.
+        recommendation = 'HOLD';
+        situacao = 'nova';
+        reason = `Cadastrada há ${input.ageDays} dias — ainda sem histórico para julgar. Não entra em liquidação antes de ${cfg.newProductDays} dias.`;
+      } else if (giraNoAno) {
+        // O caso "best-seller na promoção": vendeu no ano, não nesta janela.
+        recommendation = 'HOLD';
+        situacao = 'sazonal';
+        reason = `Sem venda no período, mas ${anual} un. em 12 meses — sazonal, não parada. Não liquidar.`;
+      } else if (foraDoMix) {
+        recommendation = 'LIQUIDATE';
+        reason = 'Grife fora do mix atual e sem giro — escoar o saldo remanescente.';
+      } else {
+        recommendation = 'LIQUIDATE';
+        reason = 'Sem vendas no período — capital parado; avaliar liquidação ou remanejamento.';
+      }
     } else {
       recommendation = 'DONT_BUY';
       reason = 'Sem giro e sem estoque — não repor.';
     }
+  } else if (foraDoMix) {
+    // Descontinuada com giro residual: o giro não justifica recomprar.
+    recommendation = 'DONT_BUY';
+    situacao = 'fora-do-mix';
+    reason = 'Grife fora do mix atual da rede — não repor, escoar o que resta.';
+  } else if (abaixoDoPiso && !ehNova) {
+    // Uma venda em 90 dias com saldo zero satisfazia o ponto de reposição e
+    // virava card de compra. A carência protege o lançamento que ainda não
+    // teve 12 meses para acumular.
+    recommendation = 'DONT_BUY';
+    situacao = 'abaixo-do-piso';
+    reason = `${anual} un. em 12 meses — abaixo do piso da rede (${cfg.buyMinAnnualUnits}). Repor só sob decisão comercial.`;
   } else if (position <= reorderPoint) {
     recommendation = 'BUY';
     suggestedQty = Math.max(1, Math.ceil(targetStock - position));
@@ -753,7 +888,11 @@ export function analyzeProduct(
     capital,
     stockoutInDays,
     reason,
-    friendlyReason: friendlyReasonFor(recommendation, { onOrder, coverageDays }),
+    friendlyReason: friendlyReasonFor(
+      recommendation,
+      { onOrder, coverageDays, ageDays: input.ageDays, annual: anual },
+      situacao,
+    ),
     confidence: decisionConfidence(input.unitsSold, days, dailyDemand > 0, forecast?.method ?? null),
     carryingCost30d: carryingCost(stockValue, 30, cfg),
     excessCarryingCost30d: carryingCost(excessValue, 30, cfg),
@@ -866,7 +1005,7 @@ export function buildOverview(plans: ProductPlan[], days: number): PlanningOverv
   const idle = round2(parked + excess);
   const healthy = round2(Math.max(0, total - idle));
 
-  const movement = { dead: 0, slow: 0, healthy: 0, fast: 0 } as Record<Lowercase<MovementClass>, number>;
+  const movement = { new: 0, dead: 0, slow: 0, healthy: 0, fast: 0 } as Record<Lowercase<MovementClass>, number>;
   for (const p of plans) movement[p.movementClass.toLowerCase() as Lowercase<MovementClass>] += 1;
 
   const catMap = new Map<string, CategoryCapital>();
@@ -996,6 +1135,14 @@ export interface RebalanceSuggestion {
   productId: string;
   description: string;
   brand: string | null;
+  /**
+   * Categoria do produto. Existe para a extração de grife do card poder ser a
+   * MESMA dos outros dois tipos — `extractBrand` sem categoria extrai sempre, e
+   * em lente a descrição é a linha do produto, não a marca (a ZEISS virava
+   * dezesseis pseudo-marcas). O remanejamento já não transfere lente, mas
+   * depender disso seria depender de um filtro que mora em outro arquivo.
+   */
+  category: string | null;
   fromStoreId: string;
   fromStoreName: string;
   toStoreId: string;
@@ -1046,7 +1193,10 @@ export function buildRebalance(
     stock: number;
     coverage: number | null;
   }
-  const byProduct = new Map<string, { description: string; brand: string | null; stores: StorePos[] }>();
+  const byProduct = new Map<
+    string,
+    { description: string; brand: string | null; category: string | null; stores: StorePos[] }
+  >();
 
   for (const r of rows) {
     const dailyDemand = days > 0 ? r.unitsSold / days : 0;
@@ -1057,7 +1207,12 @@ export function buildRebalance(
       stock: r.currentStock,
       coverage: dailyDemand > 0 ? r.currentStock / dailyDemand : null,
     };
-    const cur = byProduct.get(r.productId) ?? { description: r.description, brand: r.brand, stores: [] };
+    const cur = byProduct.get(r.productId) ?? {
+      description: r.description,
+      brand: r.brand,
+      category: r.category ?? null,
+      stores: [],
+    };
     cur.stores.push(pos);
     byProduct.set(r.productId, cur);
   }
@@ -1117,6 +1272,7 @@ export function buildRebalance(
           productId,
           description: p.description,
           brand: p.brand,
+          category: p.category,
           fromStoreId: donor.storeId,
           fromStoreName: donor.storeName,
           toStoreId: receiver.storeId,
@@ -1602,9 +1758,24 @@ export interface DecisionCard {
   type: DecisionType;
   title: string;
   priority: DecisionPriority;
+  /**
+   * Por que esta prioridade. "Deve haver detalhamento e diferenciação mais
+   * apuradas no nível de prioridade" (feedback 6.0 · item 04): dizer ALTA sem
+   * dizer de onde veio era metade do problema — o gestor não tinha como
+   * discordar de um rótulo cuja origem não aparecia.
+   */
+  priorityReason?: string;
   productId: string;
   description: string;
   brand: string | null;
+  /**
+   * Grife de ANÁLISE da peça — a marca extraída da descrição, com o fornecedor
+   * do ERP como reserva (ver `analysisBrand`). É por ela que a Central de
+   * Decisões filtra (feedback 6.0 · item 05): `brand` sozinho é o campo de
+   * fornecedor do CDS, que vem vazio na maior parte do catálogo e transformaria
+   * o seletor de grife numa lista de um item só, chamado "—".
+   */
+  brandLabel: string | null;
   /** Loja-alvo ou rota (De → Para) do card. */
   target: string;
   /** IDs de loja para ação de 1 clique no remanejamento (origem → destino). */
@@ -1751,23 +1922,154 @@ function cardId(type: DecisionType, seed: string): string {
   return `#${prefix}${code.slice(0, 2)}.${code.slice(2, 5)}`;
 }
 
-function buyPriority(orderByInDays: number | null, stockoutInDays: number | null): DecisionPriority {
-  const d = orderByInDays ?? stockoutInDays;
-  if (d !== null && d <= 0) return 'ALTA';
-  if (d !== null && d <= 7) return 'ALTA';
-  if (d !== null && d <= 21) return 'MEDIA';
-  return 'BAIXA';
+// ─── Prioridade do card (feedback 6.0 · item 04) ─────────────────────────────
+//
+// "Cards com confiança abaixo de 50% estão categorizados como prioridade alta.
+//  Inclusive 1377 cards — 1332 são prioridade alta. Deve haver detalhamento e
+//  diferenciação mais apuradas no nível de prioridade."
+//
+// Dois defeitos, um dentro do outro.
+//
+// O primeiro é literal: a prioridade NÃO OLHAVA a confiança. Eram duas colunas
+// independentes na mesma linha do card, e por isso "Alta · 37%" era um estado
+// perfeitamente alcançável — o motor dizia "resolva isto nesta semana" e, ao
+// lado, "eu tenho pouca ideia do que estou falando".
+//
+// O segundo é o que faz o primeiro doer: uma única dimensão decidia tudo. A
+// urgência sozinha respondia por três dos quatro caminhos, com o corte em 7
+// dias, e ruptura em 7 dias é o caso COMUM num varejo de giro — não a exceção.
+// Um rótulo que 96,7% da fila recebe não ordena fila nenhuma: ele só repete,
+// 1.332 vezes, que existem 1.332 cards.
+//
+// A correção é exigir as três coisas ao mesmo tempo. Um card é ALTA quando é
+// urgente E confiável E material — e a prioridade final é a PIOR das três
+// leituras, que é como um comprador tria de verdade: o prazo apertado de um
+// item de R$ 80 não disputa com o prazo apertado de um item de R$ 12 mil, e
+// nenhum dos dois disputa com aquilo de que se tem certeza.
+//
+// Cada faixa é configurável, e o card passa a carregar `priorityReason` —
+// dizer "Alta" sem dizer por quê foi metade do problema.
+
+/** Faixas da prioridade composta. Todas em `DEFAULT_PRIORITY_CONFIG`. */
+export interface PriorityConfig {
+  /** Ruptura em até N dias = urgência ALTA. */
+  urgentDays: number;
+  /** Ruptura em até N dias = urgência MEDIA. */
+  attentionDays: number;
+  /** Confiança mínima (0–100) para um card poder ser ALTA. */
+  minConfidenceHigh: number;
+  /** Abaixo disto o card é sempre BAIXA — o motor não sabe o suficiente. */
+  minConfidenceMedium: number;
+  /** Valor em R$ a partir do qual o card é material o bastante para ALTA. */
+  highImpact: number;
+  /** Valor em R$ a partir do qual o card é material o bastante para MEDIA. */
+  mediumImpact: number;
 }
-function urgencyPriority(stockoutInDays: number | null): DecisionPriority {
-  if (stockoutInDays === null) return 'BAIXA';
-  if (stockoutInDays <= 7) return 'ALTA';
-  if (stockoutInDays <= 21) return 'MEDIA';
-  return 'BAIXA';
+
+export const DEFAULT_PRIORITY_CONFIG: PriorityConfig = {
+  // 3 dias, não 7. Com 7, "vai faltar em ~7d" — o caso comum — era ALTA, e a
+  // faixa mais alta engolia a fila inteira. Três dias é o que não dá tempo de
+  // remanejar antes de o cliente chegar.
+  urgentDays: 3,
+  attentionDays: 14,
+  // 50 é o número que o próprio feedback nomeia.
+  minConfidenceHigh: 50,
+  minConfidenceMedium: 35,
+  // Mesmos cortes que a antiga `capitalPriority` já usava para liquidação —
+  // agora valendo também para compra e remanejamento, e como TETO, não como
+  // atalho. R$ 400 é a faixa de uma armação corrente; R$ 1.500 é a de uma
+  // grife, ou de um lote pequeno.
+  highImpact: 1500,
+  mediumImpact: 400,
+};
+
+const pior = (a: DecisionPriority, b: DecisionPriority): DecisionPriority =>
+  PRIORITY_RANK[a] >= PRIORITY_RANK[b] ? a : b;
+
+export interface PriorityInput {
+  /** Dias até a ruptura; null quando o card não tem prazo (liquidação). */
+  urgencyDays: number | null;
+  /**
+   * Quanto dinheiro o card move, em R$. Três significados, uma unidade:
+   *
+   *   COMPRA        custo do pedido — o que sai do caixa
+   *   LIQUIDAÇÃO    capital parado  — o que volta para o caixa
+   *   REMANEJAMENTO receita em risco no destino (unidades × preço)
+   *
+   * A terceira linha é a que mudou. A materialidade da transferência estava
+   * medida em UNIDADES, e num catálogo de ótica — em que cada modelo, cor e
+   * tamanho é um código — quase toda transferência é de uma peça. Medido em
+   * unidades, o eixo não separava nada: apenas mudava a pilha de "Alta" para
+   * "Baixa". Medido em dinheiro, ele separa o Ray-Ban de R$ 800 do acessório
+   * de R$ 40, que é a diferença que o comprador de fato enxerga.
+   *
+   * Note que este valor NÃO é o `impact` exibido no card: transferência não
+   * move capital e continua mostrando "Giro (sem capital)". Confundir os dois
+   * poria um R$ falso na tela.
+   */
+  materialValue: number;
+  /** Confiança do motor na decisão, 0–100. */
+  confidence: number;
 }
-function capitalPriority(value: number): DecisionPriority {
-  if (value >= 1500) return 'ALTA';
-  if (value >= 400) return 'MEDIA';
-  return 'BAIXA';
+
+export interface PriorityVerdict {
+  priority: DecisionPriority;
+  /** Qual das três leituras rebaixou o card — o "por que Alta?" respondido. */
+  reason: string;
+}
+
+/**
+ * Prioridade composta: a PIOR entre urgência, confiança e materialidade.
+ *
+ * O `reason` nomeia a dimensão que mandou. Quando as três concordam, ele
+ * descreve a urgência, que é a leitura que o operador espera ler primeiro.
+ */
+export function decisionPriority(
+  i: PriorityInput,
+  cfg: PriorityConfig = DEFAULT_PRIORITY_CONFIG,
+): PriorityVerdict {
+  const d = i.urgencyDays;
+  const urgencia: DecisionPriority =
+    d === null ? 'BAIXA' : d <= cfg.urgentDays ? 'ALTA' : d <= cfg.attentionDays ? 'MEDIA' : 'BAIXA';
+
+  const confianca: DecisionPriority =
+    i.confidence >= cfg.minConfidenceHigh
+      ? 'ALTA'
+      : i.confidence >= cfg.minConfidenceMedium
+        ? 'MEDIA'
+        : 'BAIXA';
+
+  const material: DecisionPriority =
+    i.materialValue >= cfg.highImpact
+      ? 'ALTA'
+      : i.materialValue >= cfg.mediumImpact
+        ? 'MEDIA'
+        : 'BAIXA';
+
+  const priority = pior(pior(urgencia, confianca), material);
+
+  // O motivo é o da dimensão que PUXOU PARA BAIXO. Se mais de uma empata no
+  // resultado, vale a ordem urgência → confiança → materialidade: é a ordem em
+  // que quem opera faz as perguntas.
+  const dizUrgencia =
+    d === null
+      ? 'sem prazo de ruptura'
+      : d <= 0
+        ? 'já em falta'
+        : `ruptura em ~${d} dia${d > 1 ? 's' : ''}`;
+  const dizMaterial = `${brl(i.materialValue)} em jogo`;
+
+  let reason: string;
+  if (urgencia === priority) reason = dizUrgencia;
+  else if (confianca === priority) reason = `confiança de ${i.confidence}% — o motor não tem base para pedir mais`;
+  else reason = `${dizMaterial} — não é valor que justifique furar a fila`;
+
+  return { priority, reason };
+}
+
+/** R$ compacto para o texto do motivo (a tela formata o resto). */
+function brl(v: number): string {
+  return `R$ ${Math.round(v).toLocaleString('pt-BR')}`;
 }
 
 /**
@@ -1905,19 +2207,36 @@ export function buildDecisionCards(
    * TEMPO que faz o desconto variar por peça em vez de sair constante.
    */
   stuckDaysByProduct?: ReadonlyMap<string, number>,
+  /** Faixas da prioridade composta (feedback 6.0 · item 04). */
+  prioCfg: PriorityConfig = DEFAULT_PRIORITY_CONFIG,
 ): DecisionBoard {
   const cards: DecisionCard[] = [];
+  // Preço unitário por produto, para dar valor às transferências. Sai dos
+  // planos que já estão em memória.
+  const precoPorProduto = new Map(plans.map((p) => [p.productId, p.unitPrice]));
 
   for (const p of plans) {
     if (p.recommendation === 'BUY') {
+      // A urgência da compra é o prazo do PEDIDO (`orderByInDays`), não o da
+      // ruptura: o que se decide aqui é quando mandar o pedido.
+      const prio = decisionPriority(
+        {
+          urgencyDays: p.orderByInDays ?? p.stockoutInDays,
+          materialValue: p.capital,
+          confidence: p.confidence,
+        },
+        prioCfg,
+      );
       cards.push({
         id: cardId('COMPRA', p.productId),
         type: 'COMPRA',
         title: 'Repor e evitar ruptura',
-        priority: buyPriority(p.orderByInDays, p.stockoutInDays),
+        priority: prio.priority,
+        priorityReason: prio.reason,
         productId: p.productId,
         description: p.description,
         brand: p.brand,
+        brandLabel: analysisBrand(p.description, p.category, p.brand),
         target: `Fornecedor: ${p.brand ?? '—'}`,
         quantity: p.suggestedQty,
         reason: p.friendlyReason,
@@ -1945,6 +2264,12 @@ export function buildDecisionCards(
       const outlet = positionsByProduct
         ? bestOutletStore(positionsByProduct.get(p.productId) ?? [], undefined, posMarca)
         : null;
+      // Liquidação não tem prazo de ruptura — a urgência dela é nula por
+      // natureza, e a prioridade sai do capital parado e da confiança.
+      const prioLiq = decisionPriority(
+        { urgencyDays: null, materialValue: p.stockValue, confidence: p.confidence },
+        prioCfg,
+      );
       cards.push({
         id: cardId('LIQUIDACAO', p.productId),
         type: 'LIQUIDACAO',
@@ -1971,10 +2296,12 @@ export function buildDecisionCards(
               })(),
             }
           : {}),
-        priority: capitalPriority(p.stockValue),
+        priority: prioLiq.priority,
+        priorityReason: prioLiq.reason,
         productId: p.productId,
         description: p.description,
         brand: p.brand,
+        brandLabel: marca,
         // O alvo é a MARCA de análise: `p.brand` é o fornecedor e sai "—" na
         // maior parte do catálogo, o que virava "Alvo: —" na tela.
         target: marca ?? 'Excesso na rede',
@@ -1989,14 +2316,28 @@ export function buildDecisionCards(
   }
 
   for (const s of rebalance) {
+    // A transferência não move capital, mas move RECEITA: o que está em jogo é
+    // a venda que o destino perde se a peça não chegar. O preço vem do plano
+    // do próprio produto — nenhuma consulta nova.
+    const preco = precoPorProduto.get(s.productId) ?? 0;
+    const prioRem = decisionPriority(
+      {
+        urgencyDays: s.stockoutInDays,
+        materialValue: round2(s.quantity * preco),
+        confidence: s.confidence,
+      },
+      prioCfg,
+    );
     cards.push({
       id: cardId('REMANEJAMENTO', `${s.productId}:${s.fromStoreId}:${s.toStoreId}`),
       type: 'REMANEJAMENTO',
       title: 'Transferir para loja com maior giro',
-      priority: urgencyPriority(s.stockoutInDays),
+      priority: prioRem.priority,
+      priorityReason: prioRem.reason,
       productId: s.productId,
       description: s.description,
       brand: s.brand,
+      brandLabel: analysisBrand(s.description, s.category, s.brand),
       target: `${shortStore(s.fromStoreName)} → ${shortStore(s.toStoreName)}`,
       fromStoreId: s.fromStoreId,
       toStoreId: s.toStoreId,
