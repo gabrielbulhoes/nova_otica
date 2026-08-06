@@ -220,11 +220,73 @@ function isoToday(): string {
  * previsão sazonal, que usa 24 meses). Reaproveita os mesmos syncs com faixa
  * explícita; upserts por externalId tornam a repetição inofensiva.
  */
-export async function backfillSalesHistory(months: number): Promise<SyncResult['entities']> {
-  const client = getSellbieClient();
+export interface BackfillOpts {
+  /**
+   * Quantos meses para trás, ou `'tudo'` para DESCOBRIR onde o histórico
+   * termina em vez de adivinhar um número.
+   */
+  meses: number | 'tudo';
+  /** Meses vazios seguidos que encerram a descoberta. Só em `'tudo'`. */
+  pararApos?: number;
+  /** Piso da descoberta, para não varrer o século inteiro. */
+  tetoMeses?: number;
+}
+
+export async function backfillSalesHistory(
+  opts: BackfillOpts | number,
+): Promise<SyncResult['entities']> {
+  const o: BackfillOpts = typeof opts === 'number' ? { meses: opts } : opts;
+  // TRAVA — o backfill não tinha nenhuma, e o sync tem.
+  //
+  // Em 06/08/2026 duas execuções rodaram em paralelo por engano e disputaram
+  // as mesmas linhas: dois deadlocks do Postgres. `syncPayments` REESCREVE a
+  // janela (apaga e recria), então a corrida não é só lenta, é perigosa — se
+  // o `delete` de uma execução cair depois do `create` da outra e o seu
+  // próprio `create` falhar, a janela fica sem pagamento nenhum e nada acusa.
+  //
+  // A trava em memória não serve aqui: o backfill roda em processo próprio
+  // (`docker exec`), separado da API. Quem protege entre processos é a linha
+  // RUNNING no banco, a mesma que o sync usa.
+  if (syncInFlight) throw new SyncInProgressError();
+  const emAndamento = await prisma.syncRun.findFirst({
+    where: { status: 'RUNNING', startedAt: { gte: new Date(Date.now() - STALE_RUN_MS) } },
+  });
+  if (emAndamento) throw new SyncInProgressError();
+
+  syncInFlight = true;
+  const run = await prisma.syncRun.create({
+    data: {
+      entity: 'backfill',
+      status: 'RUNNING',
+      window: o.meses === 'tudo' ? 'tudo' : `${o.meses}m`,
+      trigger: 'manual',
+    },
+  });
+  try {
+    // Cliente resolvido só aqui: a trava falha antes de tocar a rede.
+    return await backfillLocked(getSellbieClient(), o, run.id);
+  } finally {
+    syncInFlight = false;
+  }
+}
+
+async function backfillLocked(
+  client: Client,
+  opts: BackfillOpts,
+  runId: string,
+): Promise<SyncResult['entities']> {
   const entities: SyncResult['entities'] = {};
   const now = new Date();
-  for (let i = months; i >= 0; i -= 1) {
+  const descobrir = opts.meses === 'tudo';
+  const teto: number = descobrir ? opts.tetoMeses ?? 240 : (opts.meses as number);
+  const pararApos = opts.pararApos ?? 3;
+
+  // Do mês corrente para trás. A ordem importa no modo 'tudo': é indo para o
+  // passado que se encontra o fim do histórico.
+  let vaziosSeguidos = 0;
+  let ultimoComVenda: string | null = null;
+
+  for (let i = 0; i <= teto; i += 1) {
     const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
     const range = {
@@ -232,22 +294,72 @@ export async function backfillSalesHistory(months: number): Promise<SyncResult['
       date_end: end.toISOString().slice(0, 10),
     };
     const label = range.date_start.slice(0, 7);
+    let vendasLidas = 0;
     try {
       const sales = await syncSales(client, range);
       const items = await syncSaleItems(client, range);
       const payments = await syncPayments(client, range);
+      vendasLidas = sales.read;
       entities[label] = {
         read: sales.read + items.read + payments.read,
         written: sales.written + items.written + payments.written,
       };
-      log.info('Backfill de vendas: mês concluído', { mes: label, ...entities[label] });
+      log.info('Backfill de vendas: mês concluído', { mes: label, vendas: sales.read, ...entities[label] });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       entities[label] = { read: 0, written: 0, error: message };
       log.error('Backfill de vendas: mês falhou', { mes: label, error: message });
+      // Mês que FALHOU não é mês vazio. Tratar erro como fim do histórico
+      // encerraria a varredura no primeiro soluço do conector e deixaria anos
+      // de fora, com a aparência de ter terminado direito.
+      vaziosSeguidos = 0;
+      await bater(runId);
+      continue;
     }
+
+    if (vendasLidas > 0) {
+      vaziosSeguidos = 0;
+      ultimoComVenda = label;
+    } else if (descobrir) {
+      vaziosSeguidos += 1;
+      if (vaziosSeguidos >= pararApos) {
+        log.info('Backfill: fim do histórico', {
+          mesesVazios: vaziosSeguidos,
+          ultimoMesComVenda: ultimoComVenda,
+          mesesVarridos: i + 1,
+        });
+        break;
+      }
+    }
+    await bater(runId);
   }
+
+  if (descobrir && ultimoComVenda === null) {
+    log.warn('Backfill: nenhum mês com venda encontrado', { tetoMeses: teto });
+  }
+
+  const comErro = Object.values(entities).filter((e) => e.error).length;
+  await prisma.syncRun.update({
+    where: { id: runId },
+    data: {
+      status: comErro > 0 ? 'PARTIAL' : 'SUCCESS',
+      finishedAt: new Date(),
+      recordsRead: Object.values(entities).reduce((a, e) => a + e.read, 0),
+      recordsWritten: Object.values(entities).reduce((a, e) => a + e.written, 0),
+      error: comErro > 0 ? `${comErro} mês(es) com erro` : null,
+    },
+  });
   return entities;
+}
+
+/**
+ * Batimento da trava. Ela considera abandonado um RUNNING mais velho que 15
+ * minutos, e uma varredura de anos passa muito disso — sem isto, a própria
+ * execução envelheceria no meio do caminho e deixaria de proteger contra uma
+ * segunda.
+ */
+async function bater(runId: string): Promise<void> {
+  await prisma.syncRun.update({ where: { id: runId }, data: { startedAt: new Date() } });
 }
 
 // ─── Helpers de lookup externalId -> id interno ──────────────────────────────
