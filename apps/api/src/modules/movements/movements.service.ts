@@ -138,7 +138,19 @@ async function createMovementIn(input: CreateMovementInput, actor: Actor, db: Db
   // que existe nunca é pedido legítimo.
   if (input.fromStoreId) {
     await lockStockPosition(db, input.fromStoreId, input.productId);
-    const available = await availableAt(input.fromStoreId, input.productId, db);
+    // `availableAt` desconta `StockItem.reserved`, e `recomputeReserved` só
+    // soma as saídas PENDING — as REQUESTED não entram lá. Sem descontá-las
+    // aqui, a conferência é feita uma a uma contra o mesmo saldo: três
+    // solicitações de 12 unidades numa loja de 12 passariam todas, cada uma
+    // "cabendo" sozinha. E o plano da rede soma as três, chega a zero livre e
+    // apaga o par (produto, loja) — que é exatamente o abuso que esta trava
+    // veio impedir.
+    const solicitado = await db.inventoryMovement.aggregate({
+      where: { status: 'REQUESTED', type: 'TRANSFER', fromStoreId: input.fromStoreId, productId: input.productId },
+      _sum: { quantity: true },
+    });
+    const available =
+      (await availableAt(input.fromStoreId, input.productId, db)) - (solicitado._sum.quantity ?? 0);
     if (input.quantity > available) {
       throw badRequest(
         `Saldo insuficiente na origem (disponível: ${available}, solicitado: ${input.quantity}).`,

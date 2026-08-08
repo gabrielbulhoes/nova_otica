@@ -34,6 +34,35 @@ describe('grifes · o código de cor do fabricante não é uma marca', () => {
     );
   });
 
+  it('o sufixo depois da grife não move mais a âncora', () => {
+    // Diferente das outras deste arquivo, estas quatro descrições NÃO são
+    // literais do catálogo: são o padrão documentado do CDS com um sufixo
+    // colado atrás. Medi o snapshot que temos aqui — 501 produtos de moda — e
+    // nenhum deles escreve nada depois da grife, então a âncora antiga e a
+    // nova concordam em 501/501 e nos mesmos 63 rótulos. O defeito é LATENTE
+    // nesta amostra; o catálogo cheio tem 61.394 produtos e não dá para
+    // afirmar que ele não aparece lá.
+    //
+    // Ele é real na régua, e é isso que estes casos prendem: a âncora era a
+    // ÚLTIMA palavra de `CATEGORY_WORDS`, e esse conjunto tinha as preposições
+    // `de/do/da/para/com` dentro. Qualquer coisa escrita DEPOIS da grife
+    // empurrava a varredura para além dela:
+    //
+    //   "… OCULOS ARNETTE DE ACETATO"  âncora no `DE`  → devolvia "ACETATO"
+    //   "… OCULOS ARNETTE COM ESTOJO"  âncora no `ESTOJO` (último token, cai no
+    //                                  fallback do começo) → devolvia "ABAG"
+    //
+    // Ancorar na PRIMEIRA palavra de TIPO cai no divisor que o padrão do CDS
+    // descreve, e as preposições seguem fazendo o único trabalho que lhes cabe:
+    // encerrar a marca depois que ela começou.
+    expect(extractBrand('AN4290 ABAG 55 OCULOS ARNETTE DE ACETATO', 'OCULOS')).toBe('ARNETTE');
+    expect(extractBrand('AN4290 ABAG 55 OCULOS ARNETTE COM ESTOJO', 'OCULOS')).toBe('ARNETTE');
+    expect(extractBrand('VO5573 ABLK 52 ARMACAO VOGUE DE METAL', 'ARMACAO')).toBe('VOGUE');
+    expect(extractBrand('MK1088 AGLD 54 ARMACAO MICHAEL KORS COM ESTOJO', 'ARMACAO')).toBe(
+      'MICHAEL KORS',
+    );
+  });
+
   it('o calibre com hífen também não engana mais', () => {
     // `59-18` e `57-9O` são calibre-ponte. Têm dígito, então a varredura antiga
     // os pulava — e ficava com o token anterior, que é o código de cor.

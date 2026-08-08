@@ -435,11 +435,25 @@ export function grupoDaCategoria(category: string | null | undefined): ProductGr
  * dígito) ou tamanho, devolvendo 1–2 tokens como marca. Heurística — deve ser
  * validada e afinada com as descrições reais quando a sonda CDS rodar.
  */
-const CATEGORY_WORDS = new Set([
+/**
+ * Palavras de TIPO — o que o produto é. Só elas servem de âncora: aparecem uma
+ * vez, na posição fixa do padrão do CDS, e o que vem depois delas é nome.
+ */
+const TIPO_WORDS = new Set([
   'armacao', 'armacoes', 'oculos', 'oculo', 'lente', 'lentes', 'relogio', 'relogios',
   'estojo', 'estojos', 'acessorio', 'acessorios', 'sol', 'solar', 'grau', 'receituario',
-  'contato', 'infantil', 'de', 'do', 'da', 'para', 'com',
+  'contato', 'infantil',
 ]);
+
+/**
+ * Preposições — descartáveis como as de tipo enquanto a marca não começou, e
+ * encerram a marca depois que ela começou, mas NÃO servem de âncora: elas
+ * reaparecem no meio e no fim da descrição ("… OCULOS ARNETTE DE ACETATO",
+ * "… COM ESTOJO"). Ancorar nelas jogava a varredura para depois da grife.
+ */
+const PREPOSICOES = new Set(['de', 'do', 'da', 'para', 'com']);
+
+const CATEGORY_WORDS = new Set([...TIPO_WORDS, ...PREPOSICOES]);
 const COLOR_WORDS = new Set([
   'preto', 'preta', 'branco', 'branca', 'dourado', 'dourada', 'prata', 'prateado', 'azul',
   'tartaruga', 'marrom', 'vermelho', 'vermelha', 'verde', 'rosa', 'cinza', 'nude',
@@ -503,7 +517,7 @@ export function extractBrand(
   const tokens = raw.split(/\s+/);
 
   /*
-   * A varredura começa DEPOIS da última palavra de tipo, não do começo da
+   * A varredura começa DEPOIS da PRIMEIRA palavra de tipo, não do começo da
    * descrição.
    *
    * Motivo, com o dado real na mão: o CDS escreve a maioria das armações no
@@ -527,17 +541,32 @@ export function extractBrand(
    * antigo — varrer tudo. O mesmo vale se a varredura a partir do tipo não
    * achar nada: `ARNETTE OCULOS PRETO` só tem marca ANTES do tipo.
    *
+   * A âncora é a PRIMEIRA palavra de tipo, e só de tipo. Ancorar na ÚLTIMA
+   * palavra de `CATEGORY_WORDS` — que inclui as preposições — quebrava nos
+   * dois sufixos mais comuns do catálogo real:
+   *
+   *     AN4290 ABAG 55 OCULOS ARNETTE DE ACETATO   →  "ACETATO"
+   *     AN4290 ABAG 55 OCULOS ARNETTE COM ESTOJO   →  "ABAG"
+   *
+   * O `DE`/`COM` no fim empurrava a âncora para depois da grife. A primeira
+   * palavra de tipo cai exatamente no divisor que o padrão do CDS descreve, e
+   * as preposições continuam encerrando a marca dentro de `varrerMarca` — que
+   * é o papel delas.
+   *
    * Isto é heurística sobre texto livre, e vai continuar errando em algum
    * padrão que ainda não vimos. O conserto definitivo é a Sellbie expor o
    * campo Marca na rota `produtos` — ele existe no admin do ERP e não vem na
    * API. Enquanto não vier, esta é a melhor régua disponível.
    */
-  let ultimoTipo = -1;
+  let primeiroTipo = -1;
   for (let i = 0; i < tokens.length; i++) {
-    if (CATEGORY_WORDS.has(norm(tokens[i]).replace(/[.,;:]+$/, ''))) ultimoTipo = i;
+    if (TIPO_WORDS.has(norm(tokens[i]).replace(/[.,;:]+$/, ''))) {
+      primeiroTipo = i;
+      break;
+    }
   }
-  if (ultimoTipo >= 0 && ultimoTipo < tokens.length - 1) {
-    const depoisDoTipo = varrerMarca(tokens, ultimoTipo + 1);
+  if (primeiroTipo >= 0 && primeiroTipo < tokens.length - 1) {
+    const depoisDoTipo = varrerMarca(tokens, primeiroTipo + 1);
     if (depoisDoTipo) return depoisDoTipo;
   }
   return varrerMarca(tokens, 0);
