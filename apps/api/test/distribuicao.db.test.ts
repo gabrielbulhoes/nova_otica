@@ -22,6 +22,13 @@ d('distribuição do recebimento (integração com Postgres)', () => {
   let retaguardaId = '';
   let productId = '';
   let criouRetaguarda = false;
+  // Loja zerada de propósito no beforeAll (e restaurada no afterAll): é ela
+  // que garante necessidade > 0 sem o teste depender do humor do seed.
+  let lojaZerada = '';
+  let estoqueAnterior: number | null = null;
+  // Pedido de uma peça que a rede NUNCA vendeu — o caso da reserva.
+  let pedidoPecaNovaId = '';
+  let pecaNovaId = '';
 
   beforeAll(async () => {
     const lojas = await prisma.store.findMany({ where: PLANNED_STORE_WHERE, take: 4 });
@@ -64,6 +71,32 @@ d('distribuição do recebimento (integração com Postgres)', () => {
       update: { quantity: 500, available: 500 },
     });
 
+    // O rateio agora é por NECESSIDADE (falta até a cobertura-alvo), e
+    // necessidade só existe onde há venda E falta estoque. Zeramos uma loja que
+    // vendeu a peça para o caso comum ser deterministicamente 'necessidade' —
+    // senão o teste passaria ou falharia conforme o estoque que o seed sorteou.
+    const vendas = await prisma.saleItem.findMany({
+      where: { productId, sale: { store: PLANNED_STORE_WHERE } },
+      select: { quantity: true, sale: { select: { storeId: true } } },
+    });
+    const porLoja = new Map<string, number>();
+    for (const v of vendas) {
+      const sid = v.sale.storeId;
+      if (sid) porLoja.set(sid, (porLoja.get(sid) ?? 0) + v.quantity);
+    }
+    lojaZerada = [...porLoja.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+    if (lojaZerada) {
+      const atual = await prisma.stockItem.findUnique({
+        where: { storeId_productId: { storeId: lojaZerada, productId } },
+      });
+      estoqueAnterior = atual?.quantity ?? null;
+      await prisma.stockItem.upsert({
+        where: { storeId_productId: { storeId: lojaZerada, productId } },
+        create: { storeId: lojaZerada, productId, quantity: 0, available: 0 },
+        update: { quantity: 0, available: 0 },
+      });
+    }
+
     const admin = await prisma.user.findFirstOrThrow({ where: { role: 'ADMIN' } });
     const rec = await prisma.purchaseOrderRecord.create({
       data: {
@@ -77,11 +110,49 @@ d('distribuição do recebimento (integração com Postgres)', () => {
       },
     });
     orderId = rec.id;
+
+    // Peça que a rede nunca vendeu: demanda zero em toda loja, logo alvo zero e
+    // falta zero em toda loja. É o caso normal de um pedido de compra — modelo
+    // recém-lançado — e é onde a escada de reserva tem que assumir.
+    const pecaNova = await prisma.product.create({
+      data: {
+        externalId: `test-peca-nova-${Date.now()}`,
+        description: 'ARMACAO PECA NOVA DE TESTE',
+        category: (await prisma.product.findUniqueOrThrow({ where: { id: productId } })).category,
+      },
+    });
+    pecaNovaId = pecaNova.id;
+    const recNova = await prisma.purchaseOrderRecord.create({
+      data: {
+        sentBy: admin.id,
+        supplier: 'FORNECEDOR DE TESTE',
+        leadTimeDays: 14,
+        status: 'SENT',
+        items: [{ productId: pecaNovaId, description: pecaNova.description, quantity: 37, unitCost: 100, total: 3700 }],
+        units: 37,
+        total: 3700,
+      },
+    });
+    pedidoPecaNovaId = recNova.id;
   });
 
   afterAll(async () => {
     await prisma.inventoryMovement.deleteMany({ where: { fromStoreId: retaguardaId } });
     await prisma.purchaseOrderRecord.deleteMany({ where: { supplier: 'FORNECEDOR DE TESTE' } });
+    if (pecaNovaId) {
+      await prisma.stockItem.deleteMany({ where: { productId: pecaNovaId } });
+      await prisma.product.delete({ where: { id: pecaNovaId } });
+    }
+    if (lojaZerada) {
+      if (estoqueAnterior === null) {
+        await prisma.stockItem.deleteMany({ where: { storeId: lojaZerada, productId } });
+      } else {
+        await prisma.stockItem.update({
+          where: { storeId_productId: { storeId: lojaZerada, productId } },
+          data: { quantity: estoqueAnterior, available: estoqueAnterior },
+        });
+      }
+    }
     if (criouRetaguarda) {
       await prisma.stockItem.deleteMany({ where: { storeId: retaguardaId } });
       await prisma.store.delete({ where: { id: retaguardaId } });
@@ -107,10 +178,38 @@ d('distribuição do recebimento (integração com Postgres)', () => {
     }
   });
 
-  it('declara de qual base saiu o rateio', async () => {
+  it('declara de qual base saiu o rateio — e o caso comum é a NECESSIDADE', async () => {
+    // Este teste aceitava qualquer degrau da escada de participação
+    // ('sku'|'marca'|'categoria'|'rede') porque era assim que o rateio saía: por
+    // PARTICIPAÇÃO NAS VENDAS. O cliente pediu outra coisa — "de acordo com a
+    // melhor chance de venda E OTIMIZAÇÃO DO ESTOQUE" —, e participação responde
+    // só a primeira metade: quem vende mais leva mais, mesmo já abarrotada.
+    // A régua passou a ser a falta até a cobertura-alvo, e a escada virou
+    // reserva. A expectativa aperta em vez de afrouxar: com uma loja que vende a
+    // peça e está zerada (ver beforeAll), a base TEM que ser 'necessidade'.
     const plano = await distributionPlan(orderId);
-    expect(['sku', 'marca', 'categoria', 'rede']).toContain(plano.items[0].basis);
-    expect(plano.items[0].basisLabel).toBeTruthy();
+    const item = plano.items[0];
+    expect(item.basis).toBe('necessidade');
+    expect(item.totalNeed).toBeGreaterThan(0);
+    expect(item.basisLabel).toBeTruthy();
+    // A loja zerada que vende é a que mais precisa — e o rateio tem que
+    // enxergar isso, que é exatamente o que a participação não enxergava.
+    expect(item.rows.map((r) => r.storeId)).toContain(lojaZerada);
+  });
+
+  it('soma das necessidades = 0 cai na RESERVA por participação, e declara', async () => {
+    // Peça nova: ninguém vendeu, então ninguém tem alvo, então ninguém tem
+    // falta. A carga foi comprada e vai chegar de qualquer jeito — repartir por
+    // quem vende é melhor do que empilhar na retaguarda. O que não pode é a
+    // tela apresentar essa estimativa grossa com a mesma cara da necessidade.
+    const plano = await distributionPlan(pedidoPecaNovaId);
+    const item = plano.items[0];
+    expect(item.totalNeed).toBe(0);
+    expect(item.basis).not.toBe('necessidade');
+    expect(['sku', 'marca', 'categoria', 'rede']).toContain(item.basis);
+    expect(item.basisLabel).toBeTruthy();
+    // Reserva ou não, a conta continua fechando.
+    expect(item.rows.reduce((a, r) => a + r.quantity, 0) + plano.unassigned).toBe(37);
   });
 
   it('recusa distribuir antes do recebimento confirmado', async () => {
@@ -126,19 +225,34 @@ d('distribuição do recebimento (integração com Postgres)', () => {
       where: { id: orderId },
       data: { status: 'RECEIVED', receivedAt: new Date() },
     });
+    const plano = await distributionPlan(orderId);
     const admin = await prisma.user.findFirstOrThrow({ where: { role: 'ADMIN' } });
     const r = await createDistributionMovements(orderId, retaguardaId, {
       id: admin.id,
       role: 'ADMIN',
       storeId: null,
     });
-    expect(r.created).toBeGreaterThan(0);
-    expect(r.units).toBeGreaterThan(0);
+
+    // ANCORADO NO INVARIANTE, não no número de linhas. O rateio por
+    // necessidade zera as lojas que já estão na cobertura-alvo — e elas
+    // recebiam unidade por participação —, então o número de movimentações
+    // MUDA com a régua e voltaria a mudar na próxima calibragem. O que não
+    // pode mudar nunca é a conta: tudo o que foi comprado ou vira transferência
+    // ou está declarado em `unassigned`. Unidade que evapora entre os dois é
+    // estoque que ninguém procura.
+    const previsto = plano.items.reduce(
+      (a, i) => a + i.rows.reduce((s, linha) => s + linha.quantity, 0),
+      0,
+    );
+    expect(r.units).toBe(previsto);
+    expect(r.units + plano.unassigned).toBe(37);
+    expect(r.created).toBe(plano.items.reduce((a, i) => a + i.rows.length, 0));
 
     const movs = await prisma.inventoryMovement.findMany({
       where: { id: { in: r.movementIds } },
     });
     expect(movs).toHaveLength(r.created);
+    expect(movs.reduce((a, m) => a + m.quantity, 0)).toBe(previsto);
     for (const m of movs) {
       expect(m.type).toBe('TRANSFER');
       expect(m.fromStoreId).toBe(retaguardaId);

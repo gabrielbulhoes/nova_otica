@@ -3,7 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { badRequest } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql } from '../stores/store.scope.js';
 import { loadBrandCatalog } from './brandCatalog.js';
-import { analysisBrand, buildFairSplit, storeCarriesBrand } from './planning.math.js';
+import { analysisBrand, splitByNeed, storeCarriesBrand } from './planning.math.js';
 import { createMovement, type Actor } from '../movements/movements.service.js';
 
 /**
@@ -18,29 +18,43 @@ import { createMovement, type Actor } from '../movements/movements.service.js';
  * igual é errado (a Midway vende três vezes o que vende a Guarabira) e dividir
  * "no olho" é o que a plataforma existe para substituir.
  *
- * A conta de rateio já existia — `buildFairSplit`, dos maiores restos, na tela
- * do Modo Feira. O que faltava era ligá-la ao pedido: lá, o gestor digitava
- * marca e quantidade à mão, uma marca por vez. Aqui, o pedido inteiro sai
- * rateado de uma vez, item a item.
+ * A LÓGICA DE EFICIÊNCIA — e a correção de rumo que o pedido literal do
+ * cliente impôs a ela.
  *
- * A LÓGICA DE EFICIÊNCIA, e por que ela precisa de quatro degraus:
+ * A primeira versão rateava por PARTICIPAÇÃO NAS VENDAS, por uma escada de
+ * quatro degraus (SKU → grife → categoria → rede). O cliente pediu outra
+ * coisa: "de acordo com a melhor chance de venda E OTIMIZAÇÃO DO ESTOQUE".
+ * São duas perguntas, e participação responde só a primeira. A Midway vende
+ * três vezes o que vende a Guarabira — e se a Midway já tem 40 em prateleira e
+ * a Guarabira tem zero, mandar três quartos da carga para a Midway é rigor
+ * aritmético a serviço do erro.
  *
- *   1. SKU       — participação de cada loja nas vendas DESTA peça em 12 meses.
- *                  É a régua certa quando existe histórico.
- *   2. GRIFE     — quase nunca existe. Um pedido de compra é, em boa parte,
- *                  peça NOVA: modelo que a rede nunca vendeu, porque acabou de
- *                  ser lançado. O SKU não tem histórico nenhum, mas a rede sabe
- *                  onde Ray-Ban sai.
+ * A régua agora é a NECESSIDADE: quanto falta a cada loja para chegar à
+ * cobertura-alvo da peça (`splitByNeed`). Ela responde as duas perguntas de
+ * uma vez — o alvo é demanda × dias de cobertura, então quem vende mais tem
+ * alvo maior, e o estoque que a loja já tem é descontado antes do rateio.
+ *
+ * A ESCADA CONTINUA, como RESERVA e não como régua. Ela vale exatamente no
+ * caso em que a necessidade não sabe responder: soma das faltas igual a zero,
+ * que é o caso normal do pedido de compra — peça NOVA, modelo que a rede nunca
+ * vendeu, demanda zero em toda loja e portanto falta zero em toda loja. Aí a
+ * escada desce até achar alguma venda:
+ *
+ *   1. SKU       — venda desta peça em 12 meses (raro num lançamento).
+ *   2. GRIFE     — a rede não conhece o modelo, mas sabe onde Ray-Ban sai.
  *   3. CATEGORIA — grife nova (primeira compra da marca): sobra saber onde sai
  *                  óculos de sol.
- *   4. REDE      — nada disso existe: cai na participação geral de cada loja.
+ *   4. REDE      — nada disso existe: participação geral de cada loja.
  *
- * Cada linha DECLARA de qual degrau veio. Um rateio por categoria é uma
- * estimativa bem mais grossa do que um por SKU, e apresentar os dois com a
- * mesma cara seria vender precisão que não temos.
+ * Cada item DECLARA de qual base veio. Um rateio por categoria é uma
+ * estimativa bem mais grossa do que um por necessidade, e apresentar os dois
+ * com a mesma cara seria vender precisão que não temos.
  */
 
-export type DistributionBasis = 'sku' | 'marca' | 'categoria' | 'rede';
+export type DistributionBasis = 'necessidade' | 'sku' | 'marca' | 'categoria' | 'rede';
+
+/** Janela do histórico consultado — 12 meses, em dias, para a demanda diária. */
+const JANELA_DIAS = 365;
 
 export interface DistributionRow {
   storeId: string;
@@ -49,8 +63,12 @@ export interface DistributionRow {
   quantity: number;
   /** Participação da loja na base usada (%). */
   sharePct: number;
-  /** Unidades que a loja vendeu na base usada, nos últimos 12 meses. */
+  /** Unidades que a loja vendeu DESTA peça nos últimos 12 meses. */
   unitsSold: number;
+  /** Estoque atual da loja nesta peça — a outra metade da necessidade. */
+  stockUnits: number;
+  /** Falta até a cobertura-alvo (un.): o peso do rateio por necessidade. */
+  needUnits: number;
 }
 
 export interface DistributionItem {
@@ -61,6 +79,12 @@ export interface DistributionItem {
   basis: DistributionBasis;
   /** O que a base significa em palavras, para a tela mostrar sem traduzir. */
   basisLabel: string;
+  /**
+   * Necessidade CRUA da rede nesta peça (un.), antes de virar percentual —
+   * é o que diz se a carga cobre a falta ou é um cobertor curto. Zero quando
+   * o rateio caiu na reserva por participação.
+   */
+  totalNeed: number;
   rows: DistributionRow[];
   /**
    * Lojas removidas por não trabalharem a grife (catálogo de mix). Declarado
@@ -88,7 +112,8 @@ interface ItemDoPedido {
 }
 
 const BASIS_LABEL: Record<DistributionBasis, string> = {
-  sku: 'venda desta peça nos últimos 12 meses',
+  necessidade: 'falta até a cobertura-alvo de cada loja — venda desta peça e estoque na mesma conta',
+  sku: 'venda desta peça nos últimos 12 meses — nenhuma loja está abaixo do alvo',
   marca: 'venda da grife nos últimos 12 meses — a peça ainda não tem histórico',
   categoria: 'venda da categoria nos últimos 12 meses — a grife ainda não tem histórico',
   rede: 'participação geral de cada loja — nem a categoria tem histórico',
@@ -163,16 +188,24 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     (it) => it?.productId && Number.isInteger(it.quantity) && it.quantity > 0,
   );
 
-  const [lojas, produtos, vendas] = await Promise.all([
+  const [lojas, produtos, vendas, estoques] = await Promise.all([
     prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
     prisma.product.findMany({
       where: { id: { in: itens.map((i) => i.productId) } },
       select: { id: true, description: true, brand: true, category: true },
     }),
     vendasPorLoja(itens.map((i) => i.productId)),
+    // Estoque atual por (loja, peça): a metade da necessidade que a
+    // participação nas vendas nunca olhou. Só as peças do pedido e só as lojas
+    // do escopo, então a consulta é da ordem de itens × 16.
+    prisma.stockItem.findMany({
+      where: { productId: { in: itens.map((i) => i.productId) }, store: PLANNED_STORE_WHERE },
+      select: { storeId: true, productId: true, quantity: true },
+    }),
   ]);
 
   const produtoPor = new Map(produtos.map((p) => [p.id, p]));
+  const estoquePor = new Map(estoques.map((e) => [`${e.productId}:${e.storeId}`, e.quantity]));
   const catalogo = loadBrandCatalog();
   const items: DistributionItem[] = [];
   let unassigned = 0;
@@ -187,21 +220,15 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     }
     const marca = analysisBrand(prod.description, prod.category, prod.brand);
 
-    // Degraus, na ordem. O primeiro com alguma venda ganha.
-    const candidatos: [DistributionBasis, Map<string, number> | undefined][] = [
-      ['sku', vendas.porSku.get(prod.id)],
-      ['marca', marca ? vendas.porMarca.get(marca) : undefined],
-      ['categoria', prod.category ? vendas.porCategoria.get(prod.category) : undefined],
-      ['rede', vendas.porRede],
-    ];
-    const escolhido = candidatos.find(
-      ([, mapa]) => mapa && [...mapa.values()].some((v) => v > 0),
-    );
-    const [basis, mapa] = escolhido ?? ['rede', vendas.porRede];
-
     // Mix: grife premium não vai para loja que não a trabalha. Mesma regra do
     // remanejamento — mandar uma peça para onde ela não pode ser vendida é
     // criar o encalhe que a plataforma existe para evitar.
+    //
+    // O filtro vem ANTES do rateio, e é a ordem que importa: se o rateio
+    // rodasse sobre a rede inteira e as linhas das lojas excluídas fossem
+    // descartadas depois, as unidades delas sumiriam da conta sem aparecer nem
+    // no rateio nem em `unassigned`. Aqui a carga inteira é sempre repartida
+    // entre as lojas elegíveis, e a contabilidade fecha contra `it.quantity`.
     const excluidas: string[] = [];
     const elegiveis = lojas.filter((l) => {
       const trabalha = storeCarriesBrand(marca, l.name, catalogo);
@@ -209,22 +236,41 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
       return trabalha;
     });
 
-    const rateio = buildFairSplit(
+    // Degraus da RESERVA, na ordem. O primeiro com alguma venda ganha — e só é
+    // consultado se a necessidade não souber responder.
+    const candidatos: [DistributionBasis, Map<string, number> | undefined][] = [
+      ['sku', vendas.porSku.get(prod.id)],
+      ['marca', marca ? vendas.porMarca.get(marca) : undefined],
+      ['categoria', prod.category ? vendas.porCategoria.get(prod.category) : undefined],
+      ['rede', vendas.porRede],
+    ];
+    const escolhido = candidatos.find(([, mapa]) => mapa && [...mapa.values()].some((v) => v > 0));
+    const [degrau, mapa] = escolhido ?? ['rede', vendas.porRede];
+
+    const rateio = splitByNeed(
       elegiveis.map((l) => ({
         storeId: l.id,
         storeName: l.name,
-        unitsSold: mapa?.get(l.id) ?? 0,
-        stockUnits: 0,
+        // A venda que entra na NECESSIDADE é a da própria peça: o alvo de
+        // cobertura de um SKU não pode sair da venda da categoria inteira.
+        unitsSold: vendas.porSku.get(prod.id)?.get(l.id) ?? 0,
+        stockUnits: estoquePor.get(`${prod.id}:${l.id}`) ?? 0,
       })),
       it.quantity,
+      JANELA_DIAS,
+      undefined,
+      (r) => mapa?.get(r.storeId) ?? 0,
     );
+
+    const basis: DistributionBasis = rateio.basis === 'necessidade' ? 'necessidade' : degrau;
 
     items.push({
       productId: prod.id,
       description: prod.description,
       quantity: it.quantity,
-      basis: basis as DistributionBasis,
-      basisLabel: BASIS_LABEL[basis as DistributionBasis],
+      basis,
+      basisLabel: BASIS_LABEL[basis],
+      totalNeed: rateio.totalNeed,
       rows: rateio.rows
         .filter((r) => r.suggestedQty > 0)
         .map((r) => ({
@@ -233,13 +279,16 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
           quantity: r.suggestedQty,
           sharePct: r.sharePct,
           unitsSold: r.unitsSold,
+          stockUnits: r.stockUnits,
+          needUnits: r.needUnits,
         })),
       ...(excluidas.length > 0 ? { excludedByMix: excluidas } : {}),
     });
 
-    // O rateio devolve zero para todas as lojas quando NINGUÉM vendeu nada em
-    // base nenhuma — rede recém-aberta, ou primeira execução. A quantidade não
-    // pode evaporar em silêncio.
+    // O rateio devolve zero para todas as lojas quando ninguém precisa de nada
+    // E ninguém vendeu nada em base nenhuma — ou quando o mix excluiu a rede
+    // inteira. A conta fecha contra a quantidade COMPRADA, não contra o que
+    // sobrou depois dos filtros: a quantidade não pode evaporar em silêncio.
     const distribuido = rateio.rows.reduce((a, r) => a + r.suggestedQty, 0);
     unassigned += it.quantity - distribuido;
   }
@@ -253,6 +302,20 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     unassigned,
   };
 }
+
+/**
+ * Como a base aparece no motivo da movimentação. Fica gravado no histórico de
+ * estoque e é lido meses depois por quem não estava na conversa — por isso não
+ * é o nome do campo interpolado cru ("venda por necessidade" não quer dizer
+ * nada).
+ */
+const MOTIVO_DA_BASE: Record<DistributionBasis, string> = {
+  necessidade: 'falta até a cobertura-alvo',
+  sku: 'venda da peça',
+  marca: 'venda da grife',
+  categoria: 'venda da categoria',
+  rede: 'venda geral da loja',
+};
 
 export interface DistributionExecution {
   created: number;
@@ -296,7 +359,7 @@ export async function createDistributionMovements(
         confirm: false,
         reason:
           `Distribuição do pedido ${plano.supplier}: ${r.quantity} un. para ${r.storeName} ` +
-          `(${r.sharePct}% da ${item.basis === 'sku' ? 'venda da peça' : `venda por ${item.basis}`}).`,
+          `(${r.sharePct}% da ${MOTIVO_DA_BASE[item.basis]}).`,
       })),
   );
 

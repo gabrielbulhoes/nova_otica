@@ -260,6 +260,51 @@ describe('buildPurchaseOrders (pedidos por fornecedor)', () => {
     // BUY implica estar no/abaixo do ponto de reposição → prazo-limite é hoje.
     expect(po.orders.every((o) => o.orderByInDays === 0)).toBe(true);
   });
+
+  it('sem as posições por loja, o item sai SEM rateio — ausente é "não calculado"', () => {
+    // Ausência declarada, não tabela vazia: uma tabela vazia pareceria um
+    // rateio que deu zero, que é uma afirmação sobre as lojas.
+    const po = buildPurchaseOrders([mkPlan('Ray-Ban', 30, 90, 20)], 90);
+    expect(po.orders[0].items[0].distribution).toBeUndefined();
+  });
+
+  it('com as posições por loja, cada item já sai rateado por necessidade', () => {
+    // O pedido literal do cliente: "na aba de sugestão de compras já precisa
+    // indicar a sugestão de distribuição daqueles itens para cada loja".
+    const plan = mkPlan('Ray-Ban', 30, 90, 20);
+    const posicoes = new Map([
+      [
+        plan.productId,
+        [
+          // Vende 1/dia (alvo 60) e tem 5 → falta 55.
+          { storeId: 'a', storeName: 'Loja A', unitsSold: 90, stockUnits: 5 },
+          // Vende o DOBRO (alvo 120) mas tem 200 → falta 0, não recebe nada.
+          { storeId: 'b', storeName: 'Loja B', unitsSold: 180, stockUnits: 200 },
+        ],
+      ],
+    ]);
+    const po = buildPurchaseOrders([plan], 90, undefined, posicoes);
+    const item = po.orders[0].items[0];
+    expect(item.distribution!.basis).toBe('necessidade');
+    expect(item.distribution!.totalNeed).toBe(55);
+    expect(item.distribution!.rows.map((r) => r.storeId)).toEqual(['a']);
+    // A soma do rateio é a quantidade do item, nem mais nem menos.
+    const somado = item.distribution!.rows.reduce((s, r) => s + r.suggestedQty, 0);
+    expect(somado + item.distribution!.unassigned).toBe(item.quantity);
+  });
+
+  it('o rateio é o QUARTO parâmetro: o resolver de fornecedor continua no terceiro', () => {
+    // Há chamadas com dois argumentos e uma que passa `resolve` posicionalmente
+    // como terceiro. Empurrar as posições para antes dele quebraria todas em
+    // silêncio — o tipo de quebra que compila.
+    const plan = mkPlan('Ray-Ban', 30, 90, 20);
+    const posicoes = new Map([
+      [plan.productId, [{ storeId: 'a', storeName: 'Loja A', unitsSold: 90, stockUnits: 5 }]],
+    ]);
+    const po = buildPurchaseOrders([plan], 90, () => 'Luxottica', posicoes);
+    expect(po.orders[0].supplier).toBe('Luxottica');
+    expect(po.orders[0].items[0].distribution!.rows).toHaveLength(1);
+  });
 });
 
 describe('posição de estoque com pedidos a caminho (onOrderQty)', () => {

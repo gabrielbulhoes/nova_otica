@@ -65,12 +65,35 @@ planningRouter.get(
 /**
  * GET /api/planning/purchase-orders — rascunhos de ordem de compra por
  * fornecedor (marca), com total e data-limite do pedido.
+ *
+ * DECISÃO (rateio por loja × permissão): esta rota NÃO ganhou
+ * `requireRole('ADMIN')`, ao contrário de `/rebalance`. O rateio por loja é sim
+ * dado de rede — a mesma razão que fechou o remanejamento —, mas fechar a rota
+ * inteira tiraria de um gerente de loja algo que ele já tinha e que é
+ * legítimo: a sugestão de compra da PRÓPRIA loja, que `scopedStoreId` já
+ * recorta para ele linha a linha.
+ *
+ * Então o corte é no dado novo, não na rota: quem não é ADMIN recebe o pedido
+ * sem o campo `distribution`. Um gerente de loja continua vendo o que precisa
+ * comprar; a divisão entre as 16 lojas — quanto cada uma vende e quanto cada
+ * uma tem em estoque — continua sendo visão de rede, para quem enxerga a rede.
+ *
+ * `distribution` AUSENTE não é "dividir igual": é "não calculado". A tela
+ * declara isso, em vez de mostrar uma tabela vazia que pareceria um rateio que
+ * deu zero.
  */
 planningRouter.get(
   '/purchase-orders',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await purchaseOrders(days(req.query.days), storeId, group(req.query.group)));
+    res.json(
+      await purchaseOrders(
+        days(req.query.days),
+        storeId,
+        group(req.query.group),
+        req.user?.role === 'ADMIN',
+      ),
+    );
   }),
 );
 

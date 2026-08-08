@@ -1767,8 +1767,26 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     }
     return r;
   }
-  if (url === '/planning/purchase-orders' && m === 'GET')
-    return buildPurchaseOrders(planningPlans(planDays, one(params.storeId), planGroup), planDays);
+  if (url === '/planning/purchase-orders' && m === 'GET') {
+    const planos = planningPlans(planDays, one(params.storeId), planGroup);
+    // Posições por loja só das peças que viram item de pedido — o mesmo recorte
+    // que a API faz antes de consultar o banco, para a demo não montar 1.631
+    // vetores de loja para jogar fora 1.600 deles.
+    const posicoes = new Map<string, FairSplitInput[]>();
+    for (const p of planos) {
+      if (p.recommendation !== 'BUY' || p.suggestedQty <= 0) continue;
+      posicoes.set(
+        p.productId,
+        stores.map((s) => ({
+          storeId: s.id,
+          storeName: s.name,
+          unitsSold: soldQty.get(key(s.id, p.productId)) ?? 0,
+          stockUnits: stockQty.get(key(s.id, p.productId)) ?? 0,
+        })),
+      );
+    }
+    return buildPurchaseOrders(planos, planDays, undefined, posicoes);
+  }
   if (url === '/planning/purchase-orders' && m === 'POST') {
     const items = (body.items ?? []) as DemoOrderRecord['items'];
     const leadTimeDays = Number(body.leadTimeDays) || 14;

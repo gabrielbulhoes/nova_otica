@@ -175,6 +175,35 @@ describe('demo: Onda 3 (mix por bandeira + Modo Feira)', () => {
     }
   });
 
+  it('/planning/purchase-orders traz cada item já rateado por loja (G7)', () => {
+    // Pedido literal do cliente: "na aba de sugestão de compras já precisa
+    // indicar a sugestão de distribuição daqueles itens para cada loja".
+    const orders = get('/planning/purchase-orders', { group: 'todos' }).orders as any[];
+    const itens = orders.flatMap((o) => o.items);
+    expect(itens.length).toBeGreaterThan(0);
+    for (const it of itens) {
+      expect(it.distribution, `item sem rateio (${it.description})`).toBeDefined();
+      expect(['necessidade', 'participacao']).toContain(it.distribution.basis);
+      // O invariante: tudo o que se compra tem endereço de loja ou está
+      // declarado em `unassigned`. Nenhuma unidade evapora no arredondamento.
+      const soma = it.distribution.rows.reduce((a: number, r: any) => a + r.suggestedQty, 0);
+      expect(soma + it.distribution.unassigned).toBe(it.quantity);
+    }
+  });
+
+  it('o rateio da compra não manda peça para loja que já está no alvo', () => {
+    // É a diferença entre o que o cliente pediu ("melhor chance de venda E
+    // otimização do estoque") e o rateio por participação, que mandava mais
+    // para quem vende mais mesmo já abarrotada.
+    const orders = get('/planning/purchase-orders', { group: 'todos' }).orders as any[];
+    for (const it of orders.flatMap((o) => o.items)) {
+      if (it.distribution.basis !== 'necessidade') continue;
+      for (const r of it.distribution.rows) {
+        expect(r.needUnits, `${r.storeName} recebeu sem precisar`).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('/planning/fair-split valida os parâmetros (paridade com a API)', () => {
     expect(get('/planning/fair-split', { qty: '0', brand: 'X' }).__status).toBe(400);
     // acima do teto (100000) → erro, igual à rota Express

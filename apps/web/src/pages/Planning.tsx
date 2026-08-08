@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createMovement,
@@ -25,6 +25,7 @@ import {
   type ProductGroup,
   type PurchaseOrderRecord,
   type Recommendation,
+  type RateioLoja,
   type RebalanceSuggestion,
 } from '../api/client';
 import {
@@ -295,19 +296,35 @@ function TwoStepButton({
   );
 }
 
-/** Linhas do CSV de uma ordem de compra (uma por item + total). */
+/**
+ * Linhas do CSV de uma ordem de compra (uma por item + total).
+ *
+ * O rateio vira COLUNAS, uma por loja, e não linhas: quem abre este arquivo o
+ * abre para conferir e para mandar ao fornecedor, e uma linha por (item ×
+ * loja) multiplicaria o pedido por 16 e o tornaria ilegível como pedido. Em
+ * coluna, o total de cada item continua sendo o total do item, e a divisão
+ * viaja junto para quem for receber a mercadoria.
+ */
 function orderCsv(order: PurchaseOrder): string {
-  type Row = {
-    fornecedor: string;
-    marca: string;
-    produto: string;
-    categoria: string;
-    quantidade: number | string;
-    custoUnit: string;
-    total: string;
-    pedirAte: string;
-    prazoEntregaDias: number | string;
+  type Row = Record<string, number | string>;
+  // As colunas de loja saem da união das lojas citadas em qualquer item — um
+  // item pode não ter linha para uma loja (falta zero), e a coluna precisa
+  // existir mesmo assim, com 0, senão os cabeçalhos mudam item a item.
+  const lojas: string[] = [];
+  for (const it of order.items) {
+    for (const r of it.distribution?.rows ?? []) if (!lojas.includes(r.storeName)) lojas.push(r.storeName);
+  }
+  lojas.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  const porLoja = (it: PurchaseOrder['items'][number]): Row => {
+    const out: Row = {};
+    const byName = new Map((it.distribution?.rows ?? []).map((r) => [r.storeName, r.quantity]));
+    // Sem rateio (não-ADMIN), a coluna fica VAZIA e não zero: zero afirmaria
+    // que a loja não recebe nada, e a verdade é que ninguém calculou.
+    for (const l of lojas) out[`loja:${l}`] = it.distribution ? (byName.get(l) ?? 0) : '';
+    return out;
   };
+
   const rows: Row[] = order.items.map((it) => ({
     fornecedor: order.supplier,
     marca: it.brand ?? '',
@@ -318,6 +335,9 @@ function orderCsv(order: PurchaseOrder): string {
     total: it.total.toFixed(2).replace('.', ','),
     pedirAte: it.orderByInDays === null ? '' : it.orderByInDays === 0 ? 'hoje' : deadlineDate(it.orderByInDays),
     prazoEntregaDias: order.leadTimeDays,
+    baseDoRateio: it.distribution?.basis ?? 'não calculado',
+    faltaNaRede: it.distribution ? String(it.distribution.totalNeed).replace('.', ',') : '',
+    ...porLoja(it),
   }));
   rows.push({
     fornecedor: order.supplier,
@@ -329,6 +349,17 @@ function orderCsv(order: PurchaseOrder): string {
     total: order.total.toFixed(2).replace('.', ','),
     pedirAte: order.orderByInDays === null ? '' : order.orderByInDays === 0 ? 'hoje' : deadlineDate(order.orderByInDays),
     prazoEntregaDias: order.leadTimeDays,
+    baseDoRateio: '',
+    faltaNaRede: '',
+    ...Object.fromEntries(
+      lojas.map((l) => [
+        `loja:${l}`,
+        order.items.reduce(
+          (a, it) => a + ((it.distribution?.rows.find((r) => r.storeName === l)?.quantity) ?? 0),
+          0,
+        ),
+      ]),
+    ),
   });
   return toCsv(rows, [
     { key: 'fornecedor', label: 'Fornecedor' },
@@ -340,10 +371,78 @@ function orderCsv(order: PurchaseOrder): string {
     { key: 'total', label: 'Total (R$)' },
     { key: 'pedirAte', label: 'Pedir até' },
     { key: 'prazoEntregaDias', label: 'Prazo de entrega (dias)' },
+    { key: 'baseDoRateio', label: 'Base do rateio' },
+    { key: 'faltaNaRede', label: 'Falta na rede (un.)' },
+    ...lojas.map((l) => ({ key: `loja:${l}`, label: l })),
   ]);
 }
 
 const slug = (s: string) => s.toLowerCase().normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+
+/**
+ * A tabela "quanto vai para cada loja". Nasceu dentro do plano de recebimento
+ * e saiu de lá porque a aba de COMPRAS passou a fazer a mesma pergunta — e
+ * duas tabelas com o mesmo conteúdo divergem: uma ganha a coluna de estoque,
+ * a outra não, e aí a mesma peça mostra números diferentes em duas telas.
+ *
+ * As quatro colunas do meio são a CONTA INTEIRA, não decoração: vendeu tanto,
+ * tem tanto, falta tanto, leva tanto. Sem elas a tela mostra um número e pede
+ * fé; com elas o gestor confere — e é conferindo que ele passa a confiar.
+ */
+function RateioPorLoja({
+  rows,
+  vendaLabel,
+  excludedByMix,
+}: {
+  rows: RateioLoja[];
+  vendaLabel: string;
+  excludedByMix?: string[];
+}) {
+  return (
+    <>
+      {rows.length === 0 ? (
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+          Nenhuma loja com necessidade nem venda nesta base — divisão manual.
+        </p>
+      ) : (
+        <table style={{ marginTop: 6 }}>
+          <thead>
+            <tr>
+              <th>Loja</th>
+              <th className="num">{vendaLabel}</th>
+              <th className="num">Em estoque</th>
+              <th className="num">Falta p/ o alvo</th>
+              <th className="num">Participação</th>
+              <th className="num">Mandar</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.storeId}>
+                <td>{r.storeName}</td>
+                <td className="num">{r.unitsSold}</td>
+                <td className="num">{r.stockUnits}</td>
+                <td className="num">{r.needUnits}</td>
+                <td className="num">{r.sharePct}%</td>
+                <td className="num">
+                  <strong>{r.quantity}</strong>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/* Loja que some da lista sem motivo visível é o tipo de silêncio que
+          faz alguém desconfiar do resto da tela. */}
+      {excludedByMix && excludedByMix.length > 0 && (
+        <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+          Fora do rateio por não trabalharem a grife: {excludedByMix.join(', ')}.
+        </p>
+      )}
+    </>
+  );
+}
 
 /* Mesmo respiro que o `.stat .value` do indicador compartilhado usa entre o
    rótulo em mono e o número em Fraunces. Fica aqui porque styles.css é de
@@ -354,6 +453,10 @@ const contadorHeroi = { marginTop: 6 } as const;
 function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(order.orderByInDays !== null && order.orderByInDays <= 7);
+  // Um rateio aberto por vez: cada um abre uma tabela de 16 linhas, e dois
+  // abertos dentro de um pedido de 30 itens viram uma parede. Mesmo critério do
+  // plano de recebimento, onde a decisão já tinha sido tomada.
+  const [rateioAberto, setRateioAberto] = useState<string | null>(null);
   const urgency =
     order.orderByInDays === null ? null : order.orderByInDays === 0 ? 'hoje' : `até ${deadlineDate(order.orderByInDays)}`;
 
@@ -458,24 +561,79 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
               <th className="num">Total</th>
               <th>Pedir até</th>
               <th>Confiança</th>
+              <th>Distribuição</th>
             </tr>
           </thead>
           <tbody>
             {order.items.map((it) => (
-              <tr key={it.productId}>
-                <td>{it.description}</td>
-                <td>{it.brand ?? '—'}</td>
-                <td>{it.category ?? '—'}</td>
-                <td className="num">{it.quantity}</td>
-                <td className="num">{formatBRL(it.unitCost)}</td>
-                <td className="num">{formatBRL(it.total)}</td>
-                <td>
-                  <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
-                </td>
-                <td>
-                  <Confidence value={it.confidence} />
-                </td>
-              </tr>
+              <Fragment key={it.productId}>
+                <tr>
+                  <td>{it.description}</td>
+                  <td>{it.brand ?? '—'}</td>
+                  <td>{it.category ?? '—'}</td>
+                  <td className="num">{it.quantity}</td>
+                  <td className="num">{formatBRL(it.unitCost)}</td>
+                  <td className="num">{formatBRL(it.total)}</td>
+                  <td>
+                    <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
+                  </td>
+                  <td>
+                    <Confidence value={it.confidence} />
+                  </td>
+                  <td>
+                    {it.distribution ? (
+                      <Botao
+                        variante="discreto"
+                        pequeno
+                        icone={rateioAberto === it.productId ? 'chevron-baixo' : 'chevron-direita'}
+                        onClick={() =>
+                          setRateioAberto(rateioAberto === it.productId ? null : it.productId)
+                        }
+                        aria-expanded={rateioAberto === it.productId}
+                      >
+                        {it.distribution.rows.length} loja
+                        {it.distribution.rows.length === 1 ? '' : 's'}
+                      </Botao>
+                    ) : (
+                      // Ausente ≠ vazio. A rota omite o rateio para quem não é
+                      // ADMIN, porque ele expõe venda e estoque da rede inteira.
+                      <span className="muted" style={{ fontSize: 11.5 }}>
+                        visão da rede
+                      </span>
+                    )}
+                  </td>
+                </tr>
+                {it.distribution && rateioAberto === it.productId && (
+                  <tr>
+                    {/* `--panel-2` é o fundo de segundo nível do tema; a linha
+                        expandida precisa se destacar da linha do item sem virar
+                        um bloco de outra tela. */}
+                    <td colSpan={9} style={{ background: 'var(--panel-2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                        <Selo tom="blue" icone="ideia" title={it.distribution.basisLabel}>
+                          por {it.distribution.basis}
+                        </Selo>
+                        {/* O número que o percentual esconde: 100% de um rateio
+                            parece sempre a mesma coisa, cubra ele a falta da
+                            rede ou um vigésimo dela. */}
+                        <span className="muted" style={{ fontSize: 12 }}>
+                          {it.quantity}
+                          <Unidade>un.</Unidade> a dividir para uma falta de{' '}
+                          {it.distribution.totalNeed}
+                          <Unidade>un.</Unidade> na rede
+                        </span>
+                      </div>
+                      <RateioPorLoja rows={it.distribution.rows} vendaLabel="Vendeu no período" />
+                      {it.distribution.unassigned > 0 && (
+                        <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+                          {it.distribution.unassigned} un. sem rateio possível — nenhuma loja tem
+                          falta nem histórico desta peça. Ficam para divisão manual.
+                        </p>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -539,8 +697,11 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
   return (
     <div style={{ padding: '4px 0 8px' }}>
       <p className="hint" style={{ margin: '0 0 10px' }}>
-        Cada item é dividido pela participação de cada loja nas vendas — a mesma lógica do Modo
-        Feira, agora aplicada ao pedido inteiro de uma vez. A soma fecha com a quantidade comprada.
+        Cada item é dividido pela <strong>falta de cada loja até a cobertura-alvo</strong> — quem
+        vende mais tem alvo maior, e o que a loja já tem em estoque é descontado antes. Quando
+        ninguém está abaixo do alvo (peça nova, por exemplo), a divisão cai na participação nas
+        vendas, e a etiqueta ao lado do item diz qual das duas valeu. A soma fecha com a quantidade
+        comprada.
       </p>
 
       {plano.data.items.map((item) => (
@@ -550,6 +711,13 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
             <span className="muted" style={{ fontSize: 12 }}>
               {item.quantity}
               <Unidade>un.</Unidade> a dividir
+              {item.totalNeed > 0 && (
+                <>
+                  {' '}
+                  para uma falta de {item.totalNeed}
+                  <Unidade>un.</Unidade> na rede
+                </>
+              )}
             </span>
             {/* A base é selo informativo, nunca de estado: dizer que o rateio
                 saiu da categoria não é um alerta, é uma ressalva de precisão. */}
@@ -558,42 +726,11 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
             </Selo>
           </div>
 
-          {item.rows.length === 0 ? (
-            <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-              Nenhuma loja com venda nesta base — divisão manual.
-            </p>
-          ) : (
-            <table style={{ marginTop: 6 }}>
-              <thead>
-                <tr>
-                  <th>Loja</th>
-                  <th className="num">Vendeu (12 m)</th>
-                  <th className="num">Participação</th>
-                  <th className="num">Mandar</th>
-                </tr>
-              </thead>
-              <tbody>
-                {item.rows.map((r) => (
-                  <tr key={r.storeId}>
-                    <td>{r.storeName}</td>
-                    <td className="num">{r.unitsSold}</td>
-                    <td className="num">{r.sharePct}%</td>
-                    <td className="num">
-                      <strong>{r.quantity}</strong>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {/* Loja que some da lista sem motivo visível é o tipo de silêncio que
-              faz alguém desconfiar do resto da tela. */}
-          {item.excludedByMix && item.excludedByMix.length > 0 && (
-            <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
-              Fora do rateio por não trabalharem a grife: {item.excludedByMix.join(', ')}.
-            </p>
-          )}
+          <RateioPorLoja
+            rows={item.rows}
+            vendaLabel="Vendeu (12 m)"
+            excludedByMix={item.excludedByMix}
+          />
         </div>
       ))}
 
