@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useState, type ReactNode } from 'react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createMovement,
   formatBRL,
@@ -94,6 +94,15 @@ const moveMeta: Record<MovementClass, EstadoOperacional> = {
 };
 
 type Filter = 'ALL' | Recommendation;
+
+/**
+ * Quantas linhas de sugestão a tabela pede por vez.
+ *
+ * A tabela desenhava as 13 mil linhas do recorte de uma vez, e a resposta
+ * trazia as 13 mil (11 MB). Nem o navegador nem quem lê chegam ao fim: a lista
+ * vem ordenada por recomendação e urgência, então o começo é o que importa.
+ */
+const LINHAS = 100;
 
 /** Recortes de cobertura — vocabulário da operação (feedback do cliente). */
 const GROUP_OPTIONS: { value: ProductGroup; label: string; hint: string }[] = [
@@ -1215,31 +1224,47 @@ export function Planning() {
   // relógio (principal); lentes são acompanhadas à parte; consolidado é tudo.
   const [group, setGroup] = useState<ProductGroup>('principal');
   const [filter, setFilter] = useState<Filter>('ALL');
+  const [visiveis, setVisiveis] = useState(LINHAS);
   const rebalanceRef = useRef<HTMLDivElement>(null);
   const ordersRef = useRef<HTMLDivElement>(null);
   const purchaseRef = useRef<HTMLDivElement>(null);
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
   const params = { days, storeId: storeId || undefined, group };
+  // O recorte por recomendação virou pergunta ao servidor pelo mesmo motivo do
+  // quadro de decisões: as linhas vêm paginadas, e filtrar a PÁGINA mostraria
+  // "nenhum item nesta categoria" com a lista cheia deles logo adiante.
+  const sugParams = {
+    ...params,
+    pageSize: visiveis,
+    recomendacao: filter === 'ALL' ? undefined : filter,
+  };
 
   const overview = useQuery({ queryKey: ['planning-overview', days, storeId, group], queryFn: () => getPlanningOverview(params) });
-  const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId, group], queryFn: () => getPurchaseSuggestions(params) });
+  // `keepPreviousData`: trocar o recorte ou pedir mais linhas muda a chave, e
+  // sem ele a tabela inteira voltaria para "Carregando…" a cada clique.
+  const suggestions = useQuery({
+    queryKey: ['purchase-suggestions', sugParams],
+    queryFn: () => getPurchaseSuggestions(sugParams),
+    placeholderData: keepPreviousData,
+  });
   const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
   const orders = useQuery({ queryKey: ['planning-orders', days, storeId, group], queryFn: () => getPurchaseOrders(params) });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
-  const filteredRows = useMemo(() => {
-    const rows = suggestions.data?.rows ?? [];
-    return filter === 'ALL' ? rows : rows.filter((r) => r.recommendation === filter);
-  }, [suggestions.data, filter]);
+  const filteredRows = suggestions.data?.rows ?? [];
+  /** Linhas que a vista tem — não as que couberam nesta página. */
+  const naVista = suggestions.data?.pagina?.total ?? filteredRows.length;
 
-  const urgentCount = useMemo(
-    () => (suggestions.data?.rows ?? []).filter((r) => r.stockoutInDays !== null).length,
-    [suggestions.data],
-  );
+  // "Risco de faltar" vem CONTADO do servidor. A tela percorria as 13 mil
+  // linhas para chegar a este inteiro, o que obrigava a baixar as 13 mil.
+  const urgentCount = suggestions.data?.summary.emRisco ?? 0;
 
   const goTo = (ref: typeof purchaseRef, f?: Filter) => {
-    if (f) setFilter(f);
+    if (f) {
+      setFilter(f);
+      setVisiveis(LINHAS);
+    }
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -1446,7 +1471,10 @@ export function Planning() {
                 key={k}
                 type="button"
                 className={filter === k ? 'active' : ''}
-                onClick={() => setFilter(k)}
+                onClick={() => {
+                  setFilter(k);
+                  setVisiveis(LINHAS);
+                }}
                 aria-pressed={filter === k}
               >
                 {label}
@@ -1585,6 +1613,24 @@ export function Planning() {
                 )}
               </tbody>
             </table>
+            {/* O corte é do SERVIDOR: "ver mais" pede mais linhas, em vez de
+                revelar o que já tinha sido baixado. */}
+            {naVista > filteredRows.length && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+                <Botao
+                  variante="discreto"
+                  icone="mais"
+                  disabled={suggestions.isFetching}
+                  onClick={() => setVisiveis((v) => v + LINHAS)}
+                >
+                  {suggestions.isFetching
+                    ? 'Buscando…'
+                    : `Ver mais ${Math.min(LINHAS, naVista - filteredRows.length)} de ${
+                        naVista - filteredRows.length
+                      } restantes`}
+                </Botao>
+              </div>
+            )}
           </div>
         )}
       </div>

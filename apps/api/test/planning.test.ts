@@ -8,6 +8,11 @@ import {
   supplierFor,
   storeCarriesBrand,
   annotateCardAges,
+  contarIdades,
+  filtrarVista,
+  finalizarBoard,
+  grifesDoQuadro,
+  paginar,
   suggestedDiscount,
   analysisBrand,
   bestOutletStore,
@@ -785,6 +790,116 @@ describe('annotateCardAges (idade do card vinda do lote de geração)', () => {
     // Mesmo card, dois lotes depois: timesSeen sobe, firstSeenAt não se move.
     const depois = annotateCardAges(board, history, batch, 30, new Date(agora.getTime() + 2 * 86_400_000));
     expect(depois.cards[1].ageDays).toBe(12);
+  });
+});
+
+describe('resumo do quadro paginado (a mentira que a página contaria sozinha)', () => {
+  // 50 cards de liquidação e compra, cada um com sua própria idade: metade
+  // estreando no lote, um terço atrasado. É o mínimo para que uma página de 5
+  // NÃO possa acertar as contagens por acaso.
+  const agora = new Date('2026-08-08T09:00:00Z');
+  const diasAtras = (n: number) => new Date(agora.getTime() - n * 86_400_000);
+  const planos = Array.from({ length: 50 }, (_, i) =>
+    analyzeProduct(
+      {
+        ...base,
+        productId: `pg${i}`,
+        description: `Armação Oakley ${i}`,
+        brand: 'Oakley',
+        unitsSold: i % 2 === 0 ? 0 : 90 + i,
+        currentStock: i % 2 === 0 ? 5 + i : 1,
+        unitPrice: 200 + i * 37,
+      },
+      90,
+      DEFAULT_PLANNING_CONFIG,
+    ),
+  );
+  const quadro = finalizarBoard(buildDecisionCards(planos, []).cards);
+  const history = new Map(
+    quadro.cards.map((c, i) => [
+      c.id,
+      { cardId: c.id, firstSeenAt: diasAtras(i % 3 === 0 ? 45 : 3), timesSeen: i % 2 === 0 ? 1 : 9 },
+    ]),
+  );
+  const lote = {
+    id: 'b1', generatedAt: agora.toISOString(), source: 'CRON' as const,
+    cardsTotal: quadro.cards.length, cardsNew: 0,
+  };
+  const inteiro = annotateCardAges(quadro, history, lote, 30, agora);
+
+  it('página de 5 sobre um lote de 50 mantém total, tipos, prioridades, críticos, novos e atrasados', () => {
+    expect(quadro.cards.length).toBe(50);
+    const { itens, pagina } = paginar(quadro.cards, 1, 5);
+    const página = annotateCardAges(
+      { summary: quadro.summary, cards: itens, pagina },
+      history,
+      lote,
+      30,
+      agora,
+      contarIdades(quadro.cards, history, 30, agora),
+    );
+
+    // A página traz 5 cards e DIZ que traz 5 de 50 — não finge ser o quadro.
+    expect(página.cards.length).toBe(5);
+    expect(página.pagina).toEqual({ page: 1, pageSize: 5, total: 50 });
+
+    // Todo número do resumo é do LOTE, não da página. Sem isto o quadro diria
+    // "5 cards, 3 novos" com a tela idêntica à de 50 cards e 25 novos.
+    expect(página.summary.total).toBe(50);
+    expect(página.summary.byType).toEqual(inteiro.summary.byType);
+    expect(página.summary.byPriority).toEqual(inteiro.summary.byPriority);
+    expect(página.summary.criticos).toBe(inteiro.summary.criticos);
+    expect(página.summary.novos).toBe(inteiro.summary.novos);
+    expect(página.summary.atrasados).toBe(inteiro.summary.atrasados);
+    // E as contagens de idade não são triviais: há novos e atrasados de fato.
+    expect(inteiro.summary.novos).toBeGreaterThan(5);
+    expect(inteiro.summary.atrasados).toBeGreaterThan(5);
+  });
+
+  it('sem a contagem do lote, o resumo da página conta só a página — o defeito, escrito', () => {
+    const { itens } = paginar(quadro.cards, 1, 5);
+    const ingênua = annotateCardAges({ summary: quadro.summary, cards: itens }, history, lote, 30, agora);
+    expect(ingênua.summary.novos).toBeLessThan(inteiro.summary.novos!);
+  });
+
+  it('a última página não passa do fim, e uma página além do fim vem vazia', () => {
+    expect(paginar(quadro.cards, 5, 12).itens.length).toBe(2);
+    expect(paginar(quadro.cards, 99, 12).itens.length).toBe(0);
+    // Página e tamanho inválidos caem no primeiro item, nunca em índice negativo.
+    expect(paginar(quadro.cards, 0, 0).itens.length).toBe(1);
+  });
+
+  it('a lista de grifes do seletor sai do quadro, não da página', () => {
+    const misto = [
+      ...quadro.cards,
+      { ...quadro.cards[0], id: '#ZZZ.99', brandLabel: 'ZEGNA' } as (typeof quadro.cards)[number],
+    ];
+    expect(grifesDoQuadro(misto)).toContain('ZEGNA');
+    expect(grifesDoQuadro(misto.slice(0, 5))).not.toContain('ZEGNA');
+  });
+});
+
+describe('filtrarVista (filtros de vista do quadro)', () => {
+  const cards = [
+    { id: '#C1', type: 'COMPRA', priority: 'ALTA', brandLabel: 'OAKLEY' },
+    { id: '#R1', type: 'REMANEJAMENTO', priority: 'BAIXA', brandLabel: 'RAY-BAN', fromStoreId: 'A', toStoreId: 'B' },
+    { id: '#L1', type: 'LIQUIDACAO', priority: 'MEDIA', brandLabel: 'OAKLEY', outletStoreId: 'B' },
+  ] as unknown as import('../src/modules/planning/planning.math.js').DecisionCard[];
+
+  it('sem critério nenhum devolve a lista inteira', () => {
+    expect(filtrarVista(cards, {})).toHaveLength(3);
+  });
+
+  it('tipo, prioridade e grife recortam o que a tela mostra', () => {
+    expect(filtrarVista(cards, { tipo: 'LIQUIDACAO' }).map((c) => c.id)).toEqual(['#L1']);
+    expect(filtrarVista(cards, { prioridade: 'ALTA' }).map((c) => c.id)).toEqual(['#C1']);
+    expect(filtrarVista(cards, { grife: 'OAKLEY' }).map((c) => c.id)).toEqual(['#C1', '#L1']);
+  });
+
+  it('o filtro de loja pega origem, destino e escoamento — e o card de compra fica de fora', () => {
+    // Comprar é decisão de REDE: o card não tem loja, então some sob o filtro.
+    expect(filtrarVista(cards, { loja: 'B' }).map((c) => c.id)).toEqual(['#R1', '#L1']);
+    expect(filtrarVista(cards, { loja: 'A' }).map((c) => c.id)).toEqual(['#R1']);
   });
 });
 

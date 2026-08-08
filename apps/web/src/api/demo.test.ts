@@ -199,7 +199,13 @@ describe('demo: Onda 4 (feedback Galbe — lentes fora do remanejamento)', () =>
   });
 
   it('sugestões de compra usam "principal" por padrão (sem lentes)', () => {
-    const rows = get('/planning/purchase-suggestions').rows as { description: string }[];
+    // `pageSize` grande DE PROPÓSITO. A resposta passou a vir paginada, e a
+    // afirmação aqui é sobre o RECORTE inteiro: sem pedir todas as linhas, o
+    // teste continuaria verde provando só que não há lente nas 100 primeiras —
+    // e uma lente na linha 101 passaria batido.
+    const r = get('/planning/purchase-suggestions', { pageSize: '100000' });
+    const rows = r.rows as { description: string }[];
+    expect(rows.length).toBe(r.pagina.total);
     for (const row of rows) {
       expect(isLensDesc(row.description), `lente na compra padrão (${row.description})`).toBe(false);
     }
@@ -216,7 +222,13 @@ describe('demo: governança da decisão', () => {
     // Um REMANEJAMENTO de propósito, não `cards[0]`: decidir consome o card, e
     // pegar o primeiro do board tirava a liquidação do caminho dos testes que
     // vêm depois — a suíte passava ou não conforme a ordem dos arquivos.
-    const card = before.cards.find((c: any) => c.type === 'REMANEJAMENTO') ?? before.cards[0];
+    //
+    // E PEDIDO ao servidor, não procurado na resposta: o quadro vem paginado e
+    // ordenado por prioridade e impacto, então nada garante um remanejamento na
+    // primeira página. O `?? cards[0]` de antes esconderia isso caindo de volta
+    // no primeiro card, que é justamente o que este teste evita.
+    const card = get('/planning/decisions', { tipo: 'REMANEJAMENTO' }).cards[0];
+    expect(card.type).toBe('REMANEJAMENTO');
 
     post('/planning/decisions', {
       cardId: card.id,
@@ -232,9 +244,9 @@ describe('demo: governança da decisão', () => {
   });
 
   it('recusar sem justificativa é rejeitado (mesma regra da API)', () => {
-    const card =
-      get('/planning/decisions').cards.find((c: any) => c.type === 'REMANEJAMENTO') ??
-      get('/planning/decisions').cards[0];
+    // O tipo vai PEDIDO na consulta: procurá-lo dentro da página devolveria
+    // `undefined` no dia em que nenhum remanejamento couber nos primeiros 60.
+    const card = get('/planning/decisions', { tipo: 'REMANEJAMENTO' }).cards[0];
     expect(() =>
       post('/planning/decisions', {
         cardId: card.id,
@@ -243,6 +255,96 @@ describe('demo: governança da decisão', () => {
         impact: card.impact,
       }),
     ).toThrow(/justificativa/i);
+  });
+});
+
+/**
+ * A Central de Decisões devolvia o quadro inteiro — 18.541 cards, 16,5 MB — e
+ * era a origem do 503 que o cliente fotografou. Estes testes prendem o contrato
+ * da resposta paginada: a página encolhe, os NÚMEROS não.
+ */
+describe('demo: o quadro pagina, o resumo não', () => {
+  it('a página corta os cards e o resumo continua sendo o do quadro inteiro', () => {
+    const inteiro = get('/planning/decisions', { pageSize: '100000' });
+    const pagina = get('/planning/decisions', { pageSize: '5' });
+
+    expect(inteiro.cards.length).toBeGreaterThan(5);
+    expect(pagina.cards.length).toBe(5);
+    expect(pagina.pagina).toEqual({ page: 1, pageSize: 5, total: inteiro.summary.total });
+
+    expect(pagina.summary.total).toBe(inteiro.summary.total);
+    expect(pagina.summary.byType).toEqual(inteiro.summary.byType);
+    expect(pagina.summary.byPriority).toEqual(inteiro.summary.byPriority);
+    expect(pagina.summary.criticos).toBe(inteiro.summary.criticos);
+    expect(pagina.summary.novos).toBe(inteiro.summary.novos);
+    expect(pagina.summary.atrasados).toBe(inteiro.summary.atrasados);
+  });
+
+  it('a lista de grifes do seletor sai do quadro inteiro, não da página', () => {
+    const inteiro = get('/planning/decisions', { pageSize: '100000' });
+    const pagina = get('/planning/decisions', { pageSize: '3' });
+    expect(pagina.grifes).toEqual(inteiro.grifes);
+    // E é maior que o que a página sozinha ofereceria — senão o teste passaria
+    // por acaso, num quadro onde todos os cards fossem da mesma grife.
+    const naPagina = new Set((pagina.cards as any[]).map((c) => c.brandLabel).filter(Boolean));
+    expect(pagina.grifes.length).toBeGreaterThan(naPagina.size);
+  });
+
+  it('a página 2 continua de onde a 1 parou, sem repetir card', () => {
+    const p1 = get('/planning/decisions', { page: '1', pageSize: '10' });
+    const p2 = get('/planning/decisions', { page: '2', pageSize: '10' });
+    const ids = new Set((p1.cards as any[]).map((c) => c.id));
+    expect((p2.cards as any[]).every((c) => !ids.has(c.id))).toBe(true);
+    expect(p2.pagina.page).toBe(2);
+  });
+
+  it('os filtros de vista recortam os cards e deixam o resumo em paz', () => {
+    const inteiro = get('/planning/decisions', { pageSize: '100000' });
+    const so = get('/planning/decisions', { tipo: 'LIQUIDACAO', pageSize: '100000' });
+    expect(so.cards.length).toBeGreaterThan(0);
+    expect((so.cards as any[]).every((c) => c.type === 'LIQUIDACAO')).toBe(true);
+    // A vista tem o tamanho do tipo; o resumo continua contando o quadro todo.
+    expect(so.pagina.total).toBe(inteiro.summary.byType.liquidacao);
+    expect(so.summary.total).toBe(inteiro.summary.total);
+  });
+
+  it('`loja` é filtro de VISTA e não muda a conta — `storeId` é que muda o escopo', () => {
+    const rede = get('/planning/decisions', { pageSize: '100000' });
+    const umaLoja = (rede.cards as any[]).find((c) => c.toStoreId)?.toStoreId as string;
+    expect(umaLoja).toBeTruthy();
+
+    const vista = get('/planning/decisions', { loja: umaLoja, pageSize: '100000' });
+    // Mesmo quadro, menos cards na tela: nenhum número do resumo se mexe.
+    expect(vista.summary).toEqual(rede.summary);
+    expect(vista.cards.length).toBeLessThan(rede.cards.length);
+    for (const c of vista.cards as any[]) {
+      expect([c.fromStoreId, c.toStoreId, c.outletStoreId, c.outletFromStoreId]).toContain(umaLoja);
+    }
+    // Compra não tem loja: some da vista, e o resumo continua dizendo que existe.
+    expect((vista.cards as any[]).some((c) => c.type === 'COMPRA')).toBe(false);
+  });
+});
+
+describe('demo: as sugestões de compra também paginam', () => {
+  it('o resumo (inclusive o contador de risco) é do conjunto, não da página', () => {
+    const inteiro = get('/planning/purchase-suggestions', { pageSize: '100000' });
+    const pagina = get('/planning/purchase-suggestions', { pageSize: '7' });
+
+    expect(pagina.rows.length).toBe(7);
+    expect(pagina.pagina.total).toBe(inteiro.rows.length);
+    expect(pagina.summary).toEqual(inteiro.summary);
+
+    // `emRisco` existe para a tela parar de baixar todas as linhas só para
+    // contar: ele tem que bater com a contagem feita sobre as linhas inteiras.
+    const contadoNasLinhas = (inteiro.rows as any[]).filter((r) => r.stockoutInDays !== null).length;
+    expect(pagina.summary.emRisco).toBe(contadoNasLinhas);
+  });
+
+  it('`recomendacao` recorta as linhas sem mexer no resumo', () => {
+    const so = get('/planning/purchase-suggestions', { recomendacao: 'LIQUIDATE', pageSize: '100000' });
+    expect(so.rows.length).toBeGreaterThan(0);
+    expect((so.rows as any[]).every((r) => r.recommendation === 'LIQUIDATE')).toBe(true);
+    expect(so.pagina.total).toBe(so.summary.liquidate);
   });
 });
 
@@ -259,7 +361,13 @@ describe('demo: lote de geração', () => {
       expect(c.isOverdue).toBe(c.ageDays > 30);
     }
     expect(b.summary.novos).toBeGreaterThan(0);
-    expect(b.summary.novos + b.summary.atrasados).toBeLessThanOrEqual(b.cards.length);
+    // Contra `summary.total`, e não contra `cards.length`: novos e atrasados
+    // são contados sobre o QUADRO, e `cards` é só a página. Como estava, no dia
+    // em que a página ficasse menor que o quadro — que é hoje — a comparação
+    // passaria a ser entre grandezas de tamanhos diferentes, e teria virado um
+    // falso negativo silencioso em vez de uma prova.
+    expect(b.summary.novos + b.summary.atrasados).toBeLessThanOrEqual(b.summary.total);
+    expect(b.cards.length).toBeLessThanOrEqual(b.summary.total);
   });
 
   it('a idade de um card é estável entre chamadas (não muda a cada recarga)', () => {
@@ -558,10 +666,15 @@ describe('demo: filtros de loja e tipo de produto nos relatórios (feedbacks 3.0
 
 describe('demo: card de liquidação virando transferência (feedbacks 3.0, item 05)', () => {
   it('cada card com destino também diz de ONDE sai e QUANTAS', () => {
-    const board = get('/planning/decisions', { days: '90', group: 'principal' });
-    const liq = (board.cards as any[]).filter((c) => c.type === 'LIQUIDACAO' && c.outletStoreId);
+    // `tipo=LIQUIDACAO` PEDIDO ao servidor. O quadro vem paginado e ordenado
+    // por prioridade e impacto: filtrar liquidações dentro da página tinha
+    // chance real de devolver zero e derrubar um teste que nada tem a ver com
+    // ordenação.
+    const board = get('/planning/decisions', { days: '90', group: 'principal', tipo: 'LIQUIDACAO' });
+    const liq = (board.cards as any[]).filter((c) => c.outletStoreId);
     expect(liq.length).toBeGreaterThan(0);
     for (const c of liq) {
+      expect(c.type).toBe('LIQUIDACAO');
       if (!c.outletFromStoreId) continue; // só o destino tem saldo: nada a mover
       expect(c.outletFromStoreId).not.toBe(c.outletStoreId);
       expect(c.outletQuantity).toBeGreaterThan(0);
@@ -602,10 +715,14 @@ describe('demo: os números batem entre as telas (feedbacks 30/07)', () => {
   });
 
   it('o desconto do card segue a regra da rede: 20%/30% pelo preço cheio', () => {
-    const board = get('/planning/decisions', { days: '90', group: 'principal' });
-    const liq = (board.cards as any[]).filter((c) => c.type === 'LIQUIDACAO' && c.discountPct > 0);
+    // Tipo pedido na consulta, e não procurado na página — mesma razão do teste
+    // da rota de escoamento: a primeira página é dos cards de maior prioridade
+    // e impacto, e liquidação não tem prazo de ruptura para disputar com eles.
+    const board = get('/planning/decisions', { days: '90', group: 'principal', tipo: 'LIQUIDACAO' });
+    const liq = (board.cards as any[]).filter((c) => c.discountPct > 0);
     expect(liq.length).toBeGreaterThan(0);
     for (const c of liq) {
+      expect(c.type).toBe('LIQUIDACAO');
       const p = c.discountParams;
       expect(p.stepPct).toBe(10);
       expect(p.stepDays).toBe(90);

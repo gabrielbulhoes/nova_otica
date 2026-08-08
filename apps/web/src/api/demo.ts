@@ -26,7 +26,14 @@ import {
   buildSuggestions,
   computeCoverage,
   computeStoreCoverage,
+  contarIdades,
+  filtrarVista,
+  grifesDoQuadro,
+  paginar,
+  DECISION_PRIORITIES,
+  DECISION_TYPES,
   DEFAULT_PLANNING_CONFIG,
+  RECOMENDACOES,
   type AbcItem,
   type BrandBannerInput,
   type FairSplitInput,
@@ -1340,6 +1347,26 @@ export interface DemoRequest {
 /** Colapsa um param que deveria ser único (1º valor quando vier array). */
 const one = (v?: string | string[]) => (Array.isArray(v) ? v[0] : v);
 
+/** Valor de query só é aceito quando está no conjunto conhecido (como na API). */
+const umDe = <T extends string>(v: unknown, aceitos: readonly T[]): T | undefined =>
+  aceitos.includes(v as T) ? (v as T) : undefined;
+
+/**
+ * `page` e `pageSize` da query, com o padrão da rota. Devolve na ordem em que
+ * `paginar` os recebe, para o chamador não poder trocar os dois de lugar.
+ */
+const recorte = (
+  params: Record<string, string | string[] | undefined>,
+  padrao: number,
+): [number, number] => {
+  const page = Math.trunc(Number(one(params.page)));
+  const pageSize = Math.trunc(Number(one(params.pageSize)));
+  return [
+    Number.isFinite(page) && page > 0 ? page : 1,
+    Number.isFinite(pageSize) && pageSize > 0 ? pageSize : padrao,
+  ];
+};
+
 export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest): unknown {
   const m = method.toUpperCase();
   const p = (re: RegExp) => re.exec(url);
@@ -1765,7 +1792,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       const noRecorte = products.filter((p) => matchesProductGroup(p.category, planGroup)).length;
       r.summary.universo = Math.round(naRede * (noRecorte / products.length));
     }
-    return r;
+    // Mesmo recorte da API: `recomendacao` é filtro de vista, `page`/`pageSize`
+    // cortam as linhas, e o `summary` continua sendo do conjunto analisado.
+    const rec = umDe(one(params.recomendacao), RECOMENDACOES);
+    const vista = rec ? r.rows.filter((x) => x.recommendation === rec) : r.rows;
+    const { itens, pagina } = paginar(vista, ...recorte(params, 100));
+    return { ...r, rows: itens, pagina };
   }
   if (url === '/planning/purchase-orders' && m === 'GET')
     return buildPurchaseOrders(planningPlans(planDays, one(params.storeId), planGroup), planDays);
@@ -1951,14 +1983,38 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const history = new Map(
       board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),
     );
-    return annotateCardAges(board, history, {
+    const lote = {
       id: 'demo-batch',
       generatedAt: demoBatchAt.toISOString(),
-      source: 'CRON',
+      source: 'CRON' as const,
       cardsTotal: board.cards.length + demoDecisions.length,
       cardsNew: [...history.values()].filter((h) => h.timesSeen <= 1).length,
       simulated: true,
+    };
+    // Daqui para baixo é a MESMA sequência da API (planning.service.ts): a
+    // contagem de idades e a lista de grifes saem do quadro inteiro, os filtros
+    // de vista recortam, e só então a página é cortada. A demo é o espelho
+    // offline da API — se ela paginasse de outro jeito, o teste da demo
+    // deixaria de provar qualquer coisa sobre a rota.
+    // Um `agora` só para contar e para anotar, como na API.
+    const agora = new Date();
+    const contagem = contarIdades(board.cards, history, 30, agora);
+    const grifes = grifesDoQuadro(board.cards);
+    const vista = filtrarVista(board.cards, {
+      tipo: umDe(one(params.tipo), DECISION_TYPES),
+      prioridade: umDe(one(params.prioridade), DECISION_PRIORITIES),
+      loja: one(params.loja) || undefined,
+      grife: one(params.grife) || undefined,
     });
+    const { itens, pagina } = paginar(vista, ...recorte(params, 60));
+    return annotateCardAges(
+      { summary: board.summary, cards: itens, grifes, pagina },
+      history,
+      lote,
+      30,
+      agora,
+      contagem,
+    );
   }
   if (url === '/planning/batches') {
     // Série curta de lotes: um por dia às 6h, como o cron produz.

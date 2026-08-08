@@ -328,6 +328,8 @@ export function buildPriceBands(prices: number[]): PriceBand[] {
  */
 export type MovementClass = 'NEW' | 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
+/** Conjunto fechado, para a rota validar o que vem em `?recomendacao=`. */
+export const RECOMENDACOES: readonly Recommendation[] = ['BUY', 'HOLD', 'DONT_BUY', 'LIQUIDATE'];
 
 // ─── Grupos de cobertura (recorte por categoria) ─────────────────────────────
 
@@ -1109,6 +1111,15 @@ export interface PurchaseSuggestions {
     /** Quantos SKUs o motor analisou — o denominador de `buy`. */
     analisados: number;
     /**
+     * Itens com risco de ruptura (`stockoutInDays !== null`) — o cartão "Risco
+     * de faltar" da tela de Planejamento.
+     *
+     * Nasce no resumo porque a tela o calculava percorrendo TODAS as linhas no
+     * navegador. Para exibir um inteiro, o cliente era obrigado a baixar as 13
+     * mil linhas inteiras. O contador é do CONJUNTO, não da página.
+     */
+    emRisco: number;
+    /**
      * Quantos SKUs o recorte tem de fato, quando a base carregada é uma
      * amostra. Feedbacks 6.0, item 02 ("o número de sugestão de pedidos está
      * baixo"): sem esses dois números ao lado, 126 sugestões parecem pouco
@@ -1117,6 +1128,8 @@ export interface PurchaseSuggestions {
     universo?: number;
   };
   rows: ProductPlan[];
+  /** Recorte desta resposta. Ausente quando as linhas vêm inteiras. */
+  pagina?: PaginaDaResposta;
 }
 
 const recRank: Record<Recommendation, number> = { BUY: 0, LIQUIDATE: 1, DONT_BUY: 2, HOLD: 3 };
@@ -1131,8 +1144,10 @@ export function buildSuggestions(plans: ProductPlan[], days: number): PurchaseSu
     buyCapital: 0,
     avoidedCapital: 0,
     analisados: plans.length,
+    emRisco: 0,
   };
   for (const p of plans) {
+    if (p.stockoutInDays !== null) summary.emRisco += 1;
     if (p.recommendation === 'BUY') {
       summary.buy += 1;
       summary.buyCapital += p.capital;
@@ -1806,6 +1821,10 @@ export function abcFromItems(items: AbcItem[], days: number, dimension: AbcDimen
 export type DecisionType = 'COMPRA' | 'REMANEJAMENTO' | 'LIQUIDACAO';
 export type DecisionPriority = 'ALTA' | 'MEDIA' | 'BAIXA';
 
+/** Os conjuntos fechados, para a rota validar o que vem em `?tipo=`/`?prioridade=`. */
+export const DECISION_TYPES: readonly DecisionType[] = ['COMPRA', 'REMANEJAMENTO', 'LIQUIDACAO'];
+export const DECISION_PRIORITIES: readonly DecisionPriority[] = ['ALTA', 'MEDIA', 'BAIXA'];
+
 export interface DecisionCard {
   id: string;
   type: DecisionType;
@@ -1910,11 +1929,98 @@ export interface BatchInfo {
   simulated?: boolean;
 }
 
+/**
+ * Recorte da resposta quando ela vem paginada.
+ *
+ * `total` é o tamanho da VISTA (o que sobrou dos filtros de vista), não o do
+ * quadro — esse continua em `summary.total`. Os dois juntos são o que permite
+ * à tela dizer "60 de 1.203 nesta grife" sem baixar os 1.203.
+ */
+export interface PaginaDaResposta {
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface DecisionBoard {
   summary: DecisionSummary;
   cards: DecisionCard[];
   /** Lote que gerou estes cards. Ausente enquanto o cron nunca rodou. */
   batch?: BatchInfo;
+  /**
+   * Grifes presentes no quadro INTEIRO. O seletor de grife da tela sai daqui:
+   * montá-lo a partir de `cards` daria as grifes da PÁGINA, e escolher uma
+   * grife que não coubesse na primeira página devolveria uma tela vazia.
+   */
+  grifes?: string[];
+  /** Recorte desta resposta. Ausente quando o quadro vem inteiro. */
+  pagina?: PaginaDaResposta;
+}
+
+/**
+ * Filtro de VISTA do quadro: recorta quais cards a tela mostra, sem tocar em
+ * NENHUM número do resumo — que continua sendo o do quadro inteiro.
+ *
+ * `loja` tem nome próprio de propósito. O escopo de cálculo do motor entra pelo
+ * `storeId` (que passa por `scopedStoreId` e muda a pergunta: a compra deixa de
+ * ser de rede). Aqui é só "quais cards tocam esta loja" — outra coisa, e
+ * confundir as duas trocaria silenciosamente a conta que o gestor está lendo.
+ */
+export interface FiltroDeVista {
+  tipo?: DecisionType;
+  prioridade?: DecisionPriority;
+  loja?: string;
+  grife?: string;
+}
+
+/**
+ * Lojas que um card TOCA. Remanejamento tem origem e destino; liquidação tem a
+ * loja de escoamento e a de onde a peça sai. Compra não tem loja — comprar é
+ * decisão de rede, e a divisão vem depois, no recebimento.
+ */
+export function lojasDoCard(c: DecisionCard): string[] {
+  return [c.fromStoreId, c.toStoreId, c.outletStoreId, c.outletFromStoreId].filter(
+    (x): x is string => !!x,
+  );
+}
+
+/** Aplica o filtro de vista. Sem nenhum critério, devolve a lista recebida. */
+export function filtrarVista(cards: DecisionCard[], f: FiltroDeVista): DecisionCard[] {
+  if (!f.tipo && !f.prioridade && !f.loja && !f.grife) return cards;
+  return cards.filter(
+    (c) =>
+      (!f.tipo || c.type === f.tipo) &&
+      (!f.prioridade || c.priority === f.prioridade) &&
+      (!f.loja || lojasDoCard(c).includes(f.loja)) &&
+      (!f.grife || c.brandLabel === f.grife),
+  );
+}
+
+/** Grifes distintas de um conjunto de cards, em ordem alfabética pt-BR. */
+export function grifesDoQuadro(cards: readonly DecisionCard[]): string[] {
+  const set = new Set<string>();
+  for (const c of cards) if (c.brandLabel) set.add(c.brandLabel);
+  return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+/**
+ * Corta uma lista na página pedida (1-based) e declara o recorte.
+ *
+ * Vive aqui, e não em cada chamador, para que a API e a demo cortem com a mesma
+ * aritmética — é o que faz o teste da demo valer como prova sobre a API.
+ */
+export function paginar<T>(
+  itens: readonly T[],
+  page: number,
+  pageSize: number,
+): { itens: T[]; pagina: PaginaDaResposta } {
+  const tamanho = Math.max(1, Math.trunc(pageSize) || 1);
+  const numero = Math.max(1, Math.trunc(page) || 1);
+  const inicio = (numero - 1) * tamanho;
+  return {
+    itens: itens.slice(inicio, inicio + tamanho),
+    pagina: { page: numero, pageSize: tamanho, total: itens.length },
+  };
 }
 
 /** Uma aparição de card, como o lote de geração registra. */
@@ -1922,6 +2028,41 @@ export interface CardHistory {
   cardId: string;
   firstSeenAt: Date;
   timesSeen: number;
+}
+
+/** Dias inteiros desde a primeira aparição (nunca negativo). */
+const idadeEmDias = (desde: Date, now: Date) =>
+  Math.max(0, Math.floor((now.getTime() - desde.getTime()) / 86_400_000));
+
+/** Quantos cards estrearam no lote e quantos passaram do SLA sem decisão. */
+export interface ContagemDeIdades {
+  novos: number;
+  atrasados: number;
+}
+
+/**
+ * Conta novos e atrasados de uma lista de cards, sem alocar nada.
+ *
+ * Existe separada de `annotateCardAges` porque o quadro passou a ser PAGINADO:
+ * a CONTAGEM tem que sair do conjunto inteiro e a ANOTAÇÃO só dos cards que vão
+ * na resposta. É a mesma regra ("novo" = apareceu uma vez; "atrasado" = idade
+ * acima do SLA) escrita uma vez só, para as duas não divergirem.
+ */
+export function contarIdades(
+  cards: readonly DecisionCard[],
+  history: ReadonlyMap<string, CardHistory>,
+  slaDays = 30,
+  now = new Date(),
+): ContagemDeIdades {
+  let novos = 0;
+  let atrasados = 0;
+  for (const c of cards) {
+    const h = history.get(c.id);
+    if (!h) continue;
+    if (h.timesSeen <= 1) novos++;
+    if (idadeEmDias(h.firstSeenAt, now) > slaDays) atrasados++;
+  }
+  return { novos, atrasados };
 }
 
 /**
@@ -1932,6 +2073,13 @@ export interface CardHistory {
  * Card que reaparece há semanas sem decisão é o sintoma central que o painel
  * de governança precisa mostrar — sem isso, um card de 60 dias e um de ontem
  * são visualmente idênticos.
+ *
+ * `contagem` é o antídoto contra uma mentira silenciosa: sem ele, os "novos" e
+ * "atrasados" do resumo saem dos cards que esta função RECEBE. Passe uma
+ * página de 60 e o resumo diria "4 novos" onde o quadro tem 800 — número
+ * plausível, tela idêntica, errado. Quem pagina calcula a contagem sobre o
+ * conjunto inteiro (`contarIdades`) e a entrega aqui pronta. Ausente, deriva
+ * como sempre derivou — é o que mantém quem chama com o quadro completo.
  */
 export function annotateCardAges(
   board: DecisionBoard,
@@ -1939,6 +2087,7 @@ export function annotateCardAges(
   batch: BatchInfo | undefined,
   slaDays = 30,
   now = new Date(),
+  contagem?: ContagemDeIdades,
 ): DecisionBoard {
   if (history.size === 0) return { ...board, batch };
 
@@ -1947,7 +2096,7 @@ export function annotateCardAges(
   const cards = board.cards.map((c) => {
     const h = history.get(c.id);
     if (!h) return c;
-    const ageDays = Math.max(0, Math.floor((now.getTime() - h.firstSeenAt.getTime()) / 86_400_000));
+    const ageDays = idadeEmDias(h.firstSeenAt, now);
     // "Novo" = apareceu só uma vez, ou seja, estreou no lote mais recente.
     const isNew = h.timesSeen <= 1;
     const isOverdue = ageDays > slaDays;
@@ -1956,7 +2105,12 @@ export function annotateCardAges(
     return { ...c, firstSeenAt: h.firstSeenAt.toISOString(), ageDays, isNew, isOverdue };
   });
 
-  return { summary: { ...board.summary, novos, atrasados }, cards, batch };
+  return {
+    ...board,
+    summary: { ...board.summary, novos: contagem?.novos ?? novos, atrasados: contagem?.atrasados ?? atrasados },
+    cards,
+    batch,
+  };
 }
 
 const PRIORITY_RANK: Record<DecisionPriority, number> = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
@@ -2403,6 +2557,22 @@ export function buildDecisionCards(
     });
   }
 
+  return finalizarBoard(cards, decidedIds);
+}
+
+/**
+ * A CAUDA do quadro: tira os cards já decididos, ordena por prioridade e
+ * impacto e conta o resumo. Está separada de `buildDecisionCards` porque o
+ * serviço monta os cards UMA vez (em `generateCards`, que precisa da foto
+ * completa para o lote) e depois precisa do quadro em aberto sobre esses
+ * MESMOS cards. Enquanto isto vivia só dentro de `buildDecisionCards`, a rota
+ * construía o lote inteiro, jogava fora e reconstruía do zero para chegar
+ * exatamente ao mesmo lugar (ver a medição em `decisionBoard`).
+ */
+export function finalizarBoard(
+  cards: DecisionCard[],
+  decidedIds?: ReadonlySet<string>,
+): DecisionBoard {
   const generated = cards.length;
   const open = decidedIds && decidedIds.size > 0 ? cards.filter((c) => !decidedIds.has(c.id)) : cards;
 

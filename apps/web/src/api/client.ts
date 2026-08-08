@@ -520,10 +520,18 @@ export interface PurchaseSuggestions {
     avoidedCapital: number;
     /** Quantos SKUs o motor analisou — o denominador de `buy`. */
     analisados?: number;
+    /**
+     * Itens com risco de ruptura, contados no servidor sobre o conjunto todo.
+     * A tela somava isso percorrendo as linhas — o que a obrigava a baixar as
+     * 13 mil linhas inteiras só para exibir um inteiro.
+     */
+    emRisco?: number;
     /** Quantos SKUs o recorte tem na rede, quando a base carregada é amostra. */
     universo?: number;
   };
   rows: ProductPlan[];
+  /** Recorte desta resposta: as linhas vêm paginadas. */
+  pagina?: PaginaDaResposta;
 }
 
 export interface RebalanceSuggestion {
@@ -673,7 +681,21 @@ export interface BatchInfo {
   simulated?: boolean;
 }
 
+/**
+ * Recorte de uma resposta paginada. `total` é o tamanho da VISTA (o que sobrou
+ * dos filtros), enquanto o resumo continua falando do conjunto inteiro.
+ */
+export interface PaginaDaResposta {
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface DecisionBoard {
+  /**
+   * SEMPRE do quadro inteiro, mesmo quando `cards` traz só uma página e mesmo
+   * sob filtro de vista. É o que os indicadores da tela leem.
+   */
   summary: {
     total: number;
     byType: { compra: number; remanejamento: number; liquidacao: number };
@@ -687,6 +709,10 @@ export interface DecisionBoard {
   };
   cards: DecisionCard[];
   batch?: BatchInfo;
+  /** Grifes do quadro inteiro — a origem do seletor de grife da tela. */
+  grifes?: string[];
+  /** Recorte desta resposta: os cards vêm paginados. */
+  pagina?: PaginaDaResposta;
 }
 
 export interface BatchRow extends BatchInfo {

@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getDecisionBoard, createMovement, formatBRL, getStores, recordDecision } from '../api/client';
 import type {
   DecisionCard,
@@ -698,61 +698,67 @@ function BatchLine({ board }: { board?: DecisionBoardT }) {
   );
 }
 
-/**
- * Lojas que um card toca. Remanejamento tem origem e destino; liquidação tem a
- * loja de escoamento e a de onde a peça sai. Compra NÃO tem loja — comprar é
- * decisão de rede, e a distribuição vem depois, no recebimento. Devolver a
- * lista vazia é o que faz o card de compra sair da tela sob um filtro de loja,
- * e a tela diz isso em vez de deixar o gestor achar que sumiram.
- */
-function lojasDoCard(c: DecisionCard): string[] {
-  return [c.fromStoreId, c.toStoreId, c.outletStoreId, c.outletFromStoreId].filter(
-    (x): x is string => !!x,
-  );
-}
-
-/** Quantos cards a grade mostra por vez. */
+/** Quantos cards a grade pede por vez. */
 const PAGINA = 60;
 
 export function Decisions() {
   const [typeF, setTypeF] = useState<TypeFilter>('ALL');
   const [prioF, setPrioF] = useState<PrioFilter>('ALL');
   // Feedback 6.0 · item 05 — "na Central de Decisões é importante ter o filtro
-  // de loja e grife". Os dois filtram no cliente, sobre o quadro já carregado:
-  // recalcular o motor por loja mudaria os NÚMEROS (a compra é de rede), e o
-  // pedido é para achar cards, não para mudar a conta.
+  // de loja e grife".
+  //
+  // Os quatro continuam sendo filtros de VISTA: recortam quais cards a grade
+  // mostra e não mexem em número nenhum do resumo. O que mudou foi ONDE eles
+  // rodam. Enquanto o quadro vinha inteiro, filtrar no navegador era natural;
+  // com a resposta paginada, filtrar a PÁGINA seria mentira — escolher uma
+  // grife que não coubesse nos primeiros 60 cards devolveria "nenhum card" com
+  // o quadro cheio deles. Por isso vão na consulta.
+  //
+  // `loja`, e NÃO `storeId`: `storeId` passa por `scopedStoreId` no servidor e
+  // muda o ESCOPO DO CÁLCULO — a compra deixaria de ser de rede e a tela
+  // passaria a responder outra pergunta. Aqui só se quer achar cards.
   const [lojaF, setLojaF] = useState<string>('ALL');
   const [grifeF, setGrifeF] = useState<string>('ALL');
   const [visiveis, setVisiveis] = useState(PAGINA);
 
-  const params = { days: 90, group: 'principal' };
-  const board = useQuery({ queryKey: ['decisions', params], queryFn: () => getDecisionBoard(params) });
+  const params = {
+    days: 90,
+    group: 'principal',
+    pageSize: visiveis,
+    tipo: typeF === 'ALL' ? undefined : typeF,
+    prioridade: prioF === 'ALL' ? undefined : prioF,
+    loja: lojaF === 'ALL' ? undefined : lojaF,
+    grife: grifeF === 'ALL' ? undefined : grifeF,
+  };
+  // "Ver mais" cresce o `pageSize` em vez de acumular páginas no cliente. O
+  // trecho já visto volta junto — é o preço de não manter uma segunda cópia do
+  // quadro em memória e de nunca montar uma lista remendada com páginas vindas
+  // de execuções diferentes do motor.
+  //
+  // `keepPreviousData` porque trocar de filtro ou pedir mais muda a chave da
+  // consulta: sem ele a tela inteira voltaria para "Carregando…" a cada clique,
+  // piscando os indicadores que nem mudaram.
+  const board = useQuery({
+    queryKey: ['decisions', params],
+    queryFn: () => getDecisionBoard(params),
+    placeholderData: keepPreviousData,
+  });
   const lojas = useQuery({ queryKey: ['stores'], queryFn: getStores });
 
-  // As grifes vêm dos próprios cards: um seletor com o catálogo inteiro teria
-  // centenas de opções sem card nenhum atrás.
-  const grifes = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of board.data?.cards ?? []) if (c.brandLabel) set.add(c.brandLabel);
-    return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [board.data]);
-
-  const cards = useMemo(() => {
-    const all = board.data?.cards ?? [];
-    return all.filter(
-      (c) =>
-        (typeF === 'ALL' || c.type === typeF) &&
-        (prioF === 'ALL' || c.priority === prioF) &&
-        (lojaF === 'ALL' || lojasDoCard(c).includes(lojaF)) &&
-        (grifeF === 'ALL' || c.brandLabel === grifeF),
-    );
-  }, [board.data, typeF, prioF, lojaF, grifeF]);
+  // As grifes vêm do QUADRO INTEIRO, calculadas no servidor: tirá-las de
+  // `cards` daria as grifes da PÁGINA, e o seletor perderia exatamente as
+  // opções que o gestor precisa procurar.
+  const grifes = board.data?.grifes ?? [];
+  const cards = board.data?.cards ?? [];
+  /** Cards que a vista tem — não os que couberam nesta página. */
+  const naVista = board.data?.pagina?.total ?? cards.length;
 
   const s = board.data?.summary;
   const filtrando = typeF !== 'ALL' || prioF !== 'ALL' || lojaF !== 'ALL' || grifeF !== 'ALL';
   // Compras somem sob filtro de loja porque não têm loja — dito, não escondido.
-  const comprasOcultas =
-    lojaF !== 'ALL' && (board.data?.cards ?? []).some((c) => c.type === 'COMPRA');
+  // A pergunta é sobre o QUADRO ("existem cards de compra?"), então a resposta
+  // vem do resumo: sob filtro de loja eles já não estão mais em `cards`.
+  const comprasOcultas = lojaF !== 'ALL' && (s?.byType.compra ?? 0) > 0;
   const trocouFiltro = <T,>(set: (v: T) => void) => (v: T) => {
     set(v);
     setVisiveis(PAGINA);
@@ -931,23 +937,28 @@ export function Decisions() {
           ) : (
             <>
               <div className="grid grid-3">
-                {cards.slice(0, visiveis).map((c) => (
+                {cards.map((c) => (
                   <Card key={c.id} c={c} onDecided={() => board.refetch()} />
                 ))}
               </div>
-              {/* A grade desenhava os 1.377 cards de uma vez: a tela demorava a
-                  responder e a impressão saía com centenas de páginas. Como o
-                  quadro vem ordenado por prioridade e impacto, os primeiros já
-                  são os que importam. */}
-              {cards.length > visiveis && (
+              {/* A grade desenhava os 1.377 cards de uma vez, e a resposta
+                  trazia os 18.541: 16,5 MB por recarga, que é a origem do 503.
+                  Agora o corte é do SERVIDOR — o "ver mais" pede mais, em vez
+                  de revelar o que já estava baixado. Como o quadro vem ordenado
+                  por prioridade e impacto, os primeiros já são os que importam. */}
+              {naVista > cards.length && (
                 <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
                   <Botao
                     variante="discreto"
                     icone="mais"
+                    // Buscar mais é ida ao servidor: sem isto, clicar duas
+                    // vezes rápido dispararia duas consultas ao motor.
+                    disabled={board.isFetching}
                     onClick={() => setVisiveis((v) => v + PAGINA)}
                   >
-                    Ver mais {Math.min(PAGINA, cards.length - visiveis)} de {cards.length - visiveis}{' '}
-                    restantes
+                    {board.isFetching
+                      ? 'Buscando…'
+                      : `Ver mais ${Math.min(PAGINA, naVista - cards.length)} de ${naVista - cards.length} restantes`}
                   </Botao>
                 </div>
               )}
