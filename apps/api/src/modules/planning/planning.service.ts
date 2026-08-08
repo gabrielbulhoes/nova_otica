@@ -3,7 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stores/store.scope.js';
-import { computeLiveStock, liveDeltas } from '../stock/stock.service.js';
+import { computeLiveStock, liveDeltas, saldosAoVivo } from '../stock/stock.service.js';
 import { loadBrandCatalog } from './brandCatalog.js';
 import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
@@ -352,7 +352,7 @@ async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<
   const posicoes = new Map<string, FairSplitInput[]>();
   if (productIds.length === 0) return posicoes;
 
-  const [lojas, vendas, estoques] = await Promise.all([
+  const [lojas, vendas, saldos] = await Promise.all([
     prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
     prisma.$queryRaw<{ storeId: string; productId: string; units: number }[]>(Prisma.sql`
       SELECT s."storeId" AS "storeId", si."productId" AS "productId", SUM(si.quantity)::int AS units
@@ -362,14 +362,13 @@ async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<
       WHERE si."productId" IN (${Prisma.join(productIds)}) AND s."saleDate" >= ${periodStart(days)}
       GROUP BY s."storeId", si."productId"
     `),
-    prisma.stockItem.findMany({
-      where: { productId: { in: productIds }, store: PLANNED_STORE_WHERE },
-      select: { storeId: true, productId: true, quantity: true },
-    }),
+    // Saldo AO VIVO, não `StockItem.quantity`. Ler a coluna crua aqui era o que
+    // fazia a aba de compras anunciar 12 na loja onde a aba de Estoque mostrava
+    // 8: mesma peça, mesma loja, mesma tela, dois números.
+    saldosAoVivo(productIds, PLANNED_STORE_WHERE),
   ]);
 
   const vendaPor = new Map(vendas.map((v) => [`${v.productId}:${v.storeId}`, Math.max(0, v.units)]));
-  const estoquePor = new Map(estoques.map((e) => [`${e.productId}:${e.storeId}`, e.quantity]));
   for (const id of productIds) {
     posicoes.set(
       id,
@@ -377,7 +376,10 @@ async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<
         storeId: l.id,
         storeName: l.name,
         unitsSold: vendaPor.get(`${id}:${l.id}`) ?? 0,
-        stockUnits: estoquePor.get(`${id}:${l.id}`) ?? 0,
+        // VENDÁVEL, não físico: a unidade já prometida a outra loja vai embora e
+        // não cobre a demanda daqui. Contá-la faz o rateio pular a loja que
+        // mais precisa.
+        stockUnits: saldos.get(`${l.id}:${id}`)?.disponivel ?? 0,
       })),
     );
   }

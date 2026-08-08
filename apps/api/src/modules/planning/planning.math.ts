@@ -1359,7 +1359,10 @@ export function buildRebalance(
     storeId: string;
     storeName: string;
     dailyDemand: number;
+    /** Físico na prateleira — inclui o que já tem dono. Só as frases o citam. */
     stock: number;
+    /** `stock` menos o reservado: o que esta loja pode de fato vender. */
+    vendavel: number;
     /** Comprometido com transferência pendente que sai daqui. */
     reserved: number;
     /** A caminho daqui, por transferência pendente com destino nesta loja. */
@@ -1383,15 +1386,29 @@ export function buildRebalance(
     // zero. Sem idade conhecida, a janela inteira — o comportamento antigo.
     const presentDays = r.ageDays != null ? Math.min(days, Math.max(1, r.ageDays)) : days;
     const dailyDemand = presentDays > 0 ? r.unitsSold / presentDays : 0;
+    const reserved = Math.max(0, r.reserved ?? 0);
+    /*
+     * Cobertura se mede em unidades VENDÁVEIS, dos dois lados.
+     *
+     * A doadora já descontava o reservado (`livre`, mais abaixo) — "está na
+     * prateleira mas já tem dono". A receptora não descontava, e a assimetria
+     * dava à mesma unidade dois papéis contraditórios na mesma rodada: ela
+     * saía daqui e, ao mesmo tempo, contava como cobertura daqui. Uma loja com
+     * 10 peças, 8 delas reservadas para sair, aparecia com cobertura de 10 e
+     * era filtrada fora da lista de quem precisa — justamente a loja que ia
+     * ficar com 2.
+     */
+    const vendavel = Math.max(0, r.currentStock - reserved);
     const pos: StorePos = {
       storeId: r.storeId,
       storeName: r.storeName,
       dailyDemand,
       stock: r.currentStock,
-      reserved: Math.max(0, r.reserved ?? 0),
+      vendavel,
+      reserved,
       inbound: Math.max(0, r.inboundUnits ?? 0),
       ageDays: r.ageDays ?? null,
-      coverage: dailyDemand > 0 ? r.currentStock / dailyDemand : null,
+      coverage: dailyDemand > 0 ? vendavel / dailyDemand : null,
     };
     const cur = byProduct.get(r.productId) ?? {
       description: r.description,
@@ -1417,7 +1434,7 @@ export function buildRebalance(
         // ainda não está no estoque, mas está paga e a caminho. Sem isto o
         // motor repete a mesma sugestão a cada rodada até a transferência ser
         // confirmada, e quem recebe leva duas.
-        need: Math.max(0, Math.ceil(s.dailyDemand * cfg.targetCoverDays - s.stock - s.inbound)),
+        need: Math.max(0, Math.ceil(s.dailyDemand * cfg.targetCoverDays - s.vendavel - s.inbound)),
       }))
       .filter((s) => s.need > 0)
       .sort((a, b) => (a.coverage as number) - (b.coverage as number));
@@ -1431,7 +1448,7 @@ export function buildRebalance(
         const recemChegada = s.ageDays != null && s.ageDays < cfg.newProductDays;
         // O reservado está fisicamente na prateleira mas já tem dono: outra
         // transferência pendente. Oferecer de novo é prometer duas vezes.
-        const livre = Math.max(0, s.stock - s.reserved);
+        const livre = s.vendavel;
         const excedente =
           s.dailyDemand === 0
             ? livre // parado: em tese tudo, menos o piso de vitrine abaixo

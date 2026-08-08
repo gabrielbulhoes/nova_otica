@@ -10,6 +10,7 @@ import {
   type NeedSplitRow,
 } from './planning.math.js';
 import { createMovement, type Actor } from '../movements/movements.service.js';
+import { saldosAoVivo } from '../stock/stock.service.js';
 
 /**
  * Distribuição do recebimento (feedback 6.0 · item 06).
@@ -191,7 +192,7 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     (it) => it?.productId && Number.isInteger(it.quantity) && it.quantity > 0,
   );
 
-  const [lojas, produtos, vendas, estoques] = await Promise.all([
+  const [lojas, produtos, vendas, saldos] = await Promise.all([
     prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
     prisma.product.findMany({
       where: { id: { in: itens.map((i) => i.productId) } },
@@ -201,14 +202,15 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     // Estoque atual por (loja, peça): a metade da necessidade que a
     // participação nas vendas nunca olhou. Só as peças do pedido e só as lojas
     // do escopo, então a consulta é da ordem de itens × 16.
-    prisma.stockItem.findMany({
-      where: { productId: { in: itens.map((i) => i.productId) }, store: PLANNED_STORE_WHERE },
-      select: { storeId: true, productId: true, quantity: true },
-    }),
+    //
+    // Pelo saldo AO VIVO e VENDÁVEL, a mesma conta da aba de Estoque e do
+    // remanejamento. Lendo `StockItem.quantity` cru, esta tela dizia que a loja
+    // já tinha a peça — enquanto a unidade que ela contava estava reservada
+    // para sair — e a caixa recém-recebida ia para a loja errada.
+    saldosAoVivo(itens.map((i) => i.productId), PLANNED_STORE_WHERE),
   ]);
 
   const produtoPor = new Map(produtos.map((p) => [p.id, p]));
-  const estoquePor = new Map(estoques.map((e) => [`${e.productId}:${e.storeId}`, e.quantity]));
   const catalogo = loadBrandCatalog();
   const items: DistributionItem[] = [];
   let unassigned = 0;
@@ -257,7 +259,9 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
         // A venda que entra na NECESSIDADE é a da própria peça: o alvo de
         // cobertura de um SKU não pode sair da venda da categoria inteira.
         unitsSold: vendas.porSku.get(prod.id)?.get(l.id) ?? 0,
-        stockUnits: estoquePor.get(`${prod.id}:${l.id}`) ?? 0,
+        // VENDÁVEL: a unidade reservada para outra loja não cobre a
+        // demanda desta, e contá-la desvia a caixa de quem precisa.
+        stockUnits: saldos.get(`${l.id}:${prod.id}`)?.disponivel ?? 0,
       })),
       it.quantity,
       JANELA_DIAS,
