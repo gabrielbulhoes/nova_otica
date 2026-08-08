@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { getDecisionBoard, createMovement, formatBRL, getStores, recordDecision } from '../api/client';
 import type {
   DecisionCard,
@@ -8,6 +13,12 @@ import type {
   DecisionPriority,
   DecisionBoard as DecisionBoardT,
 } from '../api/client';
+import {
+  CARDS_POR_CLIQUE,
+  juntarPaginas,
+  proximaPagina,
+  restantes,
+} from '../lib/paginacao';
 import {
   Loading,
   ErrorState,
@@ -247,7 +258,11 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
       });
       setEscoa('done');
       qc.invalidateQueries({ queryKey: ['movements'] });
-      qc.invalidateQueries({ queryKey: ['decisions'] });
+      // `reset` e não `invalidate`: o quadro é uma consulta paginada, e
+      // invalidar rebuscaria TODAS as páginas já carregadas — uma execução do
+      // motor por página. Voltar à primeira custa uma, e é a leitura honesta:
+      // a transferência muda o quadro inteiro, não só a página em que se está.
+      qc.resetQueries({ queryKey: ['decisions'] });
     } catch (e) {
       setEscoa('error');
       const ex = e as { response?: { data?: { error?: string } } };
@@ -269,7 +284,8 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
       });
       setState('done');
       qc.invalidateQueries({ queryKey: ['movements'] });
-      qc.invalidateQueries({ queryKey: ['decisions'] });
+      // Mesma razão do escoamento: uma execução do motor, não N.
+      qc.resetQueries({ queryKey: ['decisions'] });
     } catch (e) {
       setState('error');
       const ex = e as { response?: { data?: { error?: string } } };
@@ -698,10 +714,8 @@ function BatchLine({ board }: { board?: DecisionBoardT }) {
   );
 }
 
-/** Quantos cards a grade pede por vez. */
-const PAGINA = 60;
-
 export function Decisions() {
+  const qc = useQueryClient();
   const [typeF, setTypeF] = useState<TypeFilter>('ALL');
   const [prioF, setPrioF] = useState<PrioFilter>('ALL');
   // Feedback 6.0 · item 05 — "na Central de Decisões é importante ter o filtro
@@ -719,50 +733,83 @@ export function Decisions() {
   // passaria a responder outra pergunta. Aqui só se quer achar cards.
   const [lojaF, setLojaF] = useState<string>('ALL');
   const [grifeF, setGrifeF] = useState<string>('ALL');
-  const [visiveis, setVisiveis] = useState(PAGINA);
 
   const params = {
     days: 90,
     group: 'principal',
-    pageSize: visiveis,
     tipo: typeF === 'ALL' ? undefined : typeF,
     prioridade: prioF === 'ALL' ? undefined : prioF,
     loja: lojaF === 'ALL' ? undefined : lojaF,
     grife: grifeF === 'ALL' ? undefined : grifeF,
   };
-  // "Ver mais" cresce o `pageSize` em vez de acumular páginas no cliente. O
-  // trecho já visto volta junto — é o preço de não manter uma segunda cópia do
-  // quadro em memória e de nunca montar uma lista remendada com páginas vindas
-  // de execuções diferentes do motor.
+  // "Ver mais" pede a PRÓXIMA PÁGINA, com `pageSize` FIXO, e a tela acumula o
+  // que chega.
   //
-  // `keepPreviousData` porque trocar de filtro ou pedir mais muda a chave da
-  // consulta: sem ele a tela inteira voltaria para "Carregando…" a cada clique,
-  // piscando os indicadores que nem mudaram.
-  const board = useQuery({
+  // Crescer o `pageSize` — como esta tela fazia — não funciona: a rota prende o
+  // tamanho num teto, e a partir do clique em que o pedido passa do teto a
+  // grade para de crescer para sempre. O botão continuava anunciando "mais 60
+  // de 11.737 restantes", nenhum card novo aparecia, os cards além do teto
+  // ficavam INALCANÇÁVEIS pela tela, e cada clique inútil ainda pagava uma
+  // execução completa do motor. Com página, o botão só some quando a última
+  // chegou (`proximaPagina` → `undefined`).
+  //
+  // `signal`: o AbortSignal que o React Query entrega vai para o axios, e a
+  // requisição em voo morre quando a chave muda. Sem isso, trocar de filtro
+  // quatro vezes dentro da janela de resposta empilha quatro execuções
+  // concorrentes do motor — e a quarta estoura o heap de 768 MB do processo.
+  //
+  // `keepPreviousData` porque trocar de filtro muda a chave da consulta: sem
+  // ele a tela inteira voltaria para "Carregando…", piscando os indicadores que
+  // nem mudaram.
+  const board = useInfiniteQuery({
     queryKey: ['decisions', params],
-    queryFn: () => getDecisionBoard(params),
+    queryFn: ({ pageParam, signal }) =>
+      getDecisionBoard({ ...params, page: pageParam, pageSize: CARDS_POR_CLIQUE }, signal),
+    initialPageParam: 1,
+    getNextPageParam: (ultima) => proximaPagina(ultima.pagina),
     placeholderData: keepPreviousData,
   });
   const lojas = useQuery({ queryKey: ['stores'], queryFn: getStores });
 
+  const paginas = board.data?.pages;
+  /** A resposta mais recente: é dela que saem o resumo e o tamanho da vista. */
+  const ultima = paginas?.[paginas.length - 1];
+
   // As grifes vêm do QUADRO INTEIRO, calculadas no servidor: tirá-las de
   // `cards` daria as grifes da PÁGINA, e o seletor perderia exatamente as
   // opções que o gestor precisa procurar.
-  const grifes = board.data?.grifes ?? [];
-  const cards = board.data?.cards ?? [];
-  /** Cards que a vista tem — não os que couberam nesta página. */
-  const naVista = board.data?.pagina?.total ?? cards.length;
+  const grifes = ultima?.grifes ?? [];
+  const cards = juntarPaginas(
+    paginas?.map((p) => p.cards),
+    (c) => c.id,
+  );
+  /** Cards que a vista ainda tem para entregar — nunca os que já estão na tela. */
+  const faltam = restantes(ultima?.pagina, cards.length);
 
-  const s = board.data?.summary;
+  const s = ultima?.summary;
   const filtrando = typeF !== 'ALL' || prioF !== 'ALL' || lojaF !== 'ALL' || grifeF !== 'ALL';
   // Compras somem sob filtro de loja porque não têm loja — dito, não escondido.
   // A pergunta é sobre o QUADRO ("existem cards de compra?"), então a resposta
   // vem do resumo: sob filtro de loja eles já não estão mais em `cards`.
   const comprasOcultas = lojaF !== 'ALL' && (s?.byType.compra ?? 0) > 0;
-  const trocouFiltro = <T,>(set: (v: T) => void) => (v: T) => {
-    set(v);
-    setVisiveis(PAGINA);
-  };
+  // Trocar de filtro muda a chave da consulta, e a acumulação de páginas
+  // recomeça sozinha na primeira — não há mais contador de "visíveis" para
+  // zerar à mão e esquecer num dos quatro controles.
+  //
+  // `buscando` desabilita os quatro enquanto há busca em voo, como o "Ver mais"
+  // já fazia. Um filtro clicável durante a busca é um convite a empilhar
+  // execuções do motor, e o processo não sobrevive à quarta.
+  const buscando = board.isFetching;
+  /**
+   * Depois de uma decisão o quadro RECOMEÇA na primeira página, em vez de
+   * rebuscar as páginas já carregadas.
+   *
+   * Duas razões, e as duas pesam: rebuscar N páginas custa N execuções do motor
+   * por decisão registrada; e o card decidido sai do quadro, empurrando todos
+   * os seguintes para trás — as páginas antigas passariam a descrever um quadro
+   * que não existe mais.
+   */
+  const recomecar = () => qc.resetQueries({ queryKey: ['decisions'] });
 
   return (
     <>
@@ -779,7 +826,7 @@ export function Decisions() {
         <Loading />
       ) : (
         <>
-          <BatchLine board={board.data} />
+          <BatchLine board={ultima} />
           {/* ═══ HIERARQUIA DA GRADE DE INDICADORES ═══════════════════════════
               Os três indicadores eram três `.card.stat` idênticos: mesma
               superfície, mesmo filete, mesmo corpo de número. Três respostas com
@@ -854,6 +901,12 @@ export function Decisions() {
             descricao="Cada card traz a ação em destaque e a justificativa do motor logo abaixo."
           />
 
+          {/* Os quatro controles ficam INERTES enquanto há busca em voo. Cada
+              troca de filtro é uma execução completa do motor no servidor, e o
+              processo tem 768 MB de heap: três concorrentes já batem em 769 MB
+              medidos, e a quarta derruba o contêiner. O "Ver mais" já se
+              protegia assim; os filtros, que são quatro cliques a um dedo de
+              distância um do outro, não. */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
             <div className="segmented" role="group" aria-label="Filtrar por tipo de decisão">
               {(['ALL', 'COMPRA', 'REMANEJAMENTO', 'LIQUIDACAO'] as TypeFilter[]).map((k) => (
@@ -861,7 +914,8 @@ export function Decisions() {
                   key={k}
                   type="button"
                   className={typeF === k ? 'active' : ''}
-                  onClick={() => trocouFiltro(setTypeF)(k)}
+                  disabled={buscando}
+                  onClick={() => setTypeF(k)}
                   aria-pressed={typeF === k}
                 >
                   {k === 'ALL' ? 'Todos' : typeMeta[k].label}
@@ -874,7 +928,8 @@ export function Decisions() {
                   key={k}
                   type="button"
                   className={prioF === k ? 'active' : ''}
-                  onClick={() => trocouFiltro(setPrioF)(k)}
+                  disabled={buscando}
+                  onClick={() => setPrioF(k)}
                   aria-pressed={prioF === k}
                 >
                   {k === 'ALL' ? 'Todas' : prioMeta[k].label}
@@ -889,7 +944,8 @@ export function Decisions() {
               style={{ maxWidth: 230 }}
               aria-label="Filtrar por loja"
               value={lojaF}
-              onChange={(e) => trocouFiltro(setLojaF)(e.target.value)}
+              disabled={buscando}
+              onChange={(e) => setLojaF(e.target.value)}
             >
               <option value="ALL">Todas as lojas</option>
               {(lojas.data?.rows ?? []).map((l) => (
@@ -904,7 +960,8 @@ export function Decisions() {
               style={{ maxWidth: 230 }}
               aria-label="Filtrar por grife"
               value={grifeF}
-              onChange={(e) => trocouFiltro(setGrifeF)(e.target.value)}
+              disabled={buscando}
+              onChange={(e) => setGrifeF(e.target.value)}
             >
               <option value="ALL">Todas as grifes</option>
               {grifes.map((g) => (
@@ -938,27 +995,35 @@ export function Decisions() {
             <>
               <div className="grid grid-3">
                 {cards.map((c) => (
-                  <Card key={c.id} c={c} onDecided={() => board.refetch()} />
+                  <Card key={c.id} c={c} onDecided={recomecar} />
                 ))}
               </div>
               {/* A grade desenhava os 1.377 cards de uma vez, e a resposta
                   trazia os 18.541: 16,5 MB por recarga, que é a origem do 503.
-                  Agora o corte é do SERVIDOR — o "ver mais" pede mais, em vez
-                  de revelar o que já estava baixado. Como o quadro vem ordenado
-                  por prioridade e impacto, os primeiros já são os que importam. */}
-              {naVista > cards.length && (
+                  Agora o corte é do SERVIDOR — o "ver mais" busca a PÁGINA
+                  seguinte e junta com o que já está na tela. Como o quadro vem
+                  ordenado por prioridade e impacto, os primeiros já são os que
+                  importam; mas o botão só desaparece quando a última página
+                  chegou, então nenhum card fica fora de alcance.
+
+                  A condição é `hasNextPage`, e não uma comparação de tamanhos
+                  feita aqui: quem sabe se ainda há página é o `pagina` da
+                  própria resposta. O rótulo mostra o que a próxima ida traz de
+                  fato — antes ele anunciava 60 cards que a rota já não
+                  entregava mais. */}
+              {board.hasNextPage && (
                 <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
                   <Botao
                     variante="discreto"
                     icone="mais"
                     // Buscar mais é ida ao servidor: sem isto, clicar duas
                     // vezes rápido dispararia duas consultas ao motor.
-                    disabled={board.isFetching}
-                    onClick={() => setVisiveis((v) => v + PAGINA)}
+                    disabled={buscando}
+                    onClick={() => board.fetchNextPage()}
                   >
-                    {board.isFetching
+                    {buscando
                       ? 'Buscando…'
-                      : `Ver mais ${Math.min(PAGINA, naVista - cards.length)} de ${naVista - cards.length} restantes`}
+                      : `Ver mais ${Math.min(CARDS_POR_CLIQUE, faltam)} de ${faltam} restantes`}
                   </Botao>
                 </div>
               )}

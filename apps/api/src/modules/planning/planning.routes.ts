@@ -2,10 +2,15 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, parseDays } from '../../http/helpers.js';
 import {
+  CARDS_POR_PAGINA,
   DECISION_PRIORITIES,
   DECISION_TYPES,
+  LINHAS_POR_PAGINA,
   PRODUCT_GROUPS,
   RECOMENDACOES,
+  TETO_DE_CARDS,
+  TETO_DE_LINHAS,
+  recortePedido,
   type ProductGroup,
 } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
@@ -23,8 +28,6 @@ import {
   receivingUnits,
 } from './distribution.service.js';
 import {
-  CARDS_POR_PAGINA,
-  LINHAS_POR_PAGINA,
   commercialStrategy,
   decisionBoard,
   fairSplit,
@@ -51,22 +54,6 @@ const days = (v: unknown) => parseDays(v, 90);
 // os demais só quando pedidos explicitamente.
 const group = (v: unknown): ProductGroup =>
   PRODUCT_GROUPS.includes(v as ProductGroup) ? (v as ProductGroup) : 'principal';
-
-/**
- * Página pedida (1-based) e tamanho da página, presos entre 1 e `teto`.
- *
- * O teto existe porque a resposta é o recurso escasso: sem ele, `?pageSize=0`
- * ou `?pageSize=999999` reconstroem exatamente o 503 que a paginação veio
- * resolver. Valor ausente ou lixo cai no padrão da rota.
- */
-const recorte = (v: { page?: unknown; pageSize?: unknown }, padrao: number, teto: number) => {
-  const page = Math.trunc(Number(v.page));
-  const pageSize = Math.trunc(Number(v.pageSize));
-  return {
-    page: Number.isFinite(page) && page > 0 ? page : 1,
-    pageSize: Number.isFinite(pageSize) && pageSize > 0 ? Math.min(pageSize, teto) : padrao,
-  };
-};
 
 /** Valor de query só é aceito quando está no conjunto conhecido. */
 const umDe = <T extends string>(v: unknown, aceitos: readonly T[]): T | undefined =>
@@ -105,7 +92,7 @@ planningRouter.get(
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     res.json(
       await purchaseSuggestions(days(req.query.days), storeId, group(req.query.group), {
-        ...recorte(req.query, LINHAS_POR_PAGINA, 2000),
+        ...recortePedido(req.query, LINHAS_POR_PAGINA, TETO_DE_LINHAS),
         recomendacao: umDe(req.query.recomendacao, RECOMENDACOES),
       }),
     );
@@ -158,7 +145,7 @@ planningRouter.get(
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     res.json(
       await decisionBoard(days(req.query.days), storeId, group(req.query.group), {
-        ...recorte(req.query, CARDS_POR_PAGINA, 1000),
+        ...recortePedido(req.query, CARDS_POR_PAGINA, TETO_DE_CARDS),
         vista: {
           tipo: umDe(req.query.tipo, DECISION_TYPES),
           prioridade: umDe(req.query.prioridade, DECISION_PRIORITIES),

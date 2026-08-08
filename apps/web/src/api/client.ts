@@ -803,14 +803,29 @@ export interface CommercialStrategy {
 
 type PlanParams = Record<string, string | number | undefined>;
 
+/**
+ * As duas consultas que fazem o servidor rodar o motor inteiro aceitam o
+ * `AbortSignal` que o React Query entrega à `queryFn`.
+ *
+ * Não é refinamento. Sem repassar o sinal, trocar de filtro não cancela a
+ * requisição em voo: quatro cliques dentro da janela de ~1,6 s de uma resposta
+ * empilham quatro execuções concorrentes, cada uma materializando planos,
+ * posições e rebalance inteiros. A medição dá 769 MB de pico com TRÊS
+ * concorrentes e o processo roda com `--max-old-space-size=768` — a quarta
+ * estoura o heap e reinicia o contêiner, que é justamente o modo de falha que
+ * esta frente existe para remover. Estas rotas não têm limite de taxa; só o
+ * login tem.
+ */
 export const getPlanningOverview = (params: PlanParams) =>
   api.get<PlanningOverview>('/planning/overview', { params }).then((r) => r.data);
-export const getPurchaseSuggestions = (params: PlanParams) =>
-  api.get<PurchaseSuggestions>('/planning/purchase-suggestions', { params }).then((r) => r.data);
+export const getPurchaseSuggestions = (params: PlanParams, signal?: AbortSignal) =>
+  api
+    .get<PurchaseSuggestions>('/planning/purchase-suggestions', { params, signal })
+    .then((r) => r.data);
 export const getRebalancePlan = (params: PlanParams) =>
   api.get<RebalancePlan>('/planning/rebalance', { params }).then((r) => r.data);
-export const getDecisionBoard = (params: PlanParams) =>
-  api.get<DecisionBoard>('/planning/decisions', { params }).then((r) => r.data);
+export const getDecisionBoard = (params: PlanParams, signal?: AbortSignal) =>
+  api.get<DecisionBoard>('/planning/decisions', { params, signal }).then((r) => r.data);
 export const getCommercialStrategy = (params: PlanParams) =>
   api.get<CommercialStrategy>('/planning/strategy', { params }).then((r) => r.data);
 export const getPurchaseOrders = (params: PlanParams) =>

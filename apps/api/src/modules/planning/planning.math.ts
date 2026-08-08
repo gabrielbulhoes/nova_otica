@@ -2023,6 +2023,53 @@ export function paginar<T>(
   };
 }
 
+/**
+ * Máximo de itens que uma resposta paginada entrega, por mais que se peça.
+ *
+ * O teto existe porque a RESPOSTA é o recurso escasso — sem ele, `?pageSize=0`
+ * ou `?pageSize=999999` reconstroem o 503 que a paginação veio resolver.
+ *
+ * Mora aqui junto de `paginar`, e não na rota, porque a demo se declara espelho
+ * offline da API: enquanto o teto vivia só na rota, a demo servia 1.260 cards
+ * para um `?pageSize=100000` que contra a API devolve 1.000, e os testes que se
+ * apoiavam nesse número passavam verdes exatamente onde o contrato aperta.
+ * Espelho que não reflete o limite é pior que espelho nenhum.
+ */
+export const TETO_DE_CARDS = 1000;
+export const TETO_DE_LINHAS = 2000;
+
+/**
+ * Quanto cabe numa resposta quando a query não pede outra coisa.
+ *
+ * Ao lado do teto pelo mesmo motivo: são números do CONTRATO da resposta, e a
+ * demo precisa dos mesmos quatro para ser espelho de verdade. Enquanto viviam
+ * no serviço — que a web não pode importar, porque arrasta o Prisma junto — a
+ * demo os repetia à mão.
+ */
+export const CARDS_POR_PAGINA = 60;
+export const LINHAS_POR_PAGINA = 100;
+
+/**
+ * Saneia o `page`/`pageSize` que chegou pela query: página 1-based, tamanho
+ * entre 1 e `teto`, e o padrão da rota quando o valor falta ou é lixo.
+ *
+ * Uma implementação só, chamada pela rota e pela demo. Eram duas, e duas
+ * implementações de um mesmo corte só concordam enquanto alguém lembrar — foi
+ * assim que o teto ficou de fora do lado da demo.
+ */
+export function recortePedido(
+  bruto: { page?: unknown; pageSize?: unknown },
+  padrao: number,
+  teto: number,
+): { page: number; pageSize: number } {
+  const page = Math.trunc(Number(bruto.page));
+  const pageSize = Math.trunc(Number(bruto.pageSize));
+  return {
+    page: Number.isFinite(page) && page > 0 ? page : 1,
+    pageSize: Number.isFinite(pageSize) && pageSize > 0 ? Math.min(pageSize, teto) : padrao,
+  };
+}
+
 /** Uma aparição de card, como o lote de geração registra. */
 export interface CardHistory {
   cardId: string;

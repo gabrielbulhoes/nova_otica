@@ -13,6 +13,9 @@ import {
   finalizarBoard,
   grifesDoQuadro,
   paginar,
+  recortePedido,
+  TETO_DE_CARDS,
+  TETO_DE_LINHAS,
   suggestedDiscount,
   analysisBrand,
   bestOutletStore,
@@ -876,6 +879,45 @@ describe('resumo do quadro paginado (a mentira que a página contaria sozinha)',
     ];
     expect(grifesDoQuadro(misto)).toContain('ZEGNA');
     expect(grifesDoQuadro(misto.slice(0, 5))).not.toContain('ZEGNA');
+  });
+});
+
+describe('recortePedido (o saneamento de page/pageSize que a rota e a demo dividem)', () => {
+  it('prende o tamanho no teto, por mais que se peça', () => {
+    expect(recortePedido({ pageSize: 999_999 }, 60, TETO_DE_CARDS).pageSize).toBe(TETO_DE_CARDS);
+    expect(recortePedido({ pageSize: '100000' }, 100, TETO_DE_LINHAS).pageSize).toBe(TETO_DE_LINHAS);
+  });
+
+  it('valor ausente, zero, negativo ou lixo cai no padrão da rota', () => {
+    for (const v of [undefined, 0, -5, 'abc', null, {}]) {
+      expect(recortePedido({ pageSize: v }, 60, TETO_DE_CARDS).pageSize, String(v)).toBe(60);
+      expect(recortePedido({ page: v }, 60, TETO_DE_CARDS).page, String(v)).toBe(1);
+    }
+  });
+
+  it('página válida passa inteira — é ela que faz o "Ver mais" alcançar o fim', () => {
+    // Sem `page`, a cauda de uma lista maior que o teto fica inalcançável: era
+    // exatamente isso que a tela provocava ao só crescer o `pageSize`.
+    expect(recortePedido({ page: '17', pageSize: '60' }, 60, TETO_DE_CARDS)).toEqual({
+      page: 17,
+      pageSize: 60,
+    });
+  });
+
+  it('acima do teto, só a página alcança a cauda da lista', () => {
+    // A demo importa `TETO_DE_CARDS` daqui. Enquanto o teto morava escrito à
+    // mão na rota, a demo servia 1.260 cards para o pedido que contra a API
+    // devolvia 1.000, e o teste da demo passava verde sobre um contrato que a
+    // produção não cumpre.
+    const lista = Array.from({ length: TETO_DE_CARDS + 260 }, (_, i) => `item-${i}`);
+    const absurdo = recortePedido({ pageSize: '100000' }, 60, TETO_DE_CARDS);
+    const fatia = paginar(lista, absurdo.page, absurdo.pageSize);
+    expect(fatia.itens.length).toBe(TETO_DE_CARDS);
+    expect(fatia.itens).not.toContain(lista[lista.length - 1]);
+
+    // Pedindo PÁGINA, com tamanho fixo, o último item chega.
+    const ultima = recortePedido({ page: String(Math.ceil(lista.length / 60)), pageSize: '60' }, 60, TETO_DE_CARDS);
+    expect(paginar(lista, ultima.page, ultima.pageSize).itens).toContain(lista[lista.length - 1]);
   });
 });
 

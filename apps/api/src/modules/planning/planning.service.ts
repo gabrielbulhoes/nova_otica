@@ -24,7 +24,9 @@ import {
   paginar,
   supplierFor,
   storeCarriesBrand,
+  CARDS_POR_PAGINA,
   DEFAULT_PLANNING_CONFIG,
+  LINHAS_POR_PAGINA,
   matchesProductGroup,
   normBrandKey,
   type FairSplitInput,
@@ -283,9 +285,6 @@ export async function planningOverview(days: number, storeId?: string, group: Pr
   return buildOverview(await plans(days, storeId, group), days);
 }
 
-/** Quantas linhas de sugestão cabem numa resposta, quando não se pede outra coisa. */
-export const LINHAS_POR_PAGINA = 100;
-
 /** Recorte de vista da lista de sugestões (não muda nenhum número do resumo). */
 export interface OpcoesDeSugestoes {
   page?: number;
@@ -329,9 +328,6 @@ export async function purchaseOrders(days: number, storeId?: string, group: Prod
     : undefined;
   return buildPurchaseOrders(productPlans, days, resolve);
 }
-
-/** Quantos cards cabem numa resposta, quando não se pede outra coisa. */
-export const CARDS_POR_PAGINA = 60;
 
 /** Recorte da resposta do quadro: página + filtros de vista. */
 export interface OpcoesDoQuadro {

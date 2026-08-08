@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { TETO_DE_CARDS, TETO_DE_LINHAS } from '@planning';
+import { proximaPagina } from '../lib/paginacao';
 import { demoHandle } from './demo';
 
 /**
@@ -7,6 +9,34 @@ import { demoHandle } from './demo';
  */
 const get = (url: string, params?: Record<string, string | string[] | undefined>) =>
   demoHandle({ method: 'GET', url, params }) as Record<string, any>;
+
+/**
+ * O conjunto inteiro de uma rota paginada, buscado PÁGINA A PÁGINA.
+ *
+ * Existe porque `?pageSize=100000` não traz o conjunto inteiro: a rota — e
+ * agora a demo, que é o espelho dela — prende o tamanho num teto. Quem pede um
+ * número absurdo e trata o que volta como "tudo" escreve um teste que passa
+ * verde justamente quando o teto muda de lugar, que é o único momento em que
+ * ele precisava avisar.
+ */
+const todasAsPaginas = (
+  url: string,
+  campo: string,
+  params: Record<string, string | string[] | undefined> = {},
+  tamanho = 500,
+) => {
+  const itens: any[] = [];
+  let page: number | undefined = 1;
+  let idas = 0;
+  let ultima: Record<string, any> = {};
+  while (page !== undefined) {
+    if (++idas > 500) throw new Error(`${url} não chegou ao fim em ${idas} páginas`);
+    ultima = get(url, { ...params, page: String(page), pageSize: String(tamanho) });
+    itens.push(...(ultima[campo] as any[]));
+    page = proximaPagina(ultima.pagina);
+  }
+  return { itens, resposta: ultima };
+};
 
 describe('demo: /products/categories', () => {
   it('deriva as categorias do catálogo carregado (nada de lista fixa)', () => {
@@ -199,13 +229,14 @@ describe('demo: Onda 4 (feedback Galbe — lentes fora do remanejamento)', () =>
   });
 
   it('sugestões de compra usam "principal" por padrão (sem lentes)', () => {
-    // `pageSize` grande DE PROPÓSITO. A resposta passou a vir paginada, e a
-    // afirmação aqui é sobre o RECORTE inteiro: sem pedir todas as linhas, o
-    // teste continuaria verde provando só que não há lente nas 100 primeiras —
-    // e uma lente na linha 101 passaria batido.
-    const r = get('/planning/purchase-suggestions', { pageSize: '100000' });
-    const rows = r.rows as { description: string }[];
-    expect(rows.length).toBe(r.pagina.total);
+    // Página a página DE PROPÓSITO. A afirmação aqui é sobre o RECORTE inteiro:
+    // olhando só a primeira página, o teste provaria que não há lente nas 100
+    // primeiras e uma lente na linha 101 passaria batido. Pedir `pageSize`
+    // absurdo também não serve — a rota tem teto, e o que voltasse seria só
+    // outra página, com cara de conjunto inteiro.
+    const { itens, resposta } = todasAsPaginas('/planning/purchase-suggestions', 'rows');
+    const rows = itens as { description: string }[];
+    expect(rows.length).toBe(resposta.pagina.total);
     for (const row of rows) {
       expect(isLensDesc(row.description), `lente na compra padrão (${row.description})`).toBe(false);
     }
@@ -264,11 +295,25 @@ describe('demo: governança da decisão', () => {
  * da resposta paginada: a página encolhe, os NÚMEROS não.
  */
 describe('demo: o quadro pagina, o resumo não', () => {
+  it('a demo corta no MESMO teto da rota — pedir mais não traz mais', () => {
+    // O espelho estava cego exatamente no eixo que a paginação introduziu: a
+    // demo servia os 1.260 cards para um `?pageSize=100000` que contra a API
+    // devolve 1.000. Com a demo mentindo, todo teste que se apoiava nesse
+    // número virava um verde sem lastro — e o "Ver mais" da demonstração
+    // chegava a um fim que a tela de produção não alcança.
+    const absurdo = get('/planning/decisions', { pageSize: '100000' });
+    expect(absurdo.pagina.pageSize).toBe(TETO_DE_CARDS);
+    expect(absurdo.cards.length).toBe(TETO_DE_CARDS);
+    expect(absurdo.pagina.total).toBeGreaterThan(TETO_DE_CARDS); // o quadro é maior que o teto
+
+    const linhas = get('/planning/purchase-suggestions', { pageSize: '100000' });
+    expect(linhas.pagina.pageSize).toBe(TETO_DE_LINHAS);
+  });
+
   it('a página corta os cards e o resumo continua sendo o do quadro inteiro', () => {
-    const inteiro = get('/planning/decisions', { pageSize: '100000' });
+    const inteiro = todasAsPaginas('/planning/decisions', 'cards').resposta;
     const pagina = get('/planning/decisions', { pageSize: '5' });
 
-    expect(inteiro.cards.length).toBeGreaterThan(5);
     expect(pagina.cards.length).toBe(5);
     expect(pagina.pagina).toEqual({ page: 1, pageSize: 5, total: inteiro.summary.total });
 
@@ -281,13 +326,17 @@ describe('demo: o quadro pagina, o resumo não', () => {
   });
 
   it('a lista de grifes do seletor sai do quadro inteiro, não da página', () => {
-    const inteiro = get('/planning/decisions', { pageSize: '100000' });
+    const { itens, resposta } = todasAsPaginas('/planning/decisions', 'cards');
     const pagina = get('/planning/decisions', { pageSize: '3' });
-    expect(pagina.grifes).toEqual(inteiro.grifes);
+    expect(pagina.grifes).toEqual(resposta.grifes);
     // E é maior que o que a página sozinha ofereceria — senão o teste passaria
     // por acaso, num quadro onde todos os cards fossem da mesma grife.
     const naPagina = new Set((pagina.cards as any[]).map((c) => c.brandLabel).filter(Boolean));
     expect(pagina.grifes.length).toBeGreaterThan(naPagina.size);
+    // As grifes cobrem o quadro TODO, não só o que cabe numa resposta: um
+    // seletor montado sobre a fatia do teto perderia justo as grifes do fim.
+    const noQuadro = new Set((itens as any[]).map((c) => c.brandLabel).filter(Boolean));
+    expect(new Set(pagina.grifes as string[])).toEqual(noQuadro);
   });
 
   it('a página 2 continua de onde a 1 parou, sem repetir card', () => {
@@ -298,53 +347,69 @@ describe('demo: o quadro pagina, o resumo não', () => {
     expect(p2.pagina.page).toBe(2);
   });
 
+  it('página a página, o quadro inteiro é alcançável e nenhum card se repete', () => {
+    // O contrato que o "Ver mais" da tela depende: acima do teto, só chega ao
+    // último card quem pede PÁGINA. Com `pageSize` crescente a lista trava em
+    // `TETO_DE_CARDS` e o resto fica inalcançável.
+    const { itens, resposta } = todasAsPaginas('/planning/decisions', 'cards', {}, 200);
+    expect(itens.length).toBe(resposta.pagina.total);
+    expect(itens.length).toBeGreaterThan(TETO_DE_CARDS);
+    expect(new Set(itens.map((c) => c.id)).size).toBe(itens.length);
+  });
+
   it('os filtros de vista recortam os cards e deixam o resumo em paz', () => {
-    const inteiro = get('/planning/decisions', { pageSize: '100000' });
-    const so = get('/planning/decisions', { tipo: 'LIQUIDACAO', pageSize: '100000' });
-    expect(so.cards.length).toBeGreaterThan(0);
-    expect((so.cards as any[]).every((c) => c.type === 'LIQUIDACAO')).toBe(true);
+    const inteiro = todasAsPaginas('/planning/decisions', 'cards').resposta;
+    const { itens, resposta: so } = todasAsPaginas('/planning/decisions', 'cards', {
+      tipo: 'LIQUIDACAO',
+    });
+    expect(itens.length).toBeGreaterThan(0);
+    expect((itens as any[]).every((c) => c.type === 'LIQUIDACAO')).toBe(true);
     // A vista tem o tamanho do tipo; o resumo continua contando o quadro todo.
     expect(so.pagina.total).toBe(inteiro.summary.byType.liquidacao);
+    expect(itens.length).toBe(inteiro.summary.byType.liquidacao);
     expect(so.summary.total).toBe(inteiro.summary.total);
   });
 
   it('`loja` é filtro de VISTA e não muda a conta — `storeId` é que muda o escopo', () => {
-    const rede = get('/planning/decisions', { pageSize: '100000' });
-    const umaLoja = (rede.cards as any[]).find((c) => c.toStoreId)?.toStoreId as string;
+    const rede = todasAsPaginas('/planning/decisions', 'cards');
+    const umaLoja = (rede.itens as any[]).find((c) => c.toStoreId)?.toStoreId as string;
     expect(umaLoja).toBeTruthy();
 
-    const vista = get('/planning/decisions', { loja: umaLoja, pageSize: '100000' });
+    const vista = todasAsPaginas('/planning/decisions', 'cards', { loja: umaLoja });
     // Mesmo quadro, menos cards na tela: nenhum número do resumo se mexe.
-    expect(vista.summary).toEqual(rede.summary);
-    expect(vista.cards.length).toBeLessThan(rede.cards.length);
-    for (const c of vista.cards as any[]) {
+    expect(vista.resposta.summary).toEqual(rede.resposta.summary);
+    expect(vista.itens.length).toBeLessThan(rede.itens.length);
+    for (const c of vista.itens as any[]) {
       expect([c.fromStoreId, c.toStoreId, c.outletStoreId, c.outletFromStoreId]).toContain(umaLoja);
     }
     // Compra não tem loja: some da vista, e o resumo continua dizendo que existe.
-    expect((vista.cards as any[]).some((c) => c.type === 'COMPRA')).toBe(false);
+    expect((vista.itens as any[]).some((c) => c.type === 'COMPRA')).toBe(false);
   });
 });
 
 describe('demo: as sugestões de compra também paginam', () => {
   it('o resumo (inclusive o contador de risco) é do conjunto, não da página', () => {
-    const inteiro = get('/planning/purchase-suggestions', { pageSize: '100000' });
+    const inteiro = todasAsPaginas('/planning/purchase-suggestions', 'rows');
     const pagina = get('/planning/purchase-suggestions', { pageSize: '7' });
 
     expect(pagina.rows.length).toBe(7);
-    expect(pagina.pagina.total).toBe(inteiro.rows.length);
-    expect(pagina.summary).toEqual(inteiro.summary);
+    expect(pagina.pagina.total).toBe(inteiro.itens.length);
+    expect(pagina.summary).toEqual(inteiro.resposta.summary);
 
     // `emRisco` existe para a tela parar de baixar todas as linhas só para
     // contar: ele tem que bater com a contagem feita sobre as linhas inteiras.
-    const contadoNasLinhas = (inteiro.rows as any[]).filter((r) => r.stockoutInDays !== null).length;
+    const contadoNasLinhas = (inteiro.itens as any[]).filter((r) => r.stockoutInDays !== null).length;
     expect(pagina.summary.emRisco).toBe(contadoNasLinhas);
   });
 
   it('`recomendacao` recorta as linhas sem mexer no resumo', () => {
-    const so = get('/planning/purchase-suggestions', { recomendacao: 'LIQUIDATE', pageSize: '100000' });
-    expect(so.rows.length).toBeGreaterThan(0);
-    expect((so.rows as any[]).every((r) => r.recommendation === 'LIQUIDATE')).toBe(true);
-    expect(so.pagina.total).toBe(so.summary.liquidate);
+    const { itens, resposta } = todasAsPaginas('/planning/purchase-suggestions', 'rows', {
+      recomendacao: 'LIQUIDATE',
+    });
+    expect(itens.length).toBeGreaterThan(0);
+    expect((itens as any[]).every((r) => r.recommendation === 'LIQUIDATE')).toBe(true);
+    expect(resposta.pagina.total).toBe(resposta.summary.liquidate);
+    expect(itens.length).toBe(resposta.summary.liquidate);
   });
 });
 
@@ -362,12 +427,42 @@ describe('demo: lote de geração', () => {
     }
     expect(b.summary.novos).toBeGreaterThan(0);
     // Contra `summary.total`, e não contra `cards.length`: novos e atrasados
-    // são contados sobre o QUADRO, e `cards` é só a página. Como estava, no dia
-    // em que a página ficasse menor que o quadro — que é hoje — a comparação
-    // passaria a ser entre grandezas de tamanhos diferentes, e teria virado um
-    // falso negativo silencioso em vez de uma prova.
+    // são contados sobre o QUADRO, e `cards` é só a página.
     expect(b.summary.novos + b.summary.atrasados).toBeLessThanOrEqual(b.summary.total);
-    expect(b.cards.length).toBeLessThanOrEqual(b.summary.total);
+  });
+
+  it('cada página traz exatamente o que sobrou do corte, e o resumo não muda entre elas', () => {
+    // Antes daqui morava `cards.length <= summary.total`, que é verdade por
+    // construção — `cards` é uma fatia do conjunto que `summary.total` conta.
+    // Um handler que devolvesse `cards: []` em toda requisição, ou a página
+    // errada, ou o corte no lugar errado, passava por ela: 0 <= 1.260 é
+    // verdadeiro. Uma invariante que nenhuma implementação plausível quebra não
+    // é uma prova, é um comentário com sintaxe de teste.
+    //
+    // O que se prende agora é o TAMANHO EXATO de cada página — min(pageSize,
+    // total - deslocamento) — e a estabilidade do resumo, que é o contrato que
+    // a tela lê nos indicadores.
+    const tamanho = 400;
+    const primeira = get('/planning/decisions', { page: '1', pageSize: String(tamanho) });
+    const total: number = primeira.pagina.total;
+    // Sem sobra na última página o teste não veria a diferença entre cortar
+    // certo e cortar sempre `pageSize` itens.
+    expect(total % tamanho).not.toBe(0);
+
+    const ultima = Math.ceil(total / tamanho);
+    expect(ultima).toBeGreaterThan(1);
+    for (let page = 1; page <= ultima; page++) {
+      const r = get('/planning/decisions', { page: String(page), pageSize: String(tamanho) });
+      const esperado = Math.min(tamanho, total - (page - 1) * tamanho);
+      expect(r.cards.length, `página ${page}`).toBe(esperado);
+      expect(r.summary, `resumo na página ${page}`).toEqual(primeira.summary);
+      expect(r.pagina.total, `total na página ${page}`).toBe(total);
+    }
+
+    // Passada do fim: nenhuma linha, e o resumo continua o mesmo.
+    const vazia = get('/planning/decisions', { page: String(ultima + 1), pageSize: String(tamanho) });
+    expect(vazia.cards.length).toBe(0);
+    expect(vazia.summary).toEqual(primeira.summary);
   });
 
   it('a idade de um card é estável entre chamadas (não muda a cada recarga)', () => {

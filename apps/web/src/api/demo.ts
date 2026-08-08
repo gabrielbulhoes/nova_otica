@@ -30,10 +30,15 @@ import {
   filtrarVista,
   grifesDoQuadro,
   paginar,
+  recortePedido,
   DECISION_PRIORITIES,
   DECISION_TYPES,
   DEFAULT_PLANNING_CONFIG,
   RECOMENDACOES,
+  CARDS_POR_PAGINA,
+  LINHAS_POR_PAGINA,
+  TETO_DE_CARDS,
+  TETO_DE_LINHAS,
   type AbcItem,
   type BrandBannerInput,
   type FairSplitInput,
@@ -1352,19 +1357,27 @@ const umDe = <T extends string>(v: unknown, aceitos: readonly T[]): T | undefine
   aceitos.includes(v as T) ? (v as T) : undefined;
 
 /**
- * `page` e `pageSize` da query, com o padrão da rota. Devolve na ordem em que
- * `paginar` os recebe, para o chamador não poder trocar os dois de lugar.
+ * `page` e `pageSize` da query, saneados pela MESMA função da rota — teto
+ * incluído. Devolve na ordem em que `paginar` os recebe, para o chamador não
+ * poder trocar os dois de lugar.
+ *
+ * A demo tinha um saneamento próprio, e ele não tinha teto: `?pageSize=100000`
+ * devolvia os 1.260 cards aqui e 1.000 contra a API. Um espelho cego no eixo
+ * que a mudança introduziu deixa os testes verdes justamente onde o contrato
+ * aperta — e ainda faz o "Ver mais" da demonstração chegar a um fim que a tela
+ * de produção não alcança.
  */
 const recorte = (
   params: Record<string, string | string[] | undefined>,
   padrao: number,
+  teto: number,
 ): [number, number] => {
-  const page = Math.trunc(Number(one(params.page)));
-  const pageSize = Math.trunc(Number(one(params.pageSize)));
-  return [
-    Number.isFinite(page) && page > 0 ? page : 1,
-    Number.isFinite(pageSize) && pageSize > 0 ? pageSize : padrao,
-  ];
+  const { page, pageSize } = recortePedido(
+    { page: one(params.page), pageSize: one(params.pageSize) },
+    padrao,
+    teto,
+  );
+  return [page, pageSize];
 };
 
 export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest): unknown {
@@ -1796,7 +1809,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     // cortam as linhas, e o `summary` continua sendo do conjunto analisado.
     const rec = umDe(one(params.recomendacao), RECOMENDACOES);
     const vista = rec ? r.rows.filter((x) => x.recommendation === rec) : r.rows;
-    const { itens, pagina } = paginar(vista, ...recorte(params, 100));
+    const { itens, pagina } = paginar(vista, ...recorte(params, LINHAS_POR_PAGINA, TETO_DE_LINHAS));
     return { ...r, rows: itens, pagina };
   }
   if (url === '/planning/purchase-orders' && m === 'GET')
@@ -2006,7 +2019,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       loja: one(params.loja) || undefined,
       grife: one(params.grife) || undefined,
     });
-    const { itens, pagina } = paginar(vista, ...recorte(params, 60));
+    const { itens, pagina } = paginar(vista, ...recorte(params, CARDS_POR_PAGINA, TETO_DE_CARDS));
     return annotateCardAges(
       { summary: board.summary, cards: itens, grifes, pagina },
       history,
