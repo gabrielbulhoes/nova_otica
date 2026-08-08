@@ -1108,3 +1108,59 @@ describe('demo: o remanejamento aplica as travas que a tela anuncia', () => {
     expect(saindo()).toBe(antes);
   });
 });
+
+describe('demo: o mix de grifes chega ao motor, não só à tabela', () => {
+  const put = (url: string, body: Record<string, unknown>) =>
+    demoHandle({ method: 'PUT', url, body }) as Record<string, any>;
+
+  /**
+   * A demonstração era write-only aqui: marcar uma grife como fora do mix
+   * marcava a linha e nada mais. A aba de compras seguia sugerindo comprá-la —
+   * o oposto do que a plataforma promete, e justamente no ambiente em que a
+   * promessa é apresentada a quem decide.
+   */
+  it('marcar uma grife tira as sugestões de COMPRA dela', () => {
+    const { itens } = todasAsPaginas('/planning/purchase-suggestions', 'rows');
+    const linhas = itens as { description: string; brand: string | null; recommendation: string }[];
+    const compras = linhas.filter((r) => r.recommendation === 'BUY');
+    expect(compras.length, 'a demo precisa ter alguma compra sugerida').toBeGreaterThan(0);
+
+    // A grife com MAIS linhas de compra, para a diferença ser visível.
+    const porGrife = new Map<string, number>();
+    for (const r of compras) {
+      const g = (get('/planning/brand-mix').rows as { brand: string }[]).find((x) =>
+        r.description.toUpperCase().includes(x.brand.toUpperCase()),
+      )?.brand;
+      if (g) porGrife.set(g, (porGrife.get(g) ?? 0) + 1);
+    }
+    const [grife, quantas] = [...porGrife.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+    expect(grife, 'nenhuma grife casou com as linhas de compra').toBeTruthy();
+
+    try {
+      put('/planning/brand-mix', { brand: grife, discontinued: true });
+      const depois = (
+        todasAsPaginas('/planning/purchase-suggestions', 'rows').itens as typeof linhas
+      ).filter(
+        (r) => r.recommendation === 'BUY' && r.description.toUpperCase().includes(grife.toUpperCase()),
+      );
+      expect(depois.length, `${grife} tinha ${quantas} compras e deveria ter zero`).toBe(0);
+    } finally {
+      put('/planning/brand-mix', { brand: grife, discontinued: false });
+    }
+  });
+
+  it('desmarcar com outra forma do nome funciona — a chave é normalizada', () => {
+    // O mesmo defeito que a produção acabou de corrigir, que a demo repetia:
+    // marcar por uma forma e desmarcar por outra deixava a marcação presa.
+    const alvo = (get('/planning/brand-mix').rows as { brand: string }[])[0].brand;
+    const marcada = () =>
+      (get('/planning/brand-mix').rows as { brand: string; discontinued: boolean }[]).some(
+        (r) => r.brand.toUpperCase() === alvo.toUpperCase() && r.discontinued,
+      );
+
+    put('/planning/brand-mix', { brand: alvo.toLowerCase(), discontinued: true });
+    expect(marcada()).toBe(true);
+    put('/planning/brand-mix', { brand: alvo.toUpperCase(), discontinued: false });
+    expect(marcada()).toBe(false);
+  });
+});

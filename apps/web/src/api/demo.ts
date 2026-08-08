@@ -9,6 +9,7 @@
  */
 import {
   analysisBrand,
+  normBrandKey,
   abcFromItems,
   analyzeProduct,
   buildCommercialStrategy,
@@ -249,7 +250,17 @@ const demoLeadTimes = new Map<string, number>([
 // Grifes fora do mix atual da rede (feedback 6.0 · item 03). Começa vazia de
 // propósito: é uma declaração comercial, e inventar uma na demonstração seria
 // mostrar ao cliente uma decisão que ele não tomou.
+/**
+ * Grifes marcadas como fora do mix na demonstração, pela CHAVE NORMALIZADA — a
+ * mesma régua da API (`normBrandKey`). Guardar a string literal da tela repetia
+ * aqui o defeito que a produção acabou de corrigir: marcar por uma forma e
+ * desmarcar por outra deixava a marcação presa, sem erro nenhum.
+ */
 const demoForaDoMix = new Set<string>();
+
+/** A grife está fora do mix? Aceita qualquer forma do nome. */
+const foraDoMixDemo = (grife: string | null) =>
+  grife != null && demoForaDoMix.has(normBrandKey(grife));
 
 // Histórico de pedidos de compra (enviado/recebido) da demo
 interface DemoOrderRecord {
@@ -1811,6 +1822,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           unitPrice: prod.price,
           costEstimated: prod.cost == null,
           onOrderQty: onOrderQty(prod.id),
+          // A marcação de "fora do mix" chega ao MOTOR, e não só à tabela da
+          // tela. Sem isto a demonstração era write-only: o gestor marcava a
+          // grife, a linha ficava marcada, e a aba de compras seguia sugerindo
+          // comprá-la — o oposto do que a plataforma promete, e justamente no
+          // ambiente em que a promessa é apresentada.
+          brandDiscontinued: foraDoMixDemo(analysisBrand(prod.description, prod.category, prod.brand)),
           demandHistory: demoDemandHistory(prod, scope, period),
         },
         period,
@@ -2191,7 +2208,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     for (const p of products) {
       const grife = analysisBrand(p.description, p.category, p.brand);
       if (!grife) continue;
-      const k = grife.toUpperCase();
+      const k = normBrandKey(grife);
       const atual = contagem.get(k);
       if (atual) atual.products += 1;
       else contagem.set(k, { brand: grife, products: 1 });
@@ -2199,19 +2216,19 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const rows = [...contagem.values()].map((c) => ({
       brand: c.brand,
       products: c.products,
-      discontinued: demoForaDoMix.has(c.brand),
+      discontinued: foraDoMixDemo(c.brand),
     }));
     for (const b of demoForaDoMix) {
-      if (!contagem.has(b.toUpperCase())) rows.push({ brand: b, products: 0, discontinued: true });
+      if (!contagem.has(b)) rows.push({ brand: b, products: 0, discontinued: true });
     }
     rows.sort((a, b) => b.products - a.products || a.brand.localeCompare(b.brand, 'pt-BR'));
     return { rows };
   }
   if (url === '/planning/brand-mix' && m === 'PUT') {
-    const brand = String(body.brand ?? '');
-    if (body.discontinued === true) demoForaDoMix.add(brand);
-    else demoForaDoMix.delete(brand);
-    return { brand, discontinued: demoForaDoMix.has(brand) };
+    const chave = normBrandKey(String(body.brand ?? ''));
+    if (body.discontinued === true) demoForaDoMix.add(chave);
+    else demoForaDoMix.delete(chave);
+    return { brand: chave, discontinued: demoForaDoMix.has(chave) };
   }
 
   // Mix de marcas por bandeira (feedback 04 fase 2)
