@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TETO_DE_CARDS, TETO_DE_LINHAS } from '@planning';
+import { TETO_DE_CARDS, TETO_DE_LINHAS, analysisBrand, normBrandKey } from '@planning';
 import { proximaPagina } from '../lib/paginacao';
 import { demoHandle, demoIdadeNaLoja } from './demo';
 
@@ -1119,34 +1119,58 @@ describe('demo: o mix de grifes chega ao motor, não só à tabela', () => {
    * o oposto do que a plataforma promete, e justamente no ambiente em que a
    * promessa é apresentada a quem decide.
    */
-  it('marcar uma grife tira as sugestões de COMPRA dela', () => {
-    const { itens } = todasAsPaginas('/planning/purchase-suggestions', 'rows');
-    const linhas = itens as { description: string; brand: string | null; recommendation: string }[];
-    const compras = linhas.filter((r) => r.recommendation === 'BUY');
-    expect(compras.length, 'a demo precisa ter alguma compra sugerida').toBeGreaterThan(0);
+  it('marcar uma grife muda a recomendação das peças dela', () => {
+    const linhas = () =>
+      todasAsPaginas('/planning/purchase-suggestions', 'rows').itens as {
+        productId: string;
+        description: string;
+        unitsSold: number;
+        brand: string | null;
+        category: string | null;
+        recommendation: string;
+        reason: string;
+      }[];
 
-    // A grife com MAIS linhas de compra, para a diferença ser visível.
-    const porGrife = new Map<string, number>();
-    for (const r of compras) {
-      const g = (get('/planning/brand-mix').rows as { brand: string }[]).find((x) =>
-        r.description.toUpperCase().includes(x.brand.toUpperCase()),
-      )?.brand;
-      if (g) porGrife.set(g, (porGrife.get(g) ?? 0) + 1);
-    }
-    const [grife, quantas] = [...porGrife.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
-    expect(grife, 'nenhuma grife casou com as linhas de compra').toBeTruthy();
+    // Uma grife com peça que VENDE, e casada pelo mesmo rótulo que a tela de
+    // mix oferece. A primeira versão deste teste exigia uma linha de COMPRA — e
+    // ficou verde aqui e vermelha na CI, porque o catálogo real (gitignorado)
+    // tem compras sugeridas e o fictício não tem nenhuma. O que a marcação faz
+    // não depende de haver compra: com giro, ela vira DONT_BUY e a peça declara
+    // `situacao: 'fora-do-mix'`.
+    // Casado pela MESMA extração que o motor usa, e não por `includes`: a
+    // primeira versão comparava a descrição com o rótulo da tela por substring,
+    // e "BAN" casava com "RAY BAN" — o teste marcava uma grife e cobrava o
+    // resultado em outra.
+    const grifeDe = (r: { description: string; category: string | null; brand: string | null }) =>
+      analysisBrand(r.description, r.category, r.brand);
+    // `reason` e não `situacao`: a rota devolve a razão em texto, e a peça com
+    // giro cuja grife saiu do mix ganha "Grife fora do mix atual da rede".
+    // Serve mesmo quando a linha já era DONT_BUY por outro motivo — e é o que
+    // o gestor lê na tela.
+    const foraDoMix = (r: { reason: string }) => /fora do mix/i.test(r.reason);
+    const antes = linhas();
+    const comGiro = antes.find((r) => r.unitsSold > 0 && !foraDoMix(r) && grifeDe(r));
+    expect(comGiro, 'nenhuma peça com giro e grife identificável').toBeTruthy();
+    const grife = grifeDe(comGiro!)!;
+    const casa = (r: (typeof antes)[number]) =>
+      normBrandKey(grifeDe(r) ?? '') === normBrandKey(grife) && r.unitsSold > 0;
+    const doGrife = (rs: typeof antes) => rs.filter(casa);
+    expect(doGrife(antes).some(foraDoMix)).toBe(false);
 
     try {
       put('/planning/brand-mix', { brand: grife, discontinued: true });
-      const depois = (
-        todasAsPaginas('/planning/purchase-suggestions', 'rows').itens as typeof linhas
-      ).filter(
-        (r) => r.recommendation === 'BUY' && r.description.toUpperCase().includes(grife.toUpperCase()),
-      );
-      expect(depois.length, `${grife} tinha ${quantas} compras e deveria ter zero`).toBe(0);
+      const depois = doGrife(linhas());
+      expect(depois.length).toBeGreaterThan(0);
+      for (const r of depois) {
+        expect(foraDoMix(r), `${r.description} deveria dizer que a grife saiu do mix`).toBe(true);
+        expect(r.recommendation, `${r.description} não pode ser reposta`).not.toBe('BUY');
+      }
     } finally {
       put('/planning/brand-mix', { brand: grife, discontinued: false });
     }
+    // E desmarcar devolve tudo: sem isto, o teste deixaria a demo alterada para
+    // quem rodasse depois dele.
+    expect(doGrife(linhas()).some(foraDoMix)).toBe(false);
   });
 
   it('desmarcar com outra forma do nome funciona — a chave é normalizada', () => {
