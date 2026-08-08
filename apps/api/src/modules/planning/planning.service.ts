@@ -282,8 +282,72 @@ export async function purchaseSuggestions(days: number, storeId?: string, group:
   return buildSuggestions(await plans(days, storeId, group), days);
 }
 
-/** Rascunhos de ordem de compra agrupados pelo fornecedor canônico (catálogo). */
-export async function purchaseOrders(days: number, storeId?: string, group: ProductGroup = 'todos') {
+/**
+ * Posições por loja (venda no período + estoque atual) das peças informadas —
+ * o insumo do rateio por necessidade na aba de compras.
+ *
+ * Uma consulta agregada por `productId IN (...)`, de propósito: o
+ * `findMany` de `rebalancePlan` traz uma linha de SaleItem por VENDA, o que na
+ * base real são centenas de milhares de linhas para depois somar em memória.
+ * Aqui o recorte é fechado (só os SKUs com recomendação de COMPRA) e a soma é
+ * do banco, então o que trafega é da ordem de itens × lojas.
+ */
+async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<string, FairSplitInput[]>> {
+  const posicoes = new Map<string, FairSplitInput[]>();
+  if (productIds.length === 0) return posicoes;
+
+  const [lojas, vendas, estoques] = await Promise.all([
+    prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
+    prisma.$queryRaw<{ storeId: string; productId: string; units: number }[]>(Prisma.sql`
+      SELECT s."storeId" AS "storeId", si."productId" AS "productId", SUM(si.quantity)::int AS units
+      FROM "SaleItem" si
+      JOIN "Sale" s ON s.id = si."saleId"
+      JOIN "Store" lo ON lo.id = s."storeId" AND ${plannedStoreSql('lo')}
+      WHERE si."productId" IN (${Prisma.join(productIds)}) AND s."saleDate" >= ${periodStart(days)}
+      GROUP BY s."storeId", si."productId"
+    `),
+    prisma.stockItem.findMany({
+      where: { productId: { in: productIds }, store: PLANNED_STORE_WHERE },
+      select: { storeId: true, productId: true, quantity: true },
+    }),
+  ]);
+
+  const vendaPor = new Map(vendas.map((v) => [`${v.productId}:${v.storeId}`, Math.max(0, v.units)]));
+  const estoquePor = new Map(estoques.map((e) => [`${e.productId}:${e.storeId}`, e.quantity]));
+  for (const id of productIds) {
+    posicoes.set(
+      id,
+      lojas.map((l) => ({
+        storeId: l.id,
+        storeName: l.name,
+        unitsSold: vendaPor.get(`${id}:${l.id}`) ?? 0,
+        stockUnits: estoquePor.get(`${id}:${l.id}`) ?? 0,
+      })),
+    );
+  }
+  return posicoes;
+}
+
+/**
+ * Rascunhos de ordem de compra agrupados pelo fornecedor canônico (catálogo),
+ * cada item já rateado entre as lojas quando `comRateio` é verdadeiro.
+ *
+ * `comRateio` é falso para quem não é ADMIN — ver o comentário da rota
+ * `GET /planning/purchase-orders` em planning.routes.ts, que explica a decisão.
+ *
+ * O default é FALSO, e é o inverso do que era. Fail-open aqui não protege
+ * ninguém: quem quer o rateio pede, e quem não pede não paga a conta. Com o
+ * default aberto, `publishPlanningAlert(90)` — que usa só os contadores do
+ * resumo — disparava a consulta de posições a cada sincronização do ERP e
+ * jogava o resultado fora. Custo invisível é o pior tipo: não erra a saída,
+ * então nada o denuncia.
+ */
+export async function purchaseOrders(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'todos',
+  comRateio = false,
+) {
   const [productPlans, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
   // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
   // sem ele, cai no campo "marca" do ERP (comportamento anterior).
@@ -295,7 +359,27 @@ export async function purchaseOrders(days: number, storeId?: string, group: Prod
   const resolve = catalog
     ? (p: ProductPlan) => supplierFor(analysisBrand(p.description, p.category, p.brand), catalog)
     : undefined;
-  return buildPurchaseOrders(productPlans, days, resolve);
+  // COM FILTRO DE LOJA NÃO HÁ RATEIO, e não é economia: é que não existe o que
+  // repartir. `plans` escopa venda E estoque à loja filtrada, então
+  // `suggestedQty` já é a compra DAQUELA loja. Ratear esse número entre a rede
+  // endereçava mercadoria a lojas cuja demanda nem entrou na conta — no dado
+  // real, 3 das 5 unidades pedidas por causa de uma loja iam para outras três.
+  //
+  // Escopar as posições também não serve: daria 100% para a loja filtrada, que
+  // é um número certo apresentado como se fosse uma decisão. A tela diz, em uma
+  // linha, que o rateio vive na visão da rede.
+  //
+  // Só os SKUs que viram item de pedido entram na consulta de posições: o
+  // recorte pode ter dezenas de milhares de peças, e a esmagadora maioria não
+  // tem nada a distribuir.
+  const posicoes =
+    comRateio && !storeId
+      ? await posicoesPorLoja(
+          productPlans.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId),
+          days,
+        )
+      : undefined;
+  return buildPurchaseOrders(productPlans, days, resolve, posicoes);
 }
 
 /**
@@ -420,7 +504,12 @@ export async function commercialStrategy(
  * o aviso sem o lojista precisar abrir o Planejamento.
  */
 export async function publishPlanningAlert(days = 90): Promise<void> {
-  const po = await purchaseOrders(days);
+  // Sem rateio, EXPLÍCITO: o evento leva só contadores do resumo, e o rateio
+  // custa um agregado com um bind param por SKU de compra mais um findMany de
+  // estoque — a cada sincronização, para ser descartado. Escrito à mão mesmo
+  // com o default já sendo falso, porque quem lê esta linha precisa ver que a
+  // ausência é decisão e não esquecimento.
+  const po = await purchaseOrders(days, undefined, 'todos', false);
   if (po.summary.items > 0) {
     publish({
       type: 'planning.urgent',

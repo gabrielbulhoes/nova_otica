@@ -1512,7 +1512,31 @@ export interface PurchaseOrderItem {
   stockoutInDays: number | null;
   /** Confiabilidade da sugestão de compra deste item (0–100). */
   confidence: number;
+  /**
+   * Como dividir esta compra entre as lojas. Ausente quando o chamador não
+   * passou as posições por loja — e ausente NÃO é "dividir igual": é "esta
+   * resposta não foi calculada", que a tela precisa poder dizer.
+   */
+  distribution?: ItemDistribution;
 }
+
+/** Rateio de um item de pedido entre as lojas, pronto para a tela. */
+export interface ItemDistribution {
+  basis: NeedBasis;
+  /** O que a base significa em palavras, para a tela não ter que traduzir. */
+  basisLabel: string;
+  /** Necessidade CRUA somada (un.): a carga cobre a falta da rede ou não. */
+  totalNeed: number;
+  rows: NeedSplitRow[];
+  /** Unidades que nenhuma loja reclamou — ficam para divisão manual. */
+  unassigned: number;
+}
+
+export const NEED_BASIS_LABEL: Record<NeedBasis, string> = {
+  necessidade: 'falta até a cobertura-alvo de cada loja — venda e estoque na mesma conta',
+  participacao:
+    'participação de cada loja nas vendas — nenhuma loja está abaixo do alvo (ou a peça não tem histórico)',
+};
 
 export interface PurchaseOrder {
   /** Fornecedor (campo "marca" do ERP); itens sem fornecedor ficam em "Sem fornecedor". */
@@ -1552,6 +1576,16 @@ export function buildPurchaseOrders(
   /** Opcional: fornecedor canônico por plano (catálogo de marcas). Sem ele,
    *  agrupa pelo campo do ERP (p.brand). */
   resolveSupplier?: (p: ProductPlan) => string | null,
+  /**
+   * Opcional: posições por loja (venda no período + estoque atual) de cada
+   * productId. Com elas, cada item sai da função já rateado entre as lojas.
+   *
+   * É o QUARTO parâmetro por obrigação, não por gosto: `resolveSupplier` já é
+   * passado posicionalmente como terceiro em chamadas que existem (inclusive
+   * em teste), e há chamadas com dois argumentos. Empurrar as posições para
+   * antes dele quebraria todas em silêncio — o tipo de quebra que compila.
+   */
+  positions?: Map<string, FairSplitInput[]>,
 ): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
@@ -1582,6 +1616,22 @@ export function buildPurchaseOrders(
     // ZEISS. Sem grife reconhecível, melhor não etiquetar.
     const productBrand = extractBrand(p.description, p.category);
     if (productBrand && !order.brands.includes(productBrand)) order.brands.push(productBrand);
+
+    // O rateio usa a MESMA janela `days` das vendas do plano: a necessidade é
+    // alvo de cobertura menos estoque, e o alvo sai da demanda diária — que só
+    // é comparável entre lojas se todas foram medidas no mesmo período.
+    //
+    // ARMADILHA MEDIDA: a demanda do rateio é a média chata (unitsSold ÷ days),
+    // enquanto `p.suggestedQty` veio de `forecastDemand`, com peso na janela
+    // recente e índice sazonal. Os dois não batem, e não deveriam: no dado real
+    // vimos um item comprar 20 un. contra um `totalNeed` de 2,5. Previsão por
+    // LOJA exigiria histórico mensal loja a loja, e o rateio precisa só de
+    // PESOS RELATIVOS — que a média preserva. O que não se pode é ler
+    // `totalNeed` como "o quanto a rede precisa comprar": ele é um piso de
+    // média, e por isso aparece na tela AO LADO da quantidade, nunca no lugar.
+    const posicoes = positions?.get(p.productId);
+    const rateio = posicoes ? splitByNeed(posicoes, p.suggestedQty, days) : null;
+
     order.items.push({
       productId: p.productId,
       description: p.description,
@@ -1593,6 +1643,17 @@ export function buildPurchaseOrders(
       orderByInDays: p.orderByInDays,
       stockoutInDays: p.stockoutInDays,
       confidence: p.confidence,
+      ...(rateio
+        ? {
+            distribution: {
+              basis: rateio.basis,
+              basisLabel: NEED_BASIS_LABEL[rateio.basis],
+              totalNeed: rateio.totalNeed,
+              rows: rateio.rows.filter((r) => r.suggestedQty > 0),
+              unassigned: rateio.unassigned,
+            },
+          }
+        : {}),
     });
     order.units += p.suggestedQty;
     order.total = round2(order.total + p.capital);
@@ -1795,6 +1856,53 @@ export function buildBrandMix(rows: BrandBannerInput[]): { banners: string[]; ro
   return { banners, rows: out };
 }
 
+// ─── Rateio de unidades inteiras: o núcleo dos maiores restos ────────────────
+
+/**
+ * Reparte `totalQty` unidades INTEIRAS entre pesos quaisquer pelo método dos
+ * maiores restos: cada peso leva a parte inteira da sua fatia exata, e o que
+ * sobra do arredondamento vai, uma a uma, para os maiores restos. A soma do
+ * resultado é EXATAMENTE `totalQty` — a única propriedade que importa quando o
+ * que se reparte é mercadoria física: unidade que evapora no arredondamento é
+ * estoque que ninguém procura.
+ *
+ * Mora aqui fora, e não dentro de `buildFairSplit`, porque a conta não tem
+ * nada a ver com vendas — ela reparte por QUALQUER peso. Enquanto ela estava
+ * presa lá dentro, rateio por participação e rateio por necessidade seriam
+ * duas implementações do mesmo arredondamento, e uma delas ia divergir.
+ *
+ * `tieBreak` recebe dois ÍNDICES e ordena o desempate entre restos iguais (o
+ * caso de lojas com a mesma participação). Sem ele o desempate cai na ordem de
+ * entrada, que é a ordem em que o banco devolveu as linhas — e o mesmo pedido
+ * rateado duas vezes daria respostas diferentes.
+ *
+ * Peso negativo vira 0: devolução lançada como venda líquida negativa existe
+ * no dado real, e um peso negativo inverteria o rateio inteiro.
+ */
+export function largestRemainders(
+  weights: number[],
+  totalQty: number,
+  tieBreak?: (i: number, j: number) => number,
+): number[] {
+  const qty = Math.max(0, Math.trunc(totalQty));
+  const pesos = weights.map((w) => (Number.isFinite(w) && w > 0 ? w : 0));
+  const total = pesos.reduce((a, b) => a + b, 0);
+  if (qty === 0 || total === 0) return pesos.map(() => 0);
+
+  const exact = pesos.map((w) => (qty * w) / total);
+  const base = exact.map(Math.floor);
+  let rest = qty - base.reduce((a, b) => a + b, 0);
+  const order = pesos
+    .map((_, i) => i)
+    .sort((i, j) => exact[j] - base[j] - (exact[i] - base[i]) || (tieBreak ? tieBreak(i, j) : 0));
+  for (const i of order) {
+    if (rest <= 0) break;
+    base[i] += 1;
+    rest -= 1;
+  }
+  return base;
+}
+
 // ─── Modo Feira: rateio de compra por loja (feedback 08, MVP) ────────────────
 
 export interface FairSplitInput {
@@ -1802,7 +1910,12 @@ export interface FairSplitInput {
   storeName: string;
   /** Unidades da marca/grupo vendidas pela loja no período. */
   unitsSold: number;
-  /** Estoque atual da marca/grupo na loja (contexto, não entra no rateio). */
+  /**
+   * Estoque atual da loja na chave rateada. É contexto em `buildFairSplit`
+   * (que só olha participação) e é METADE DA CONTA em `splitByNeed` — a mesma
+   * entrada serve às duas portas justamente para que trocar de régua não exija
+   * trocar de consulta.
+   */
   stockUnits: number;
 }
 
@@ -1814,51 +1927,167 @@ export interface FairSplitRow extends FairSplitInput {
 /**
  * Rateia uma compra (lançamentos de feira, sem histórico próprio) entre as
  * lojas proporcionalmente à participação de cada uma nas VENDAS da marca ou
- * do grupo escolhido. Arredondamento pelo método dos maiores restos — a soma
- * das sugestões é EXATAMENTE totalQty. Loja sem venda da marca não recebe.
+ * do grupo escolhido. Loja sem venda da marca não recebe.
+ *
+ * Casca fina sobre `largestRemainders`: o que sobrou aqui é a REGRA (peso =
+ * venda) e a apresentação (participação em %). Continua existindo como porta
+ * própria porque o Modo Feira pergunta outra coisa — "quem vende mais?" — e
+ * essa pergunta tem resposta legítima quando o gestor digita marca e
+ * quantidade à mão, sem posição de estoque nenhuma na tela.
  */
 export function buildFairSplit(
   rows: FairSplitInput[],
   totalQty: number,
 ): { totalQty: number; totalSold: number; rows: FairSplitRow[] } {
   // Devoluções podem vir como venda líquida negativa; participação nunca é
-  // negativa — clampa em 0 para o rateio dos maiores restos não se inverter.
-  rows = rows.map((r) => ({ ...r, unitsSold: Math.max(0, r.unitsSold) }));
-  const totalSold = rows.reduce((a, r) => a + r.unitsSold, 0);
+  // negativa — clampa em 0 antes de somar, para o total não encolher.
+  const limpas = rows.map((r) => ({ ...r, unitsSold: Math.max(0, r.unitsSold) }));
+  const totalSold = limpas.reduce((a, r) => a + r.unitsSold, 0);
   const qty = Math.max(0, Math.trunc(totalQty));
   if (qty === 0 || totalSold === 0) {
     return {
       totalQty: qty,
       totalSold,
-      rows: rows
+      rows: limpas
         .map((r) => ({ ...r, sharePct: 0, suggestedQty: 0 }))
         .sort((a, b) => b.unitsSold - a.unitsSold || a.storeName.localeCompare(b.storeName, 'pt-BR')),
     };
   }
 
-  const exact = rows.map((r) => (qty * r.unitsSold) / totalSold);
-  const base = exact.map(Math.floor);
-  let rest = qty - base.reduce((a, b) => a + b, 0);
-  // Maiores restos primeiro (empate: mais vendas, depois nome).
-  const order = rows
-    .map((r, i) => ({ i, frac: exact[i] - base[i], sold: r.unitsSold, name: r.storeName }))
-    .sort((a, b) => b.frac - a.frac || b.sold - a.sold || a.name.localeCompare(b.name, 'pt-BR'));
-  for (const o of order) {
-    if (rest <= 0) break;
-    base[o.i] += 1;
-    rest -= 1;
-  }
+  // Empate de resto: mais vendas primeiro, depois nome.
+  const cotas = largestRemainders(
+    limpas.map((r) => r.unitsSold),
+    qty,
+    (i, j) =>
+      limpas[j].unitsSold - limpas[i].unitsSold ||
+      limpas[i].storeName.localeCompare(limpas[j].storeName, 'pt-BR'),
+  );
 
   return {
     totalQty: qty,
     totalSold,
-    rows: rows
+    rows: limpas
       .map((r, i) => ({
         ...r,
         sharePct: round2((r.unitsSold / totalSold) * 100),
-        suggestedQty: base[i],
+        suggestedQty: cotas[i],
       }))
       .sort((a, b) => b.suggestedQty - a.suggestedQty || a.storeName.localeCompare(b.storeName, 'pt-BR')),
+  };
+}
+
+// ─── Rateio por NECESSIDADE (o que o cliente pediu de fato) ──────────────────
+
+/** De qual peso saiu o rateio: falta até o alvo, ou participação de reserva. */
+export type NeedBasis = 'necessidade' | 'participacao';
+
+export interface NeedSplitRow extends FairSplitInput {
+  /** Falta até o alvo — o peso do rateio quando a base é `necessidade`. */
+  needUnits: number;
+  /**
+   * O peso que DE FATO gerou `sharePct`: a falta, quando a base é a
+   * necessidade; o peso da reserva, quando não é.
+   *
+   * Existe porque na reserva as duas coisas divergem, e a tela mentia por
+   * omissão: `unitsSold` é a venda do PRÓPRIO SKU — zero num lançamento —
+   * enquanto o percentual vinha do peso da escada (grife/categoria/rede). As
+   * colunas que existem para EXPLICAR o número final apareciam todas em zero
+   * ao lado de "mandar 28". Coluna que não fala da mesma base que o percentual
+   * é pior que coluna nenhuma: convida a conferir uma conta que não fecha.
+   */
+  weightUnits: number;
+  /** Participação da loja na base EFETIVAMENTE usada (%). */
+  sharePct: number;
+  suggestedQty: number;
+}
+
+export interface NeedSplit {
+  basis: NeedBasis;
+  totalQty: number;
+  /**
+   * Necessidade somada, CRUA — em unidades, antes de virar percentual. É o
+   * número que responde a pergunta que o percentual esconde: a carga que
+   * chegou COBRE a falta da rede, ou é um cobertor curto sendo repartido?
+   * Normalizado, 100% do rateio parece sempre a mesma coisa.
+   */
+  totalNeed: number;
+  rows: NeedSplitRow[];
+  /** Unidades que nenhum peso reclamou — declaradas, nunca evaporadas. */
+  unassigned: number;
+}
+
+/**
+ * Rateia uma carga entre as lojas pela NECESSIDADE de cada uma: quanto falta,
+ * em unidades, para a loja chegar à cobertura-alvo da peça.
+ *
+ * Por que não participação nas vendas, que era o que estava aqui antes: o
+ * pedido do cliente é "melhor chance de venda E OTIMIZAÇÃO DO ESTOQUE", e são
+ * duas perguntas. Participação responde só a primeira — quem vende mais leva
+ * mais, mesmo já abarrotada; a loja que vende metade mas está rompendo hoje
+ * recebe metade. A necessidade responde as duas de uma vez, porque `alvo −
+ * estoque` já traz a venda dentro (o alvo É demanda × dias de cobertura) e
+ * desconta o que a loja já tem na prateleira.
+ *
+ * RESERVA: quando ninguém precisa de nada — soma das faltas zero, seja porque
+ * a peça é lançamento sem histórico, seja porque a rede inteira está acima do
+ * alvo — cai na participação. A carga foi comprada e vai chegar de qualquer
+ * jeito; melhor repartir por quem vende do que empilhar na retaguarda. O campo
+ * `basis` DECLARA qual das duas réguas valeu, porque as duas têm precisões
+ * muito diferentes e apresentá-las com a mesma cara venderia certeza que não
+ * temos.
+ *
+ * `fallbackWeight` existe para o chamador que tem uma participação MELHOR do
+ * que a venda da própria peça — na aba de compras é a escada grife → categoria
+ * → rede, que sabe onde Ray-Ban sai mesmo quando o modelo é lançamento. Sem
+ * ele, a reserva é a venda da própria peça.
+ */
+export function splitByNeed(
+  stores: FairSplitInput[],
+  totalQty: number,
+  days: number,
+  cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
+  fallbackWeight?: (row: FairSplitInput) => number,
+): NeedSplit {
+  const qty = Math.max(0, Math.trunc(totalQty));
+  const linhas = stores.map((r) => {
+    const vendido = Math.max(0, r.unitsSold);
+    const estoque = Math.max(0, r.stockUnits);
+    const demanda = days > 0 ? vendido / days : 0;
+    const alvo = demanda * cfg.targetCoverDays;
+    return { ...r, unitsSold: vendido, stockUnits: estoque, demanda, alvo, falta: Math.max(0, alvo - estoque) };
+  });
+
+  const necessidadeCrua = linhas.reduce((a, l) => a + l.falta, 0);
+  const basis: NeedBasis = necessidadeCrua > 0 ? 'necessidade' : 'participacao';
+  const pesos = linhas.map((l) =>
+    basis === 'necessidade' ? l.falta : Math.max(0, fallbackWeight ? fallbackWeight(l) : l.unitsSold),
+  );
+  const totalPeso = pesos.reduce((a, b) => a + b, 0);
+  const cotas = largestRemainders(
+    pesos,
+    qty,
+    (i, j) => pesos[j] - pesos[i] || linhas[i].storeName.localeCompare(linhas[j].storeName, 'pt-BR'),
+  );
+
+  return {
+    basis,
+    totalQty: qty,
+    totalNeed: round1(necessidadeCrua),
+    rows: linhas
+      .map((l, i) => ({
+        storeId: l.storeId,
+        storeName: l.storeName,
+        unitsSold: l.unitsSold,
+        stockUnits: l.stockUnits,
+        needUnits: round1(l.falta),
+        weightUnits: round1(pesos[i]),
+        sharePct: totalPeso > 0 ? round2((pesos[i] / totalPeso) * 100) : 0,
+        suggestedQty: cotas[i],
+      }))
+      .sort((a, b) => b.suggestedQty - a.suggestedQty || a.storeName.localeCompare(b.storeName, 'pt-BR')),
+    // Sobra só quando nenhum peso reclamou nada (falta zero E participação
+    // zero) — rede recém-aberta, ou peça que ninguém nunca vendeu.
+    unassigned: qty - cotas.reduce((a, b) => a + b, 0),
   };
 }
 

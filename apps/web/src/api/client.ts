@@ -584,6 +584,52 @@ export interface GrifeDoMix {
   discontinued: boolean;
 }
 
+/**
+ * Uma linha de rateio por loja. É o MESMO formato na aba de compras e no plano
+ * de recebimento de propósito: as duas telas respondem a mesma pergunta —
+ * quanto vai para cada loja e por quê — e uma tabela só serve às duas.
+ *
+ * `suggestedQty` e não `quantity`: é o nome que o domínio já usa em
+ * `ProductPlan` e em `NeedSplitRow`, do outro lado da rede. Enquanto o web
+ * chamava de `quantity` e uma das duas rotas mandava `suggestedQty`, a coluna
+ * "Mandar" — o único número que esta tela existe para produzir — saía VAZIA na
+ * tela e ZERO no CSV, com o typecheck verde: um tipo declarado à mão não
+ * verifica nada, só documenta uma esperança. Um nome só, ponta a ponta.
+ */
+export interface RateioLoja {
+  storeId: string;
+  storeName: string;
+  /** Unidades para esta loja. A soma bate exatamente com a quantidade. */
+  suggestedQty: number;
+  /** Participação da loja na base usada (%). */
+  sharePct: number;
+  /** Unidades que a loja vendeu DESTA peça no período. */
+  unitsSold: number;
+  /** Estoque atual da loja nesta peça. */
+  stockUnits: number;
+  /** Falta até a cobertura-alvo (un.) — o peso do rateio por necessidade. */
+  needUnits: number;
+  /**
+   * O peso que gerou `sharePct`. Igual à falta quando a base é a necessidade;
+   * na reserva é a venda da grife/categoria/rede, que é o número que explica o
+   * percentual quando a peça é nova e a venda do próprio SKU é zero.
+   */
+  weightUnits: number;
+}
+
+/** De qual peso saiu o rateio da aba de compras. */
+export type NeedBasis = 'necessidade' | 'participacao';
+
+export interface ItemDistribution {
+  basis: NeedBasis;
+  basisLabel: string;
+  /** Necessidade CRUA da rede (un.): a compra cobre a falta ou não. */
+  totalNeed: number;
+  rows: RateioLoja[];
+  /** Unidades sem loja — declaradas, nunca evaporadas. */
+  unassigned: number;
+}
+
 export interface PurchaseOrderItem {
   productId: string;
   description: string;
@@ -596,6 +642,12 @@ export interface PurchaseOrderItem {
   orderByInDays: number | null;
   stockoutInDays: number | null;
   confidence: number;
+  /**
+   * Como dividir esta compra entre as lojas. AUSENTE não é "dividir igual": é
+   * "não calculado" — a rota omite o campo para quem não é ADMIN, porque o
+   * rateio expõe venda e estoque da rede inteira.
+   */
+  distribution?: ItemDistribution;
 }
 
 export interface PurchaseOrder {
@@ -825,16 +877,11 @@ export const settlePurchaseOrder = (id: string, action: 'receive' | 'cancel') =>
 
 // ─── Distribuição do recebimento (feedback 6.0 · item 06) ────────────────────
 
-/** De qual base saiu o rateio de um item — quanto mais abaixo, mais grossa. */
-export type DistributionBasis = 'sku' | 'marca' | 'categoria' | 'rede';
-
-export interface DistributionRow {
-  storeId: string;
-  storeName: string;
-  quantity: number;
-  sharePct: number;
-  unitsSold: number;
-}
+/**
+ * De qual base saiu o rateio de um item. `necessidade` é a régua; os quatro
+ * degraus abaixo dela são a RESERVA, e quanto mais abaixo, mais grossa.
+ */
+export type DistributionBasis = 'necessidade' | 'sku' | 'marca' | 'categoria' | 'rede';
 
 export interface DistributionItem {
   productId: string;
@@ -842,7 +889,13 @@ export interface DistributionItem {
   quantity: number;
   basis: DistributionBasis;
   basisLabel: string;
-  rows: DistributionRow[];
+  /** Necessidade CRUA da rede nesta peça (un.). 0 = rateio caiu na reserva. */
+  totalNeed: number;
+  /* Aqui morava `export type DistributionRow = RateioLoja`. O apelido não
+     traduzia nada: só dava um segundo nome ao mesmo formato, e foi ele que fez
+     o typecheck aceitar duas rotas mandando campos diferentes sob o mesmo
+     tipo. Um formato, um nome. */
+  rows: RateioLoja[];
   /** Lojas fora do rateio por não trabalharem a grife (catálogo de mix). */
   excludedByMix?: string[];
 }
