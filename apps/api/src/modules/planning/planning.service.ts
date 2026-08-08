@@ -17,7 +17,6 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
-  extractBrand,
   supplierFor,
   storeCarriesBrand,
   DEFAULT_PLANNING_CONFIG,
@@ -287,8 +286,13 @@ export async function purchaseOrders(days: number, storeId?: string, group: Prod
   const [productPlans, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
   // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
   // sem ele, cai no campo "marca" do ERP (comportamento anterior).
+  // `analysisBrand` e não `extractBrand(...) ?? p.brand`: é a mesma regra,
+  // escrita uma vez só, e leva junto as duas correções que a forma à mão não
+  // tinha — a CATEGORIA (uma lente parava de ser lida como grife) e o
+  // descarte do "—", que o CDS usa como fornecedor vazio e que ia parar no
+  // catálogo como se fosse um nome.
   const resolve = catalog
-    ? (p: ProductPlan) => supplierFor(extractBrand(p.description) ?? p.brand, catalog)
+    ? (p: ProductPlan) => supplierFor(analysisBrand(p.description, p.category, p.brand), catalog)
     : undefined;
   return buildPurchaseOrders(productPlans, days, resolve);
 }
@@ -498,8 +502,10 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
   // trabalha (catálogo). Marcas correntes (fora do catálogo) valem para todas.
   const catalog = loadBrandCatalog();
   if (catalog) {
+    // `analysisBrand` com a categoria, como no resto do motor. O campo
+    // `category` existe em `RebalanceSuggestion` exatamente para isto.
     plan.rows = plan.rows.filter((r) =>
-      storeCarriesBrand(extractBrand(r.description) ?? r.brand, r.toStoreName, catalog),
+      storeCarriesBrand(analysisBrand(r.description, r.category, r.brand), r.toStoreName, catalog),
     );
     const involved = new Set<string>();
     for (const r of plan.rows) {

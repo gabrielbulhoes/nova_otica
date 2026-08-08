@@ -434,25 +434,12 @@ const CONNECTOR_WORDS = new Set(['e', '&']);
 const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-export function extractBrand(
-  description: string | null | undefined,
-  category?: string | null,
-): string | null {
-  // Grife só existe em produto de moda (óculos, armação, relógio). Em lente,
-  // tratamento e serviço a descrição é a LINHA do produto — "MULTIGRESSIV
-  // MONOFOCAIS…", "ZEISS ANTIRREFLEXO", "HILUX LENTES PRONTAS…" — e extrair
-  // dali fragmenta um mesmo fabricante em dezenas de pseudo-marcas (a ZEISS
-  // virava dezesseis). Nesses casos devolvemos null para o chamador cair no
-  // fornecedor (p.brand), que é o dado confiável ali.
-  // Sem categoria informada, mantém o comportamento antigo (extrai sempre).
-  if (category != null && !ehProdutoDeModa(category)) return null;
-  const raw = (description ?? '').trim();
-  if (!raw) return null;
-  const tokens = raw.split(/\s+/);
+/** Varre os tokens a partir de `from` e devolve 1–2 palavras de marca. */
+function varrerMarca(tokens: string[], from: number): string | null {
   const picked: string[] = [];
   let started = false;
-  for (const tok of tokens) {
-    const n = norm(tok).replace(/[.,;:]+$/, '');
+  for (let i = from; i < tokens.length; i++) {
+    const n = norm(tokens[i]).replace(/[.,;:]+$/, '');
     if (!n) continue;
     // Antes de começar a marca, pula categoria/tipo. Depois de começar,
     // categoria encerra a marca.
@@ -469,11 +456,68 @@ export function extractBrand(
       if (started) break;
       continue;
     }
-    picked.push(tok);
+    picked.push(tokens[i]);
     started = true;
     if (picked.length >= 2) break; // marcas têm 1–2 palavras (ex.: Ray-Ban, Chilli Beans)
   }
   return picked.length > 0 ? picked.join(' ') : null;
+}
+
+export function extractBrand(
+  description: string | null | undefined,
+  category?: string | null,
+): string | null {
+  // Grife só existe em produto de moda (óculos, armação, relógio). Em lente,
+  // tratamento e serviço a descrição é a LINHA do produto — "MULTIGRESSIV
+  // MONOFOCAIS…", "ZEISS ANTIRREFLEXO", "HILUX LENTES PRONTAS…" — e extrair
+  // dali fragmenta um mesmo fabricante em dezenas de pseudo-marcas (a ZEISS
+  // virava dezesseis). Nesses casos devolvemos null para o chamador cair no
+  // fornecedor (p.brand), que é o dado confiável ali.
+  // Sem categoria informada, mantém o comportamento antigo (extrai sempre).
+  if (category != null && !ehProdutoDeModa(category)) return null;
+  const raw = (description ?? '').trim();
+  if (!raw) return null;
+  const tokens = raw.split(/\s+/);
+
+  /*
+   * A varredura começa DEPOIS da última palavra de tipo, não do começo da
+   * descrição.
+   *
+   * Motivo, com o dado real na mão: o CDS escreve a maioria das armações no
+   * formato `<modelo> <código de cor> <calibre> <TIPO> <GRIFE>` —
+   *
+   *     AN4290  ABAG    55  OCULOS  ARNETTE
+   *     VO5573  ABLK    52  ARMACAO VOGUE
+   *     MK1088  AGLD    54  ARMACAO MICHAEL KORS
+   *
+   * Varrendo do começo, `AN4290` é descartado por ter dígito, e o primeiro
+   * token "limpo" que aparece é o **código de cor do fabricante** — `ABAG`,
+   * `ABLK`, `AGLD`. Ele não tem dígito, não é cor em português e não é
+   * categoria, então passa por todas as guardas e é promovido a marca. Daí a
+   * reclamação do cliente: a lista de grifes vinha salpicada de siglas de
+   * quatro letras que ninguém reconhece, ao lado das grifes de verdade — e a
+   * ARNETTE, que estava ali na mesma linha, não aparecia.
+   *
+   * A palavra de tipo é o divisor confiável: o que vem depois dela é nome,
+   * o que vem antes é código. Quando não há palavra de tipo, ou quando ela é
+   * o último token (`RB3548NL 001 54 OCULOS` sem grife), cai no comportamento
+   * antigo — varrer tudo. O mesmo vale se a varredura a partir do tipo não
+   * achar nada: `ARNETTE OCULOS PRETO` só tem marca ANTES do tipo.
+   *
+   * Isto é heurística sobre texto livre, e vai continuar errando em algum
+   * padrão que ainda não vimos. O conserto definitivo é a Sellbie expor o
+   * campo Marca na rota `produtos` — ele existe no admin do ERP e não vem na
+   * API. Enquanto não vier, esta é a melhor régua disponível.
+   */
+  let ultimoTipo = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    if (CATEGORY_WORDS.has(norm(tokens[i]).replace(/[.,;:]+$/, ''))) ultimoTipo = i;
+  }
+  if (ultimoTipo >= 0 && ultimoTipo < tokens.length - 1) {
+    const depoisDoTipo = varrerMarca(tokens, ultimoTipo + 1);
+    if (depoisDoTipo) return depoisDoTipo;
+  }
+  return varrerMarca(tokens, 0);
 }
 
 // ─── Lentes por encomenda (sem posição de estoque) ──────────────────────────
@@ -1383,7 +1427,16 @@ export function buildPurchaseOrders(
         stockoutInDays: null,
       } as PurchaseOrder);
 
-    const productBrand = extractBrand(p.description);
+    // Com a CATEGORIA. Sem ela, `extractBrand` extrai de tudo — e a lista de
+    // grifes de um pedido de lentes vinha com "MULTIGRESSIV MONOFOCAIS",
+    // "HILUX LENTES" e companhia, que são LINHAS de produto, não grifes.
+    //
+    // Aqui é `extractBrand` e não `analysisBrand` de propósito: `brands` é a
+    // etiqueta de grifes do pedido, e o pedido JÁ está agrupado por
+    // fornecedor. Cair no fornecedor como reserva repetiria o cabeçalho
+    // dentro da própria linha, como se "ZEISS" fosse a grife de uma lente
+    // ZEISS. Sem grife reconhecível, melhor não etiquetar.
+    const productBrand = extractBrand(p.description, p.category);
     if (productBrand && !order.brands.includes(productBrand)) order.brands.push(productBrand);
     order.items.push({
       productId: p.productId,
