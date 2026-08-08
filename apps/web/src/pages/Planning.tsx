@@ -764,6 +764,37 @@ function OrderHistory() {
   );
 }
 
+/**
+ * As duas travas do remanejamento, ditas na tela — e o que há de frágil nelas.
+ *
+ * A idade da peça POR LOJA é estimativa, não medição: o ERP não manda data de
+ * chegada por filial. Esconder isso seria pior do que não ter a trava, porque
+ * o lojista passaria a confiar num número que erra de um jeito só. Erra sempre
+ * para o mesmo lado (peça parece mais VELHA do que é, e por isso pode ser
+ * doada), o que é decisão deliberada: uma sugestão a mais ele recusa em um
+ * clique, uma sugestão a menos ele nunca vê.
+ */
+function NotaDeIdadeEstimada({ guards }: { guards: { newProductDays: number; donorFloorUnits: number } }) {
+  return (
+    <div
+      className="muted"
+      style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 11.5, marginTop: 10, lineHeight: 1.4 }}
+    >
+      <Icon name="informacao" size={14} style={{ marginTop: 1 }} />
+      <span>
+        A loja de origem nunca fica com menos de {guards.donorFloorUnits}{' '}
+        {guards.donorFloorUnits === 1 ? 'unidade' : 'unidades'} em vitrine, e peça com menos de{' '}
+        {guards.newProductDays} dias na loja não é remanejada — ela ainda nem foi vista.{' '}
+        <strong>Essa idade é estimativa</strong>: o ERP não informa quando a peça chegou em cada
+        filial, então usamos a data mais antiga entre a criação da posição de estoque e o cadastro
+        do produto. Ela erra para mais quando a peça zerou e voltou à prateleira, e quando o
+        produto já rodava na rede antes de chegar nesta loja — nos dois casos a peça parece mais
+        velha do que é, e o motor prefere sugerir a mais do que sugerir a menos.
+      </span>
+    </div>
+  );
+}
+
 /** Linha de transferência sugerida com ação de 1 clique e feedback de estado. */
 function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
   const qc = useQueryClient();
@@ -805,7 +836,13 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
         {s.fromStoreName.replace('Nova Ótica — ', '')} <span className="muted">→</span>{' '}
         <strong>{s.toStoreName.replace('Nova Ótica — ', '')}</strong>
       </td>
-      <td className="num">{s.quantity}</td>
+      <td className="num">
+        {s.quantity}
+        {/* O que SOBRA na origem, ao lado do que sai dela. É a conferência que
+            o lojista fazia de cabeça antes de recusar a sugestão — "vai me
+            deixar sem?" — e não custa nada responder antes de ele perguntar. */}
+        <div className="muted" style={{ fontSize: 11 }}>origem fica com {s.fromRemainingUnits}</div>
+      </td>
       <td className="num">
         {s.toCoverageDays === null ? '—' : `${s.toCoverageDays}d`}
         {s.stockoutInDays !== null && (
@@ -1384,6 +1421,7 @@ export function Planning() {
             </tbody>
           </table>
         )}
+        {reb && <NotaDeIdadeEstimada guards={reb.guards} />}
       </div>
 
       {/* ── 2º: pedidos prontos por fornecedor, com total e data-limite ── */}

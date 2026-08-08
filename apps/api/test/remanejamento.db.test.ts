@@ -1,0 +1,240 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { prisma } from '../src/lib/prisma.js';
+import { rebalancePlan } from '../src/modules/planning/planning.service.js';
+import { DEFAULT_PLANNING_CONFIG } from '../src/modules/planning/planning.math.js';
+import { PLANNED_STORE_WHERE } from '../src/modules/stores/store.scope.js';
+
+const RUN = process.env.RUN_DB_TESTS === '1';
+const d = RUN ? describe : describe.skip;
+
+const JANELA = 90;
+const DIA = 86_400_000;
+const atras = (dias: number) => new Date(Date.now() - dias * DIA);
+
+/**
+ * Queixa do Galbe (WhatsApp): o remanejamento manda embora peça que acabou de
+ * chegar, e esvazia a loja de origem.
+ *
+ * As travas moram em `buildRebalance` e os testes de unidade já prendem a
+ * conta. O que SÓ aparece contra o banco é se o dado chega lá: idade da
+ * posição, reserva e unidades a caminho saem de três lugares diferentes do
+ * schema e precisam ser lidos, casados e passados adiante por `rebalancePlan`.
+ *
+ * Existe precedente literal de trava que ninguém liga: `stuckDaysByProduct` é
+ * consumido dentro de planning.math.ts e nunca foi passado em produção. Este
+ * arquivo é o que impede a mesma coisa de acontecer com estas quatro.
+ */
+d('remanejamento · os insumos chegam do banco ao motor', () => {
+  let origemId = '';
+  let destinoId = '';
+  let paradoId = '';
+  let recemChegadoId = '';
+  const vendas: string[] = [];
+
+  /** Linhas do plano da rede referentes a um dos produtos de teste. */
+  const linhasDe = async (productId: string) => {
+    const plano = await rebalancePlan(JANELA);
+    return plano.rows.filter((r) => r.productId === productId);
+  };
+
+  beforeAll(async () => {
+    const lojas = await prisma.store.findMany({
+      where: PLANNED_STORE_WHERE,
+      orderBy: { name: 'asc' },
+      take: 2,
+    });
+    if (lojas.length < 2) throw new Error('sem lojas suficientes no banco (rode o seed)');
+    destinoId = lojas[0].id;
+    origemId = lojas[1].id;
+
+    // ── Cenário 1: peça madura, parada na origem, vendendo no destino ──
+    const parado = await prisma.product.create({
+      data: {
+        externalId: `test-reb-parado-${Date.now()}`,
+        description: 'ARMACAO TESTE REMANEJAMENTO PARADA',
+        category: 'ARMACOES',
+        price: 300,
+        cost: 150,
+        includedAt: atras(400),
+      },
+    });
+    paradoId = parado.id;
+    await prisma.stockItem.create({
+      data: {
+        storeId: origemId,
+        productId: paradoId,
+        quantity: 18,
+        available: 18,
+        reserved: 0,
+        createdAt: atras(400),
+      },
+    });
+    // Destino sem posição e com 30 un. vendidas na janela: 0,333/dia, alvo 20.
+    const v1 = await prisma.sale.create({
+      data: {
+        externalId: `test-reb-venda-parada-${Date.now()}`,
+        storeId: destinoId,
+        saleDate: atras(5),
+        total: 9000,
+        items: { create: { productId: paradoId, quantity: 30, unitPrice: 300, total: 9000 } },
+      },
+    });
+    vendas.push(v1.id);
+
+    // ── Cenário 2: peça que chegou há 10 dias nas DUAS lojas, mas com a
+    // posição da origem carimbada como antiga (é o que a rede tem quando a
+    // peça já rodava e só agora entrou nesta filial). ──
+    const recem = await prisma.product.create({
+      data: {
+        externalId: `test-reb-recem-${Date.now()}`,
+        description: 'ARMACAO TESTE REMANEJAMENTO RECEM CHEGADA',
+        category: 'ARMACOES',
+        price: 300,
+        cost: 150,
+        includedAt: atras(10),
+      },
+    });
+    recemChegadoId = recem.id;
+    await prisma.stockItem.create({
+      data: {
+        storeId: origemId,
+        productId: recemChegadoId,
+        quantity: 30,
+        available: 30,
+        reserved: 0,
+        createdAt: atras(400),
+      },
+    });
+    await prisma.stockItem.create({
+      data: {
+        storeId: destinoId,
+        productId: recemChegadoId,
+        quantity: 1,
+        available: 1,
+        reserved: 0,
+        createdAt: atras(10),
+      },
+    });
+    const v2 = await prisma.sale.create({
+      data: {
+        externalId: `test-reb-venda-recem-${Date.now()}`,
+        storeId: destinoId,
+        saleDate: atras(3),
+        total: 600,
+        items: { create: { productId: recemChegadoId, quantity: 2, unitPrice: 300, total: 600 } },
+      },
+    });
+    vendas.push(v2.id);
+  });
+
+  afterAll(async () => {
+    const ids = [paradoId, recemChegadoId].filter(Boolean);
+    if (ids.length === 0) return;
+    await prisma.inventoryMovement.deleteMany({ where: { productId: { in: ids } } });
+    await prisma.sale.deleteMany({ where: { id: { in: vendas } } }); // itens caem por cascade
+    await prisma.stockItem.deleteMany({ where: { productId: { in: ids } } });
+    await prisma.product.deleteMany({ where: { id: { in: ids } } });
+  });
+
+  it('a origem doa o que sobra e fica com o piso de vitrine — nunca com zero', async () => {
+    const linhas = await linhasDe(paradoId);
+    expect(linhas).toHaveLength(1);
+    expect(linhas[0].fromStoreId).toBe(origemId);
+    expect(linhas[0].toStoreId).toBe(destinoId);
+    // Necessidade do destino é 20 (0,333/dia × 60), a origem tem 18 e guarda 1.
+    expect(linhas[0].quantity).toBe(17);
+    expect(linhas[0].fromRemainingUnits).toBe(DEFAULT_PLANNING_CONFIG.donorFloorUnits);
+  });
+
+  it('posição criada hoje e sem data de catálogo entra em carência', async () => {
+    // Isola `StockItem.createdAt`: sem `includedAt` ele é a única evidência de
+    // idade, e a peça passa a ser recém-chegada.
+    await prisma.product.update({ where: { id: paradoId }, data: { includedAt: null } });
+    await prisma.stockItem.updateMany({
+      where: { storeId: origemId, productId: paradoId },
+      data: { createdAt: new Date() },
+    });
+    expect(await linhasDe(paradoId)).toHaveLength(0);
+
+    // E com a MESMA posição nova, mas catálogo antigo, a peça volta a doar: a
+    // idade é min(posição, catálogo), e isso é fail-open de propósito — é o
+    // caso da peça que zerou e voltou, e ganhou carimbo novo por causa disso.
+    await prisma.product.update({ where: { id: paradoId }, data: { includedAt: atras(400) } });
+    expect(await linhasDe(paradoId)).toHaveLength(1);
+
+    await prisma.stockItem.updateMany({
+      where: { storeId: origemId, productId: paradoId },
+      data: { createdAt: atras(400) },
+    });
+  });
+
+  it('unidade reservada para outra transferência não é oferecida de novo', async () => {
+    await prisma.stockItem.updateMany({
+      where: { storeId: origemId, productId: paradoId },
+      data: { reserved: 16 },
+    });
+    // Livre = 18 − 16 = 2; o piso come 1; sobra 1 para doar.
+    const parcial = await linhasDe(paradoId);
+    expect(parcial).toHaveLength(1);
+    expect(parcial[0].quantity).toBe(1);
+
+    await prisma.stockItem.updateMany({
+      where: { storeId: origemId, productId: paradoId },
+      data: { reserved: 18 },
+    });
+    expect(await linhasDe(paradoId)).toHaveLength(0);
+
+    await prisma.stockItem.updateMany({
+      where: { storeId: origemId, productId: paradoId },
+      data: { reserved: 0 },
+    });
+  });
+
+  it('unidades a caminho do destino abatem a necessidade dele', async () => {
+    const mov = await prisma.inventoryMovement.create({
+      data: {
+        type: 'TRANSFER',
+        status: 'PENDING',
+        productId: paradoId,
+        fromStoreId: origemId,
+        toStoreId: destinoId,
+        quantity: 20, // cobre a necessidade inteira
+        reason: 'teste de unidades a caminho',
+      },
+    });
+    expect(await linhasDe(paradoId)).toHaveLength(0);
+
+    // Confirmada, deixa de ser "a caminho" e a necessidade reaparece.
+    await prisma.inventoryMovement.update({
+      where: { id: mov.id },
+      data: { status: 'CONFIRMED' },
+    });
+    expect(await linhasDe(paradoId)).toHaveLength(1);
+
+    await prisma.inventoryMovement.delete({ where: { id: mov.id } });
+  });
+
+  it('a demanda do destino sai dos dias de presença da peça, não da janela', async () => {
+    // Destino tem 1 un. e vendeu 2 em 10 dias de presença: 0,2/dia, cobertura
+    // de 5 dias — está acabando e precisa de 11 un. para os 60 dias de alvo.
+    const linhas = await linhasDe(recemChegadoId);
+    expect(linhas).toHaveLength(1);
+    expect(linhas[0].toStoreId).toBe(destinoId);
+    expect(linhas[0].quantity).toBe(11);
+    expect(linhas[0].toCoverageDays).toBe(5);
+
+    // Medida pela janela inteira, a mesma peça "vende" 2/90 = 0,022/dia e a
+    // cobertura vira 45 dias: acima do mínimo, e a loja que está acabando não
+    // recebe nada. Era exatamente este o buraco.
+    await prisma.stockItem.updateMany({
+      where: { storeId: destinoId, productId: recemChegadoId },
+      data: { createdAt: atras(400) },
+    });
+    expect(await linhasDe(recemChegadoId)).toHaveLength(0);
+
+    await prisma.stockItem.updateMany({
+      where: { storeId: destinoId, productId: recemChegadoId },
+      data: { createdAt: atras(10) },
+    });
+  });
+});

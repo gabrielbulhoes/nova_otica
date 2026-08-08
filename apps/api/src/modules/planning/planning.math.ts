@@ -62,6 +62,22 @@ export interface PlanningConfig {
    * `posição <= ponto de reposição` e vira card de compra de 1 unidade.
    */
   buyMinAnnualUnits: number;
+  /**
+   * Piso de vitrine da loja que DOA num remanejamento: unidades que ela nunca
+   * entrega, mesmo estando parada.
+   *
+   * Feedback do Galbe (WhatsApp) — "o sistema esvazia a loja de origem". A
+   * regra antiga era literal: `dailyDemand === 0 ? s.stock : …`, com um
+   * comentário dizendo "parado: pode doar tudo". Doar tudo zera a vitrine, e
+   * peça que ninguém vê não vende — o motor fabricava a evidência de que
+   * aquela loja não vendia aquilo, e na rodada seguinte tinha razão.
+   *
+   * É MÍNIMO ABSOLUTO, não parcela somada ao alvo de cobertura: quem tem giro
+   * já é protegido por `targetCoverDays`, que reserva dias de venda antes de
+   * qualquer doação. O piso existe justamente para quem NÃO tem giro e por
+   * isso não é protegido por nada.
+   */
+  donorFloorUnits: number;
 }
 
 export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
@@ -84,6 +100,11 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   // 3 un./ano. Abaixo disso o ressuprimento automático não se paga: são as
   // grifes de ponta de cauda que o feedback chama de "vendemos pouquíssimo".
   buyMinAnnualUnits: 3,
+  // 1 unidade: o mostruário. Não é estoque de venda, é a peça que o cliente
+  // experimenta — sem ela a loja não vende nem sob encomenda. Subir esse
+  // número trava remanejamento de cauda longa (a maior parte do catálogo tem
+  // 1 ou 2 un. por loja), então o piso fica no mínimo que resolve a queixa.
+  donorFloorUnits: 1,
 };
 
 /**
@@ -1173,6 +1194,28 @@ export interface StoreProductInput {
   unitsSold: number;
   /** Estoque atual NESTA loja. */
   currentStock: number;
+  /**
+   * Idade ESTIMADA da peça NESTA loja, em dias. `null`/ausente = desconhecida.
+   *
+   * Estimativa, não medição: o ERP não guarda data de chegada por loja. O
+   * cálculo mora em `rebalancePlan` e as três formas conhecidas de ele mentir
+   * estão documentadas lá. Aqui o que importa é o contrato: idade desconhecida
+   * NÃO é peça nova (fail-open), igual ao `input.ageDays != null && …` que a
+   * liquidação já usa.
+   */
+  ageDays?: number | null;
+  /**
+   * Unidades desta posição já comprometidas com transferências pendentes que
+   * SAEM daqui (`StockItem.reserved`). Estão fisicamente na loja e não podem
+   * ser oferecidas de novo.
+   */
+  reserved?: number;
+  /**
+   * Unidades a caminho DESTA loja (transferências pendentes com destino aqui).
+   * Abatem a necessidade — senão o motor manda a mesma peça duas vezes para o
+   * mesmo lugar, uma por rodada, até alguém receber duas caixas.
+   */
+  inboundUnits?: number;
 }
 
 export interface RebalanceSuggestion {
@@ -1192,6 +1235,13 @@ export interface RebalanceSuggestion {
   toStoreId: string;
   toStoreName: string;
   quantity: number;
+  /**
+   * Unidades que SOBRAM na origem depois desta transferência (e das outras já
+   * sugeridas para a mesma origem no mesmo plano). Vai para a tela porque é a
+   * resposta direta à queixa "o sistema esvazia a loja de origem": o número
+   * que o lojista quer conferir antes de clicar.
+   */
+  fromRemainingUnits: number;
   fromCoverageDays: number | null;
   toCoverageDays: number | null;
   /** Previsão de ruptura no destino (dias), quando houver. */
@@ -1207,6 +1257,17 @@ export interface RebalancePlan {
   days: number;
   summary: { suggestions: number; units: number; storesInvolved: number };
   rows: RebalanceSuggestion[];
+  /**
+   * As duas guardas que o motor aplicou ao escolher doadoras. Vão no plano, e
+   * não numa constante repetida no front, porque o que a tela precisa dizer é
+   * o que o MOTOR fez — se um dia a régua mudar, a tela muda junto.
+   */
+  guards: {
+    /** Dias de carência: abaixo disso a peça não é oferecida como doadora. */
+    newProductDays: number;
+    /** Piso de vitrine: unidades que a origem nunca entrega. */
+    donorFloorUnits: number;
+  };
 }
 
 const fmtCover = (c: number | null) =>
@@ -1220,10 +1281,19 @@ const fmtCover = (c: number | null) =>
  *
  * Regras (por produto):
  *  - Receptora: vende (demanda > 0) e cobertura < leadTime+safety; a
- *    necessidade repõe até a cobertura-alvo.
- *  - Doadora: sem giro com estoque parado (doa tudo), ou com giro e
- *    cobertura acima do alvo (doa só o excedente acima do alvo).
+ *    necessidade repõe até a cobertura-alvo, descontado o que já está a
+ *    caminho dela.
+ *  - Doadora: sem giro com estoque parado, ou com giro e cobertura acima do
+ *    alvo (doa só o excedente). Em qualquer caso, respeitando três limites:
+ *    a carência da peça na origem, o piso de vitrine e o que já está
+ *    reservado para outra transferência.
  *  - Receptoras mais urgentes primeiro; doadoras com mais sobra primeiro.
+ *
+ * NÃO tem sazonalidade: a demanda daqui é média simples da janela, enquanto
+ * `analyzeProduct` aplica índice sazonal. Consequência assumida e conhecida —
+ * em julho este motor pode mandar óculos de sol embora de uma loja de praia,
+ * porque na janela de inverno o giro dela é baixo. Unificar as duas contas é
+ * troca de motor, não ajuste de parâmetro.
  */
 export function buildRebalance(
   rows: StoreProductInput[],
@@ -1235,6 +1305,12 @@ export function buildRebalance(
     storeName: string;
     dailyDemand: number;
     stock: number;
+    /** Comprometido com transferência pendente que sai daqui. */
+    reserved: number;
+    /** A caminho daqui, por transferência pendente com destino nesta loja. */
+    inbound: number;
+    /** Idade estimada da peça nesta loja; `null` = desconhecida (fail-open). */
+    ageDays: number | null;
     coverage: number | null;
   }
   const byProduct = new Map<
@@ -1243,12 +1319,23 @@ export function buildRebalance(
   >();
 
   for (const r of rows) {
-    const dailyDemand = days > 0 ? r.unitsSold / days : 0;
+    // Demanda medida pelos dias em que a peça REALMENTE pôde vender nesta
+    // loja, não pela janela inteira. Uma peça que chegou há 10 dias e vendeu
+    // 2 vende 0,2/dia, não 0,022/dia (2/90) — e a diferença é o que separa
+    // "está acabando, mande mais" de "não vende, tire daqui".
+    //
+    // Piso de 1 dia: peça chegada hoje com venda no mesmo dia dividiria por
+    // zero. Sem idade conhecida, a janela inteira — o comportamento antigo.
+    const presentDays = r.ageDays != null ? Math.min(days, Math.max(1, r.ageDays)) : days;
+    const dailyDemand = presentDays > 0 ? r.unitsSold / presentDays : 0;
     const pos: StorePos = {
       storeId: r.storeId,
       storeName: r.storeName,
       dailyDemand,
       stock: r.currentStock,
+      reserved: Math.max(0, r.reserved ?? 0),
+      inbound: Math.max(0, r.inboundUnits ?? 0),
+      ageDays: r.ageDays ?? null,
       coverage: dailyDemand > 0 ? r.currentStock / dailyDemand : null,
     };
     const cur = byProduct.get(r.productId) ?? {
@@ -1271,19 +1358,35 @@ export function buildRebalance(
       .filter((s) => s.dailyDemand > 0 && (s.coverage as number) < minCover)
       .map((s) => ({
         ...s,
-        need: Math.max(0, Math.ceil(s.dailyDemand * cfg.targetCoverDays - s.stock)),
+        // `inbound` abate a necessidade: a peça que já saiu de outra loja
+        // ainda não está no estoque, mas está paga e a caminho. Sem isto o
+        // motor repete a mesma sugestão a cada rodada até a transferência ser
+        // confirmada, e quem recebe leva duas.
+        need: Math.max(0, Math.ceil(s.dailyDemand * cfg.targetCoverDays - s.stock - s.inbound)),
       }))
       .filter((s) => s.need > 0)
       .sort((a, b) => (a.coverage as number) - (b.coverage as number));
 
     const donors = p.stores
-      .map((s) => ({
-        ...s,
-        spare:
+      .map((s) => {
+        // Carência: peça recém-chegada na ORIGEM não doa. Mesma régua da
+        // liquidação (`newProductDays`) e mesmo contrato de fail-open — sem
+        // idade conhecida, a peça NÃO é nova. Fechar aqui esvaziaria o plano
+        // inteiro em qualquer base sem data (ver planning.test.ts).
+        const recemChegada = s.ageDays != null && s.ageDays < cfg.newProductDays;
+        // O reservado está fisicamente na prateleira mas já tem dono: outra
+        // transferência pendente. Oferecer de novo é prometer duas vezes.
+        const livre = Math.max(0, s.stock - s.reserved);
+        const excedente =
           s.dailyDemand === 0
-            ? s.stock // parado: pode doar tudo
-            : Math.floor(s.stock - s.dailyDemand * cfg.targetCoverDays), // com giro: só o excedente
-      }))
+            ? livre // parado: em tese tudo, menos o piso de vitrine abaixo
+            : Math.floor(livre - s.dailyDemand * cfg.targetCoverDays); // com giro: só o excedente
+        // Piso de vitrine como TETO da doação, não como parcela somada ao
+        // alvo: quem tem giro continua doando o mesmo excedente de antes, e
+        // quem está parado passa a guardar o mostruário.
+        const teto = livre - cfg.donorFloorUnits;
+        return { ...s, doado: 0, spare: recemChegada ? 0 : Math.min(excedente, teto) };
+      })
       .filter((s) => s.spare > 0)
       .sort((a, b) => b.spare - a.spare);
 
@@ -1295,6 +1398,7 @@ export function buildRebalance(
         const qty = Math.min(need, donor.spare);
         need -= qty;
         donor.spare -= qty;
+        donor.doado += qty;
 
         const stockout = (receiver.coverage as number) < minCover ? Math.floor(receiver.coverage as number) : null;
         const donorParado = donor.dailyDemand === 0;
@@ -1303,8 +1407,11 @@ export function buildRebalance(
           : `sobrando em ${donor.storeName} (${fmtCover(donor.coverage)})`;
         const fromShort = donor.storeName.replace(/^.*—\s*/, '');
         const toShort = receiver.storeName.replace(/^.*—\s*/, '');
+        // O que fica na origem depois desta doação e das anteriores do mesmo
+        // plano. Nunca abaixo do piso, por construção de `spare`.
+        const restante = donor.stock - donor.doado;
         const friendly = donorParado
-          ? `Está parado em ${fromShort} e vende em ${toShort} — melhor mandar pra onde gira do que deixar encalhado.`
+          ? `Está parado em ${fromShort} e vende em ${toShort} — melhor mandar pra onde gira do que deixar encalhado. ${fromShort} fica com ${restante} un. em vitrine.`
           : `${toShort} está no limite e ${fromShort} tem de sobra — remaneja e ninguém fica sem, sem gastar nada.`;
         // Confiança: giro no destino (quanto mais vende, mais seguro) + sobra
         // folgada na origem. Escala simples, coerente com a de compra.
@@ -1322,10 +1429,11 @@ export function buildRebalance(
           toStoreId: receiver.storeId,
           toStoreName: receiver.storeName,
           quantity: qty,
+          fromRemainingUnits: restante,
           fromCoverageDays: donor.coverage === null ? null : round1(donor.coverage),
           toCoverageDays: receiver.coverage === null ? null : round1(receiver.coverage),
           stockoutInDays: stockout,
-          reason: `Vende em ${receiver.storeName} (${fmtCover(receiver.coverage)}) e está ${donorSide}.`,
+          reason: `Vende em ${receiver.storeName} (${fmtCover(receiver.coverage)}) e está ${donorSide}. A origem fica com ${restante} un.`,
           friendlyReason: friendly,
           confidence: conf,
         });
@@ -1341,6 +1449,9 @@ export function buildRebalance(
     stores.add(s.fromStoreId);
     stores.add(s.toStoreId);
   }
+  // As guardas saem da config da rede: `cfgFor` só varia `leadTimeDays` por
+  // fornecedor, e carência e piso de vitrine são régua única.
+  const cfgRede = cfgFor(null);
   return {
     days,
     summary: {
@@ -1349,6 +1460,10 @@ export function buildRebalance(
       storesInvolved: stores.size,
     },
     rows: out,
+    guards: {
+      newProductDays: cfgRede.newProductDays,
+      donorFloorUnits: cfgRede.donorFloorUnits,
+    },
   };
 }
 
