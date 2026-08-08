@@ -103,14 +103,38 @@ export async function planningInputs(
   });
   const soldBy = new Map(sold.map((s) => [s.productId as string, s._sum.quantity ?? 0]));
 
+  // Estoque AO VIVO, não o `quantity` cru da última sincronização.
+  //
+  // `rebalancePlan` já compunha o saldo com os deltas confirmados-e-não-
+  // reconciliados; `planningInputs` — que alimenta compra, sugestões, pedidos e
+  // panorama — continuava somando o número cru. As duas abas do MESMO
+  // Planejamento discordavam sobre a mesma posição na janela entre confirmar
+  // uma transferência e a sincronização seguinte fechá-la.
+  //
+  // Medido: com 4 unidades confirmadas saindo do Rio, a aba de remanejamento
+  // dizia 8, a tela de Estoque dizia 8 e a aba de compras dizia 12 — e o motor
+  // de compra planejava sobre 4 unidades que já tinham saído da loja,
+  // comprando de menos até a próxima sync.
+  //
+  // Uma conta só, na mesma função que a tela de Estoque e o `availableAt`
+  // usam. Duas contas de saldo ao vivo que precisam concordar por disciplina
+  // são a próxima divergência silenciosa.
   const stockWhere: Prisma.StockItemWhereInput = { ...stockPlannedWhere };
   if (storeId) stockWhere.storeId = storeId;
-  const stock = await prisma.stockItem.groupBy({
-    by: ['productId'],
+  const posicoes = await prisma.stockItem.findMany({
     where: stockWhere,
-    _sum: { quantity: true },
+    select: { storeId: true, productId: true, quantity: true, reserved: true },
   });
-  const stockBy = new Map(stock.map((s) => [s.productId, s._sum.quantity ?? 0]));
+  const deltasAoVivo = await liveDeltas([...new Set(posicoes.map((p) => p.productId))]);
+  const stockBy = new Map<string, number>();
+  for (const pos of posicoes) {
+    const { onHand } = computeLiveStock(
+      pos.quantity,
+      pos.reserved,
+      deltasAoVivo.get(`${pos.storeId}:${pos.productId}`) ?? 0,
+    );
+    stockBy.set(pos.productId, (stockBy.get(pos.productId) ?? 0) + onHand);
+  }
 
   // Janela recente (até 30 dias) para a suavização com peso recente.
   const recentDays = Math.min(30, days);

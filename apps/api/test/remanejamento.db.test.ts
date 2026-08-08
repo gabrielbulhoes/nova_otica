@@ -328,3 +328,108 @@ d('remanejamento · os insumos chegam do banco ao motor', () => {
     });
   });
 });
+
+/**
+ * As duas frestas que a reverificação achou DEPOIS de a frente ser liberada.
+ *
+ * As duas nascem do mesmo lugar: o remanejamento passou a enxergar o estoque ao
+ * vivo e a contar a solicitação pendente, e duas coisas ao redor não
+ * acompanharam a mudança.
+ */
+d('remanejamento · as duas frestas do saldo', () => {
+  let lojaId = '';
+  let outraId = '';
+  let produtoId = '';
+
+  beforeAll(async () => {
+    const lojas = await prisma.store.findMany({
+      where: PLANNED_STORE_WHERE,
+      orderBy: { name: 'asc' },
+      take: 2,
+    });
+    if (lojas.length < 2) throw new Error('sem lojas suficientes (rode o seed)');
+    lojaId = lojas[0].id;
+    outraId = lojas[1].id;
+
+    const p = await prisma.product.create({
+      data: { externalId: `fresta-${Date.now()}`, description: 'ARMACAO TESTE FRESTA', category: 'ARMACAO' },
+    });
+    produtoId = p.id;
+    await prisma.stockItem.create({
+      data: { storeId: lojaId, productId: produtoId, quantity: 12, reserved: 0, available: 12 },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.inventoryMovement.deleteMany({ where: { productId: produtoId } });
+    await prisma.stockItem.deleteMany({ where: { productId: produtoId } });
+    await prisma.product.deleteMany({ where: { id: produtoId } });
+  });
+
+  it('a SOLICITAÇÃO do gestor também confere saldo', async () => {
+    // Antes: `createMovement` só validava saldo quando a movimentação já ia
+    // reservar, e toda transferência de gestor de loja nasce REQUESTED. Uma
+    // solicitação de 1.000 unidades numa loja de 12 era aceita sem erro — e,
+    // como o plano passou a contá-la como saldo comprometido, ela APAGAVA o par
+    // (produto, loja) do plano da rede inteira até alguém aprovar ou rejeitar.
+    const { createMovement } = await import('../src/modules/movements/movements.service.js');
+    const gestor = { id: 'teste-gestor', role: 'STORE_MANAGER' as const, storeId: lojaId };
+
+    await expect(
+      createMovement(
+        { type: 'TRANSFER', productId: produtoId, fromStoreId: lojaId, toStoreId: outraId, quantity: 1000, confirm: false },
+        gestor,
+      ),
+    ).rejects.toThrow(/Saldo insuficiente/);
+
+    // E o caminho legítimo continua aberto — a trava é sobre a quantidade, não
+    // sobre o papel de quem pede.
+    const ok = await createMovement(
+      { type: 'TRANSFER', productId: produtoId, fromStoreId: lojaId, toStoreId: outraId, quantity: 3, confirm: false },
+      gestor,
+    );
+    expect(ok.status).toBe('REQUESTED');
+    await prisma.inventoryMovement.delete({ where: { id: ok.id } });
+  });
+
+  it('a aba de COMPRAS e a de REMANEJAMENTO leem o mesmo estoque', async () => {
+    // `rebalancePlan` compunha o saldo ao vivo; `planningInputs` — que alimenta
+    // compra, sugestões, pedidos e panorama — somava o `quantity` cru da última
+    // sincronização. Na janela entre confirmar uma transferência e a sync
+    // seguinte fechá-la, as duas abas da MESMA tela diziam números diferentes
+    // para a mesma posição.
+    const { planningInputs } = await import('../src/modules/planning/planning.service.js');
+    const { computeLiveStock, liveDeltas } = await import('../src/modules/stock/stock.service.js');
+
+    const daCompra = async () =>
+      (await planningInputs(JANELA)).find((i) => i.productId === produtoId)?.currentStock ?? null;
+    const doEstoque = async () => {
+      const pos = await prisma.stockItem.findFirstOrThrow({
+        where: { storeId: lojaId, productId: produtoId },
+      });
+      const d = await liveDeltas([produtoId]);
+      return computeLiveStock(pos.quantity, pos.reserved, d.get(`${lojaId}:${produtoId}`) ?? 0).onHand;
+    };
+
+    expect(await daCompra()).toBe(12);
+    expect(await doEstoque()).toBe(12);
+
+    // Quatro unidades já saíram da loja (confirmadas), e a sincronização ainda
+    // não fechou a conta.
+    await prisma.inventoryMovement.create({
+      data: {
+        type: 'TRANSFER',
+        status: 'CONFIRMED',
+        productId: produtoId,
+        fromStoreId: lojaId,
+        toStoreId: outraId,
+        quantity: 4,
+        confirmedAt: new Date(),
+      },
+    });
+
+    // Antes do conserto: a compra dizia 12 e o estoque dizia 8.
+    expect(await doEstoque()).toBe(8);
+    expect(await daCompra()).toBe(8);
+  });
+});
