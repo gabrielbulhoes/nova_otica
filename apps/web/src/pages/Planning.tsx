@@ -840,8 +840,13 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
         {s.quantity}
         {/* O que SOBRA na origem, ao lado do que sai dela. É a conferência que
             o lojista fazia de cabeça antes de recusar a sugestão — "vai me
-            deixar sem?" — e não custa nada responder antes de ele perguntar. */}
-        <div className="muted" style={{ fontSize: 11 }}>origem fica com {s.fromRemainingUnits}</div>
+            deixar sem?" — e não custa nada responder antes de ele perguntar.
+            A condição fica escrita: cada linha tem botão próprio, o número é o
+            piso de quem aprovar TODAS as desta peça, e um piso que se anuncia
+            como certeza é pior do que piso nenhum. */}
+        <div className="muted" style={{ fontSize: 11, whiteSpace: 'normal', lineHeight: 1.25 }}>
+          aprovando todas desta peça, a origem fica com {s.fromRemainingUnits}
+        </div>
       </td>
       <td className="num">
         {s.toCoverageDays === null ? '—' : `${s.toCoverageDays}d`}

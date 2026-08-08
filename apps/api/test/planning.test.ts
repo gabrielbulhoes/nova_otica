@@ -349,6 +349,37 @@ describe('buildRebalance · carência, reserva e unidades a caminho', () => {
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0].toCoverageDays).toBe(3);
   });
+
+  /**
+   * "A origem fica com N" é o único número da tela que responde à pergunta que
+   * faz o lojista recusar a sugestão: "vai me deixar sem?". Para essa pergunta
+   * errar para MENOS é seguro e errar para MAIS não é — estes dois testes
+   * prendem a direção do erro, não só o valor.
+   */
+  it('o número da origem já desconta o que está reservado', () => {
+    // B tem 18 un. físicas, 16 já comprometidas com outra transferência:
+    // vendável são 2, o piso come 1, doa 1 — e fica com 1, não com 17.
+    const plan = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { reserved: 16 })], 90, () => cfg);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(1);
+    expect(plan.rows[0].fromRemainingUnits).toBe(1);
+    expect(plan.rows[0].reason).toContain('fica com 1 un');
+  });
+
+  it('o número da origem é o mesmo em toda linha dela e conta as outras sugestões', () => {
+    // B tem 100 un. paradas e atende duas lojas no mesmo plano: A leva 57 e C
+    // leva 28. Cada linha tem botão próprio, então o número precisa valer para
+    // quem aprovar QUALQUER subconjunto — e só o pior caso vale para todos.
+    const plan = buildRebalance([mk('a', 90, 3), mk('c', 45, 2), mk('b', 0, 100)], 90, () => cfg);
+    expect(plan.rows).toHaveLength(2);
+    expect(plan.rows.map((r) => r.quantity)).toEqual([57, 28]);
+    // 100 − 57 − 28 = 15 nas DUAS linhas. Por linha isolada seriam 43 e 15, e
+    // quem aprovasse só a segunda leria 15 e ficaria com 72.
+    expect(plan.rows.map((r) => r.fromRemainingUnits)).toEqual([15, 15]);
+    for (const r of plan.rows) {
+      expect(r.reason).toContain('Aprovando todas as sugestões desta peça');
+    }
+  });
 });
 
 describe('buildPurchaseOrders (pedidos por fornecedor)', () => {

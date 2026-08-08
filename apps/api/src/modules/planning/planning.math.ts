@@ -1236,10 +1236,21 @@ export interface RebalanceSuggestion {
   toStoreName: string;
   quantity: number;
   /**
-   * Unidades que SOBRAM na origem depois desta transferência (e das outras já
-   * sugeridas para a mesma origem no mesmo plano). Vai para a tela porque é a
-   * resposta direta à queixa "o sistema esvazia a loja de origem": o número
-   * que o lojista quer conferir antes de clicar.
+   * PISO do que sobra vendável na origem: o que fica se TODAS as linhas desta
+   * peça saindo desta origem forem aprovadas — não só esta. Vai para a tela
+   * porque é a resposta direta à queixa "o sistema esvazia a loja de origem":
+   * o número que o lojista quer conferir antes de clicar.
+   *
+   * É o pior caso de propósito, por duas razões que se somam. Cada linha tem
+   * botão próprio e é aprovada isolada, então o número precisa valer para
+   * quem aprovar QUALQUER subconjunto delas — e só o pior caso vale para
+   * todos. E a pergunta que ele responde é "vai me deixar sem?": errar para
+   * menos faz o lojista conferir à toa, errar para mais o faz esvaziar a
+   * loja confiando no sistema.
+   *
+   * Vendável, não físico: o que está `reserved` para outra transferência está
+   * na prateleira e já tem dono, e contá-lo aqui inflaria justamente o número
+   * que sustenta a promessa de piso de vitrine.
    */
   fromRemainingUnits: number;
   fromCoverageDays: number | null;
@@ -1385,10 +1396,15 @@ export function buildRebalance(
         // alvo: quem tem giro continua doando o mesmo excedente de antes, e
         // quem está parado passa a guardar o mostruário.
         const teto = livre - cfg.donorFloorUnits;
-        return { ...s, doado: 0, spare: recemChegada ? 0 : Math.min(excedente, teto) };
+        return { ...s, livre, doado: 0, spare: recemChegada ? 0 : Math.min(excedente, teto) };
       })
       .filter((s) => s.spare > 0)
       .sort((a, b) => b.spare - a.spare);
+
+    // As linhas desta peça, com a doadora de cada uma: `fromRemainingUnits` e
+    // as frases que o citam só fecham depois de TODAS as receptoras, porque o
+    // número é o pior caso — ver o campo em `RebalanceSuggestion`.
+    const doProduto: { sug: RebalanceSuggestion; donor: (typeof donors)[number] }[] = [];
 
     for (const receiver of receivers) {
       let need = receiver.need;
@@ -1407,11 +1423,8 @@ export function buildRebalance(
           : `sobrando em ${donor.storeName} (${fmtCover(donor.coverage)})`;
         const fromShort = donor.storeName.replace(/^.*—\s*/, '');
         const toShort = receiver.storeName.replace(/^.*—\s*/, '');
-        // O que fica na origem depois desta doação e das anteriores do mesmo
-        // plano. Nunca abaixo do piso, por construção de `spare`.
-        const restante = donor.stock - donor.doado;
         const friendly = donorParado
-          ? `Está parado em ${fromShort} e vende em ${toShort} — melhor mandar pra onde gira do que deixar encalhado. ${fromShort} fica com ${restante} un. em vitrine.`
+          ? `Está parado em ${fromShort} e vende em ${toShort} — melhor mandar pra onde gira do que deixar encalhado.`
           : `${toShort} está no limite e ${fromShort} tem de sobra — remaneja e ninguém fica sem, sem gastar nada.`;
         // Confiança: giro no destino (quanto mais vende, mais seguro) + sobra
         // folgada na origem. Escala simples, coerente com a de compra.
@@ -1419,7 +1432,7 @@ export function buildRebalance(
         const volume = Math.min(1, recvRate / 30);
         const spareRatio = donorParado ? 1 : Math.min(1, donor.spare / Math.max(1, qty));
         const conf = Math.round(Math.min(0.97, Math.max(0.3, 0.4 + 0.4 * volume + 0.2 * spareRatio)) * 100);
-        out.push({
+        const sug: RebalanceSuggestion = {
           productId,
           description: p.description,
           brand: p.brand,
@@ -1429,14 +1442,30 @@ export function buildRebalance(
           toStoreId: receiver.storeId,
           toStoreName: receiver.storeName,
           quantity: qty,
-          fromRemainingUnits: restante,
+          fromRemainingUnits: 0, // fechado abaixo, quando o total doado é sabido
           fromCoverageDays: donor.coverage === null ? null : round1(donor.coverage),
           toCoverageDays: receiver.coverage === null ? null : round1(receiver.coverage),
           stockoutInDays: stockout,
-          reason: `Vende em ${receiver.storeName} (${fmtCover(receiver.coverage)}) e está ${donorSide}. A origem fica com ${restante} un.`,
+          reason: `Vende em ${receiver.storeName} (${fmtCover(receiver.coverage)}) e está ${donorSide}.`,
           friendlyReason: friendly,
           confidence: conf,
-        });
+        };
+        out.push(sug);
+        doProduto.push({ sug, donor });
+      }
+    }
+
+    // Fecha o "fica com N" de cada linha desta peça, agora que o total doado
+    // por cada origem é sabido. O texto diz que é o piso porque o número só é
+    // verdade se todas as linhas forem aprovadas, e a tela aprova uma a uma —
+    // deixar isso subentendido foi como o número passou a mentir para mais.
+    for (const { sug, donor } of doProduto) {
+      const restante = Math.max(0, donor.livre - donor.doado);
+      const fromShort = donor.storeName.replace(/^.*—\s*/, '');
+      sug.fromRemainingUnits = restante;
+      sug.reason += ` Aprovando todas as sugestões desta peça, a origem fica com ${restante} un.`;
+      if (donor.dailyDemand === 0) {
+        sug.friendlyReason += ` Aprovando todas as sugestões desta peça, ${fromShort} ainda fica com ${restante} un. em vitrine.`;
       }
     }
   }

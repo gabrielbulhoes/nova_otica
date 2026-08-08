@@ -535,7 +535,11 @@ export interface RebalanceSuggestion {
   toStoreId: string;
   toStoreName: string;
   quantity: number;
-  /** Unidades que ficam na origem depois da transferência (nunca zero). */
+  /**
+   * PISO de unidades vendáveis que ficam na origem: o que sobra se TODAS as
+   * linhas desta peça saindo dela forem aprovadas, não só esta. Nunca zero, e
+   * a tela precisa dizer a condição — cada linha é aprovada isolada.
+   */
   fromRemainingUnits: number;
   /** Cobertura (dias) na origem e no destino antes da transferência. */
   fromCoverageDays: number | null;

@@ -1327,6 +1327,43 @@ function demoCardAge(cardId: string): { firstSeenAt: Date; timesSeen: number } {
   return { firstSeenAt: d, timesSeen: ageDays === 0 ? 1 : 1 + ageDays };
 }
 
+/**
+ * Idade simulada da peça NAQUELA loja, em dias.
+ *
+ * A tela de Planejamento declara, a partir de `plan.guards`, que peça com
+ * menos de 45 dias na loja não é remanejada. A demonstração alimentava o motor
+ * sem idade nenhuma, caía no fail-open e remanejava peça de qualquer idade: a
+ * nota anunciava uma trava que o motor da demo não aplicava — o pior defeito
+ * possível numa tela feita justamente para mostrar COMO o sistema decide.
+ *
+ * Hash estável por (loja, produto), como em `demoCardAge`, para a idade não
+ * mudar entre recargas. Cerca de 1 em cada 8 posições cai dentro da carência:
+ * o bastante para a trava aparecer em tela, pouco o bastante para a
+ * demonstração continuar tendo o que sugerir.
+ */
+export function demoIdadeNaLoja(storeId: string, productId: string): number {
+  const s = cardSeed(`IDADE|${storeId}|${productId}`);
+  return s < 12 ? 4 + s : 90 + s * 3;
+}
+
+/** Transferências ainda não efetivadas, somadas por (loja, produto). */
+function transferenciasEmAberto() {
+  const saindo = new Map<string, number>();
+  const chegando = new Map<string, number>();
+  for (const mv of movements) {
+    if (mv.type !== 'TRANSFER') continue;
+    if (!['REQUESTED', 'PENDING'].includes(mv.status as string)) continue;
+    const qtd = Number(mv.quantity) || 0;
+    const productId = (mv.product as { id: string } | undefined)?.id;
+    if (!productId) continue;
+    const de = (mv.fromStore as { id: string } | null)?.id;
+    const para = (mv.toStore as { id: string } | null)?.id;
+    if (de) saindo.set(key(de, productId), (saindo.get(key(de, productId)) ?? 0) + qtd);
+    if (para) chegando.set(key(para, productId), (chegando.get(key(para, productId)) ?? 0) + qtd);
+  }
+  return { saindo, chegando };
+}
+
 // ─── Roteador ────────────────────────────────────────────────────────────────
 
 export interface DemoRequest {
@@ -1811,22 +1848,33 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   }
   const rebalanceRows = () => {
     const inputs: StoreProductInput[] = [];
+    // Idade, reserva e unidades a caminho: sem os três o motor da demo cai no
+    // fail-open e remaneja o que a nota da tela promete não remanejar — a
+    // demonstração passa a mostrar uma regra que ela não tem.
+    const { saindo, chegando } = transferenciasEmAberto();
     for (const s of stores)
       for (const prod of products.filter(
         // O recorte já é uma partição: quem está em `planGroup` não está em
         // lentes. A exclusão extra que existia aqui era de quando 'principal'
         // ainda podia deixar lente passar.
         (x) => matchesProductGroup(x.category, planGroup),
-      ))
+      )) {
+        const k = key(s.id, prod.id);
         inputs.push({
           storeId: s.id,
           storeName: s.name,
           productId: prod.id,
           description: prod.description,
           brand: prod.brand,
-          unitsSold: soldQty.get(key(s.id, prod.id)) ?? 0,
-          currentStock: stockQty.get(key(s.id, prod.id)) ?? 0,
+          unitsSold: soldQty.get(k) ?? 0,
+          currentStock: stockQty.get(k) ?? 0,
+          // Carrinho aberto e transferência ainda não efetivada saindo daqui:
+          // as duas estão na prateleira e as duas já têm dono.
+          reserved: (reserved.get(k) ?? 0) + (saindo.get(k) ?? 0),
+          inboundUnits: chegando.get(k) ?? 0,
+          ageDays: demoIdadeNaLoja(s.id, prod.id),
         });
+      }
     return buildRebalance(inputs, planDays, cfgForBrand);
   };
   // ─── Governança da decisão: trilha em memória, na sessão do navegador ─────
