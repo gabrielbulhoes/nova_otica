@@ -44,28 +44,49 @@ export function createApp() {
   app.get('/health', async (_req, res) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
-      // O frescor do sync entra aqui para que QUALQUER monitor externo (e o
-      // próprio Argos, com um curl) enxergue a base vencida sem precisar
-      // entrar no banco. Continua devolvendo 200 de propósito: o healthcheck
-      // do container e o rollback do deploy usam esta rota, e derrubar a
-      // aplicação porque o ERP não respondeu às 6h seria trocar um problema
-      // de dado por um problema de disponibilidade.
-      const sync = await getFrescor();
-      res.json({
-        status: 'ok',
-        service: 'nova-otica-api',
-        mode: env.SELLBIE_MODE,
-        db: 'up',
-        sync: {
-          ultimoSucesso: sync.ultimoSucesso?.toISOString() ?? null,
-          horas: sync.horas === null ? null : Math.round(sync.horas * 10) / 10,
-          vencido: sync.vencido,
-          limiteHoras: sync.limiteHoras,
-        },
-      });
     } catch {
       res.status(503).json({ status: 'degraded', service: 'nova-otica-api', mode: env.SELLBIE_MODE, db: 'down' });
+      return;
     }
+
+    // Daqui para baixo a resposta JÁ É 200. O frescor do sync entra como
+    // informação, nunca como veredito.
+    //
+    // O frescor está aqui para que QUALQUER monitor externo (e o próprio
+    // Argos, com um curl) enxergue a base vencida sem precisar entrar no
+    // banco. Mas ele custa uma segunda consulta, e antes essa consulta estava
+    // DENTRO do mesmo `try` do `SELECT 1` — de modo que uma lentidão ou um
+    // erro ao ler `SyncRun` derrubava a prova de vida da aplicação inteira.
+    //
+    // Isso importa mais do que parece: o Caddy é o único caminho para a
+    // internet e faz checagem ativa nesta rota (docker/Caddyfile). Com um
+    // destino só, uma checagem que falha vira **503 em toda requisição** até
+    // a próxima passar — a tela inteira, não só a rota lenta. Ou seja: um
+    // detalhe de observabilidade tinha poder de veto sobre a
+    // disponibilidade. Não tem mais.
+    let sync: Awaited<ReturnType<typeof getFrescor>> | null = null;
+    try {
+      sync = await getFrescor();
+    } catch {
+      // engolido de propósito — ver acima
+    }
+
+    res.json({
+      status: 'ok',
+      service: 'nova-otica-api',
+      mode: env.SELLBIE_MODE,
+      db: 'up',
+      sync: sync
+        ? {
+            ultimoSucesso: sync.ultimoSucesso?.toISOString() ?? null,
+            horas: sync.horas === null ? null : Math.round(sync.horas * 10) / 10,
+            vencido: sync.vencido,
+            limiteHoras: sync.limiteHoras,
+          }
+        : // `null` e não um objeto com campos vazios: "não consegui apurar" e
+          // "apurei e está em dia" precisam ser distinguíveis por quem lê.
+          null,
+    });
   });
 
   // Autenticação: /login é público; /me é protegido dentro do próprio router.

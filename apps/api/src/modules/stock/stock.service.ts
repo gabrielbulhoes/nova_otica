@@ -58,30 +58,109 @@ export interface StockRow {
 /**
  * Delta por (storeId, productId) gerado pelas movimentações internas
  * confirmadas e ainda não reconciliadas: entradas somam, saídas subtraem.
+ *
+ * Exportada porque o planejamento precisa do MESMO saldo que esta tela e que a
+ * validação de saldo de `createMovement`. Uma segunda conta de estoque ao vivo,
+ * escrita em outro módulo e obrigada a concordar com esta por disciplina, é a
+ * próxima divergência silenciosa — foi assim que o remanejamento passou a
+ * sugerir de novo uma transferência que o operador já tinha confirmado.
+ *
+ * `productIds` é recorte opcional: o planejamento trabalha sobre um conjunto
+ * conhecido de produtos e não precisa varrer o histórico inteiro da rede.
  */
-async function liveDeltas(): Promise<Map<string, number>> {
+export async function liveDeltas(productIds?: string[]): Promise<Map<string, number>> {
   const deltas = new Map<string, number>();
   const add = (storeId: string | null, productId: string, qty: number) => {
     if (!storeId) return;
     const key = `${storeId}:${productId}`;
     deltas.set(key, (deltas.get(key) ?? 0) + qty);
   };
+  const doRecorte = productIds ? { productId: { in: productIds } } : {};
 
   const inbound = await prisma.inventoryMovement.groupBy({
     by: ['toStoreId', 'productId'],
-    where: { status: 'CONFIRMED', toStoreId: { not: null } },
+    where: { status: 'CONFIRMED', toStoreId: { not: null }, ...doRecorte },
     _sum: { quantity: true },
   });
   for (const r of inbound) add(r.toStoreId, r.productId, r._sum.quantity ?? 0);
 
   const outbound = await prisma.inventoryMovement.groupBy({
     by: ['fromStoreId', 'productId'],
-    where: { status: 'CONFIRMED', fromStoreId: { not: null } },
+    where: { status: 'CONFIRMED', fromStoreId: { not: null }, ...doRecorte },
     _sum: { quantity: true },
   });
   for (const r of outbound) add(r.fromStoreId, r.productId, -(r._sum.quantity ?? 0));
 
   return deltas;
+}
+
+/** Saldo ao vivo de uma posição: físico e vendável. */
+export interface SaldoDaPosicao {
+  /** Físico na prateleira agora — inclui o que já tem dono. */
+  onHand: number;
+  /** Vendável: `onHand` menos o comprometido com saída pendente ou solicitada. */
+  disponivel: number;
+}
+
+/**
+ * Saldo ao vivo por `${storeId}:${productId}` — a UMA conta de estoque da
+ * plataforma, para quem precisa dela em lote.
+ *
+ * O comentário de `liveDeltas` acima já dizia por que existe uma conta só, mas
+ * dizia pela metade: quem chamava `liveDeltas` acertava, e quem lia
+ * `StockItem.quantity` direto continuava com a conta de ontem sem nada
+ * denunciar. Era o caso do rateio da aba de compras e do plano de distribuição
+ * do recebimento — as duas telas mostravam, para a MESMA peça na MESMA loja,
+ * um número diferente do que a aba de Estoque e o remanejamento mostravam.
+ *
+ * As três parcelas que separam `StockItem.quantity` do saldo de verdade:
+ *
+ *  1. `pendingDelta` — movimentação CONFIRMADA que a sync ainda não reconciliou
+ *     (`liveDeltas`). A peça já saiu/chegou fisicamente.
+ *  2. `reserved` — saídas PENDING, que `recomputeReserved` mantém na coluna.
+ *  3. as saídas REQUESTED, que NÃO entram em `reserved` e por isso precisam ser
+ *     somadas aqui — é a mesma parcela que `createMovement` desconta para
+ *     aceitar ou recusar o clique do gestor.
+ */
+export async function saldosAoVivo(
+  productIds: string[],
+  storeWhere?: Prisma.StoreWhereInput,
+): Promise<Map<string, SaldoDaPosicao>> {
+  const saldos = new Map<string, SaldoDaPosicao>();
+  if (productIds.length === 0) return saldos;
+
+  const [posicoes, solicitadas, deltas] = await Promise.all([
+    prisma.stockItem.findMany({
+      where: { productId: { in: productIds }, ...(storeWhere ? { store: storeWhere } : {}) },
+      select: { storeId: true, productId: true, quantity: true, reserved: true },
+    }),
+    prisma.inventoryMovement.groupBy({
+      by: ['fromStoreId', 'productId'],
+      where: {
+        status: 'REQUESTED',
+        type: 'TRANSFER',
+        fromStoreId: { not: null },
+        productId: { in: productIds },
+      },
+      _sum: { quantity: true },
+    }),
+    liveDeltas(productIds),
+  ]);
+
+  const solicitadoBy = new Map<string, number>();
+  for (const r of solicitadas) {
+    if (r.fromStoreId) solicitadoBy.set(`${r.fromStoreId}:${r.productId}`, r._sum.quantity ?? 0);
+  }
+
+  for (const p of posicoes) {
+    const k = `${p.storeId}:${p.productId}`;
+    const reservado = Math.max(0, p.reserved) + (solicitadoBy.get(k) ?? 0);
+    const { onHand, availableNow } = computeLiveStock(p.quantity, reservado, deltas.get(k) ?? 0);
+    // Saldo negativo é possível enquanto a sync não reconcilia; para quem
+    // planeja isso é zero, não uma loja devendo peça.
+    saldos.set(k, { onHand: Math.max(0, onHand), disponivel: availableNow });
+  }
+  return saldos;
 }
 
 /** Lista o estoque consolidado com saldo ao vivo. */

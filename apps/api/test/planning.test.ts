@@ -8,6 +8,14 @@ import {
   supplierFor,
   storeCarriesBrand,
   annotateCardAges,
+  contarIdades,
+  filtrarVista,
+  finalizarBoard,
+  grifesDoQuadro,
+  paginar,
+  recortePedido,
+  TETO_DE_CARDS,
+  TETO_DE_LINHAS,
   suggestedDiscount,
   analysisBrand,
   bestOutletStore,
@@ -28,6 +36,7 @@ import {
   buildPriceBands,
   paretoSummary,
   type ProductMetricsInput,
+  type StoreProductInput,
 } from '../src/modules/planning/planning.math.js';
 
 const base: ProductMetricsInput = {
@@ -169,7 +178,7 @@ describe('buildRebalance (redistribuição entre lojas)', () => {
     currentStock,
   });
 
-  it('sugere transferir de onde está parado para onde vende e falta', () => {
+  it('doadora parada doa quase tudo, mas nunca fica com zero na vitrine', () => {
     const plan = buildRebalance(
       [mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 0, 18)], // A vende 1/dia com 3 un.; B parada com 18
       90,
@@ -179,17 +188,28 @@ describe('buildRebalance (redistribuição entre lojas)', () => {
     const s = plan.rows[0];
     expect(s.fromStoreId).toBe('b');
     expect(s.toStoreId).toBe('a');
-    // necessidade de A: alvo 60 un. − 3 em estoque = 57; B só tem 18 → transfere 18.
-    expect(s.quantity).toBe(18);
+    // Este teste dizia 18 — "parado: pode doar tudo", como estava escrito no
+    // motor. Era o comportamento que o Galbe reclamou: a origem ficava com
+    // zero, e peça que ninguém vê não vende. A necessidade de A continua 57
+    // (alvo 60 − 3), B continua sendo a única fonte, e o que muda é o piso:
+    // doa 17 de 18 e o mostruário fica.
+    expect(s.quantity).toBe(17);
+    expect(s.fromRemainingUnits).toBe(cfg.donorFloorUnits);
+    expect(s.fromRemainingUnits).toBeGreaterThan(0);
     expect(s.stockoutInDays).toBe(3);
     expect(plan.summary.storesInvolved).toBe(2);
   });
 
-  it('doadora com giro preserva a própria cobertura-alvo', () => {
+  it('doadora com giro preserva a própria cobertura-alvo, sem descontar o piso duas vezes', () => {
     // B vende 0,1/dia (alvo 6 un.) e tem 30 → pode doar 24.
+    //
+    // O piso de vitrine é MÍNIMO ABSOLUTO, não parcela somada ao alvo: quem
+    // tem giro já está protegido por `targetCoverDays`. Se este número virar
+    // 23, o piso foi implementado somando — e o errado é a implementação.
     const plan = buildRebalance([mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 9, 30)], 90, () => cfg);
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0].quantity).toBe(24);
+    expect(plan.rows[0].fromRemainingUnits).toBe(6);
   });
 
   it('não sugere nada quando o estoque está equilibrado', () => {
@@ -200,6 +220,178 @@ describe('buildRebalance (redistribuição entre lojas)', () => {
   it('não transfere para loja sem vendas', () => {
     const plan = buildRebalance([mk('a', 'Loja A', 0, 0), mk('b', 'Loja B', 0, 18)], 90, () => cfg);
     expect(plan.rows).toHaveLength(0);
+  });
+
+  it('doadora com uma peça só não doa: o piso come a única unidade', () => {
+    const plan = buildRebalance([mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 0, 1)], 90, () => cfg);
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('o plano declara as guardas que aplicou, para a tela poder dizê-las', () => {
+    const plan = buildRebalance([mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 0, 18)], 90, () => cfg);
+    expect(plan.guards.donorFloorUnits).toBe(cfg.donorFloorUnits);
+    expect(plan.guards.newProductDays).toBe(cfg.newProductDays);
+  });
+});
+
+/**
+ * Queixa do Galbe (WhatsApp): "o sistema manda remanejar peça que acabou de
+ * chegar na loja" e "esvazia a loja de origem".
+ *
+ * As duas travas moram na mesma função. O que estes testes prendem é o
+ * CONTRATO de cada uma, incluindo a direção do erro quando falta dado.
+ */
+describe('buildRebalance · carência, reserva e unidades a caminho', () => {
+  const cfg = { ...DEFAULT_PLANNING_CONFIG, leadTimeDays: 14, safetyDays: 7, targetCoverDays: 60 };
+  const mk = (
+    storeId: string,
+    unitsSold: number,
+    currentStock: number,
+    extra: Partial<StoreProductInput> = {},
+  ): StoreProductInput => ({
+    storeId,
+    storeName: `Loja ${storeId.toUpperCase()}`,
+    productId: 'p1',
+    description: 'Armação X',
+    brand: 'Ray-Ban',
+    unitsSold,
+    currentStock,
+    ...extra,
+  });
+
+  it('peça recém-chegada na origem não é doada', () => {
+    const plan = buildRebalance(
+      // B tem 18 un. paradas, mas chegou há 10 dias — carência de 45.
+      [mk('a', 90, 3), mk('b', 0, 18, { ageDays: 10 })],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('passada a carência, a mesma peça volta a poder doar', () => {
+    const plan = buildRebalance(
+      [mk('a', 90, 3), mk('b', 0, 18, { ageDays: cfg.newProductDays })],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].fromStoreId).toBe('b');
+  });
+
+  it('idade desconhecida NÃO é peça nova — a trava é fail-open', () => {
+    // O contrato é o mesmo de `input.ageDays != null && …` da liquidação.
+    // Fechar aqui esvaziaria o plano em qualquer base sem data de posição, e
+    // uma sugestão a menos é uma sugestão que o lojista nunca vê.
+    const semIdade = buildRebalance([mk('a', 90, 3), mk('b', 0, 18)], 90, () => cfg);
+    const idadeNula = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { ageDays: null })], 90, () => cfg);
+    expect(semIdade.rows).toHaveLength(1);
+    expect(idadeNula.rows).toHaveLength(1);
+  });
+
+  it('a carência olha a ORIGEM, não o destino', () => {
+    // Destino recém-chegado continua podendo RECEBER: quem acabou de receber
+    // duas peças de uma coleção que vende não pode ficar esperando 45 dias.
+    const plan = buildRebalance(
+      [mk('a', 90, 3, { ageDays: 5 }), mk('b', 0, 18)],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].toStoreId).toBe('a');
+  });
+
+  it('unidade já reservada para outra transferência não é oferecida de novo', () => {
+    // B tem 18 un., 15 já comprometidas → livre 3, menos o piso → doa 2.
+    const plan = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { reserved: 15 })], 90, () => cfg);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(2);
+  });
+
+  it('reserva que consome o estoque livre zera a doação', () => {
+    const plan = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { reserved: 18 })], 90, () => cfg);
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('o que já está a caminho do destino abate a necessidade dele', () => {
+    // A precisa de 57 (alvo 60 − 3). Com 50 a caminho, precisa de 7.
+    const plan = buildRebalance(
+      [mk('a', 90, 3, { inboundUnits: 50 }), mk('b', 0, 18)],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(7);
+  });
+
+  it('destino já atendido por transferência pendente sai do plano', () => {
+    const plan = buildRebalance(
+      [mk('a', 90, 3, { inboundUnits: 60 }), mk('b', 0, 18)],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('a demanda é medida pelos dias de presença da peça, não pela janela', () => {
+    // 2 un. numa peça de 10 dias não é 0,022/dia (2/90, a janela inteira): é a
+    // taxa dos dias em que ela pôde vender. Com 1 un. em estoque, a loja fica
+    // abaixo do mínimo e é receptora.
+    const comIdade = buildRebalance(
+      [mk('a', 2, 1, { ageDays: 10 }), mk('b', 0, 30)],
+      90,
+      () => cfg,
+    );
+    expect(comIdade.rows).toHaveLength(1);
+    expect(comIdade.rows[0].toStoreId).toBe('a');
+    // 10 dias de presença sobem para o piso de observação (14): 2/14 = 0,143/dia
+    // → ceil(0,143 × 60) = 9, menos 1 em estoque. Era 11, com a taxa lida sobre
+    // os 10 dias crus; o piso existe porque a mesma conta sobre 3 dias pediria
+    // 20 unidades por causa de UMA venda.
+    expect(comIdade.rows[0].quantity).toBe(8);
+
+    // A mesma peça medida pela janela inteira "vende" 0,022/dia: cobertura de
+    // 45 dias, acima do mínimo (21) — e a loja que está acabando não recebe.
+    const pelaJanela = buildRebalance([mk('a', 2, 1), mk('b', 0, 30)], 90, () => cfg);
+    expect(pelaJanela.rows).toHaveLength(0);
+  });
+
+  it('idade maior que a janela não infla a demanda', () => {
+    // Peça de 3 anos com 90 vendas na janela vende 1/dia, não 90/dia.
+    const plan = buildRebalance([mk('a', 90, 3, { ageDays: 1095 }), mk('b', 0, 18)], 90, () => cfg);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].toCoverageDays).toBe(3);
+  });
+
+  /**
+   * "A origem fica com N" é o único número da tela que responde à pergunta que
+   * faz o lojista recusar a sugestão: "vai me deixar sem?". Para essa pergunta
+   * errar para MENOS é seguro e errar para MAIS não é — estes dois testes
+   * prendem a direção do erro, não só o valor.
+   */
+  it('o número da origem já desconta o que está reservado', () => {
+    // B tem 18 un. físicas, 16 já comprometidas com outra transferência:
+    // vendável são 2, o piso come 1, doa 1 — e fica com 1, não com 17.
+    const plan = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { reserved: 16 })], 90, () => cfg);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(1);
+    expect(plan.rows[0].fromRemainingUnits).toBe(1);
+    expect(plan.rows[0].reason).toContain('fica com 1 un');
+  });
+
+  it('o número da origem é o mesmo em toda linha dela e conta as outras sugestões', () => {
+    // B tem 100 un. paradas e atende duas lojas no mesmo plano: A leva 57 e C
+    // leva 28. Cada linha tem botão próprio, então o número precisa valer para
+    // quem aprovar QUALQUER subconjunto — e só o pior caso vale para todos.
+    const plan = buildRebalance([mk('a', 90, 3), mk('c', 45, 2), mk('b', 0, 100)], 90, () => cfg);
+    expect(plan.rows).toHaveLength(2);
+    expect(plan.rows.map((r) => r.quantity)).toEqual([57, 28]);
+    // 100 − 57 − 28 = 15 nas DUAS linhas. Por linha isolada seriam 43 e 15, e
+    // quem aprovasse só a segunda leria 15 e ficaria com 72.
+    expect(plan.rows.map((r) => r.fromRemainingUnits)).toEqual([15, 15]);
+    for (const r of plan.rows) {
+      expect(r.reason).toContain('Aprovando todas as sugestões desta peça');
+    }
   });
 });
 
@@ -259,6 +451,51 @@ describe('buildPurchaseOrders (pedidos por fornecedor)', () => {
     expect(po.orders[0].stockoutInDays).toBe(4);
     // BUY implica estar no/abaixo do ponto de reposição → prazo-limite é hoje.
     expect(po.orders.every((o) => o.orderByInDays === 0)).toBe(true);
+  });
+
+  it('sem as posições por loja, o item sai SEM rateio — ausente é "não calculado"', () => {
+    // Ausência declarada, não tabela vazia: uma tabela vazia pareceria um
+    // rateio que deu zero, que é uma afirmação sobre as lojas.
+    const po = buildPurchaseOrders([mkPlan('Ray-Ban', 30, 90, 20)], 90);
+    expect(po.orders[0].items[0].distribution).toBeUndefined();
+  });
+
+  it('com as posições por loja, cada item já sai rateado por necessidade', () => {
+    // O pedido literal do cliente: "na aba de sugestão de compras já precisa
+    // indicar a sugestão de distribuição daqueles itens para cada loja".
+    const plan = mkPlan('Ray-Ban', 30, 90, 20);
+    const posicoes = new Map([
+      [
+        plan.productId,
+        [
+          // Vende 1/dia (alvo 60) e tem 5 → falta 55.
+          { storeId: 'a', storeName: 'Loja A', unitsSold: 90, stockUnits: 5 },
+          // Vende o DOBRO (alvo 120) mas tem 200 → falta 0, não recebe nada.
+          { storeId: 'b', storeName: 'Loja B', unitsSold: 180, stockUnits: 200 },
+        ],
+      ],
+    ]);
+    const po = buildPurchaseOrders([plan], 90, undefined, posicoes);
+    const item = po.orders[0].items[0];
+    expect(item.distribution!.basis).toBe('necessidade');
+    expect(item.distribution!.totalNeed).toBe(55);
+    expect(item.distribution!.rows.map((r) => r.storeId)).toEqual(['a']);
+    // A soma do rateio é a quantidade do item, nem mais nem menos.
+    const somado = item.distribution!.rows.reduce((s, r) => s + r.suggestedQty, 0);
+    expect(somado + item.distribution!.unassigned).toBe(item.quantity);
+  });
+
+  it('o rateio é o QUARTO parâmetro: o resolver de fornecedor continua no terceiro', () => {
+    // Há chamadas com dois argumentos e uma que passa `resolve` posicionalmente
+    // como terceiro. Empurrar as posições para antes dele quebraria todas em
+    // silêncio — o tipo de quebra que compila.
+    const plan = mkPlan('Ray-Ban', 30, 90, 20);
+    const posicoes = new Map([
+      [plan.productId, [{ storeId: 'a', storeName: 'Loja A', unitsSold: 90, stockUnits: 5 }]],
+    ]);
+    const po = buildPurchaseOrders([plan], 90, () => 'Luxottica', posicoes);
+    expect(po.orders[0].supplier).toBe('Luxottica');
+    expect(po.orders[0].items[0].distribution!.rows).toHaveLength(1);
   });
 });
 
@@ -785,6 +1022,155 @@ describe('annotateCardAges (idade do card vinda do lote de geração)', () => {
     // Mesmo card, dois lotes depois: timesSeen sobe, firstSeenAt não se move.
     const depois = annotateCardAges(board, history, batch, 30, new Date(agora.getTime() + 2 * 86_400_000));
     expect(depois.cards[1].ageDays).toBe(12);
+  });
+});
+
+describe('resumo do quadro paginado (a mentira que a página contaria sozinha)', () => {
+  // 50 cards de liquidação e compra, cada um com sua própria idade: metade
+  // estreando no lote, um terço atrasado. É o mínimo para que uma página de 5
+  // NÃO possa acertar as contagens por acaso.
+  const agora = new Date('2026-08-08T09:00:00Z');
+  const diasAtras = (n: number) => new Date(agora.getTime() - n * 86_400_000);
+  const planos = Array.from({ length: 50 }, (_, i) =>
+    analyzeProduct(
+      {
+        ...base,
+        productId: `pg${i}`,
+        description: `Armação Oakley ${i}`,
+        brand: 'Oakley',
+        unitsSold: i % 2 === 0 ? 0 : 90 + i,
+        currentStock: i % 2 === 0 ? 5 + i : 1,
+        unitPrice: 200 + i * 37,
+      },
+      90,
+      DEFAULT_PLANNING_CONFIG,
+    ),
+  );
+  const quadro = finalizarBoard(buildDecisionCards(planos, []).cards);
+  const history = new Map(
+    quadro.cards.map((c, i) => [
+      c.id,
+      { cardId: c.id, firstSeenAt: diasAtras(i % 3 === 0 ? 45 : 3), timesSeen: i % 2 === 0 ? 1 : 9 },
+    ]),
+  );
+  const lote = {
+    id: 'b1', generatedAt: agora.toISOString(), source: 'CRON' as const,
+    cardsTotal: quadro.cards.length, cardsNew: 0,
+  };
+  const inteiro = annotateCardAges(quadro, history, lote, 30, agora);
+
+  it('página de 5 sobre um lote de 50 mantém total, tipos, prioridades, críticos, novos e atrasados', () => {
+    expect(quadro.cards.length).toBe(50);
+    const { itens, pagina } = paginar(quadro.cards, 1, 5);
+    const página = annotateCardAges(
+      { summary: quadro.summary, cards: itens, pagina },
+      history,
+      lote,
+      30,
+      agora,
+      contarIdades(quadro.cards, history, 30, agora),
+    );
+
+    // A página traz 5 cards e DIZ que traz 5 de 50 — não finge ser o quadro.
+    expect(página.cards.length).toBe(5);
+    expect(página.pagina).toEqual({ page: 1, pageSize: 5, total: 50 });
+
+    // Todo número do resumo é do LOTE, não da página. Sem isto o quadro diria
+    // "5 cards, 3 novos" com a tela idêntica à de 50 cards e 25 novos.
+    expect(página.summary.total).toBe(50);
+    expect(página.summary.byType).toEqual(inteiro.summary.byType);
+    expect(página.summary.byPriority).toEqual(inteiro.summary.byPriority);
+    expect(página.summary.criticos).toBe(inteiro.summary.criticos);
+    expect(página.summary.novos).toBe(inteiro.summary.novos);
+    expect(página.summary.atrasados).toBe(inteiro.summary.atrasados);
+    // E as contagens de idade não são triviais: há novos e atrasados de fato.
+    expect(inteiro.summary.novos).toBeGreaterThan(5);
+    expect(inteiro.summary.atrasados).toBeGreaterThan(5);
+  });
+
+  it('sem a contagem do lote, o resumo da página conta só a página — o defeito, escrito', () => {
+    const { itens } = paginar(quadro.cards, 1, 5);
+    const ingênua = annotateCardAges({ summary: quadro.summary, cards: itens }, history, lote, 30, agora);
+    expect(ingênua.summary.novos).toBeLessThan(inteiro.summary.novos!);
+  });
+
+  it('a última página não passa do fim, e uma página além do fim vem vazia', () => {
+    expect(paginar(quadro.cards, 5, 12).itens.length).toBe(2);
+    expect(paginar(quadro.cards, 99, 12).itens.length).toBe(0);
+    // Página e tamanho inválidos caem no primeiro item, nunca em índice negativo.
+    expect(paginar(quadro.cards, 0, 0).itens.length).toBe(1);
+  });
+
+  it('a lista de grifes do seletor sai do quadro, não da página', () => {
+    const misto = [
+      ...quadro.cards,
+      { ...quadro.cards[0], id: '#ZZZ.99', brandLabel: 'ZEGNA' } as (typeof quadro.cards)[number],
+    ];
+    expect(grifesDoQuadro(misto)).toContain('ZEGNA');
+    expect(grifesDoQuadro(misto.slice(0, 5))).not.toContain('ZEGNA');
+  });
+});
+
+describe('recortePedido (o saneamento de page/pageSize que a rota e a demo dividem)', () => {
+  it('prende o tamanho no teto, por mais que se peça', () => {
+    expect(recortePedido({ pageSize: 999_999 }, 60, TETO_DE_CARDS).pageSize).toBe(TETO_DE_CARDS);
+    expect(recortePedido({ pageSize: '100000' }, 100, TETO_DE_LINHAS).pageSize).toBe(TETO_DE_LINHAS);
+  });
+
+  it('valor ausente, zero, negativo ou lixo cai no padrão da rota', () => {
+    for (const v of [undefined, 0, -5, 'abc', null, {}]) {
+      expect(recortePedido({ pageSize: v }, 60, TETO_DE_CARDS).pageSize, String(v)).toBe(60);
+      expect(recortePedido({ page: v }, 60, TETO_DE_CARDS).page, String(v)).toBe(1);
+    }
+  });
+
+  it('página válida passa inteira — é ela que faz o "Ver mais" alcançar o fim', () => {
+    // Sem `page`, a cauda de uma lista maior que o teto fica inalcançável: era
+    // exatamente isso que a tela provocava ao só crescer o `pageSize`.
+    expect(recortePedido({ page: '17', pageSize: '60' }, 60, TETO_DE_CARDS)).toEqual({
+      page: 17,
+      pageSize: 60,
+    });
+  });
+
+  it('acima do teto, só a página alcança a cauda da lista', () => {
+    // A demo importa `TETO_DE_CARDS` daqui. Enquanto o teto morava escrito à
+    // mão na rota, a demo servia 1.260 cards para o pedido que contra a API
+    // devolvia 1.000, e o teste da demo passava verde sobre um contrato que a
+    // produção não cumpre.
+    const lista = Array.from({ length: TETO_DE_CARDS + 260 }, (_, i) => `item-${i}`);
+    const absurdo = recortePedido({ pageSize: '100000' }, 60, TETO_DE_CARDS);
+    const fatia = paginar(lista, absurdo.page, absurdo.pageSize);
+    expect(fatia.itens.length).toBe(TETO_DE_CARDS);
+    expect(fatia.itens).not.toContain(lista[lista.length - 1]);
+
+    // Pedindo PÁGINA, com tamanho fixo, o último item chega.
+    const ultima = recortePedido({ page: String(Math.ceil(lista.length / 60)), pageSize: '60' }, 60, TETO_DE_CARDS);
+    expect(paginar(lista, ultima.page, ultima.pageSize).itens).toContain(lista[lista.length - 1]);
+  });
+});
+
+describe('filtrarVista (filtros de vista do quadro)', () => {
+  const cards = [
+    { id: '#C1', type: 'COMPRA', priority: 'ALTA', brandLabel: 'OAKLEY' },
+    { id: '#R1', type: 'REMANEJAMENTO', priority: 'BAIXA', brandLabel: 'RAY-BAN', fromStoreId: 'A', toStoreId: 'B' },
+    { id: '#L1', type: 'LIQUIDACAO', priority: 'MEDIA', brandLabel: 'OAKLEY', outletStoreId: 'B' },
+  ] as unknown as import('../src/modules/planning/planning.math.js').DecisionCard[];
+
+  it('sem critério nenhum devolve a lista inteira', () => {
+    expect(filtrarVista(cards, {})).toHaveLength(3);
+  });
+
+  it('tipo, prioridade e grife recortam o que a tela mostra', () => {
+    expect(filtrarVista(cards, { tipo: 'LIQUIDACAO' }).map((c) => c.id)).toEqual(['#L1']);
+    expect(filtrarVista(cards, { prioridade: 'ALTA' }).map((c) => c.id)).toEqual(['#C1']);
+    expect(filtrarVista(cards, { grife: 'OAKLEY' }).map((c) => c.id)).toEqual(['#C1', '#L1']);
+  });
+
+  it('o filtro de loja pega origem, destino e escoamento — e o card de compra fica de fora', () => {
+    // Comprar é decisão de REDE: o card não tem loja, então some sob o filtro.
+    expect(filtrarVista(cards, { loja: 'B' }).map((c) => c.id)).toEqual(['#R1', '#L1']);
+    expect(filtrarVista(cards, { loja: 'A' }).map((c) => c.id)).toEqual(['#R1']);
   });
 });
 

@@ -1,5 +1,10 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Fragment, useRef, useState, type ReactNode } from 'react';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   createMovement,
   formatBRL,
@@ -17,12 +22,15 @@ import {
   getSupplierSettings,
   registerPurchaseOrder,
   setSupplierLeadTime,
+  getMixDeGrifes,
+  setGrifeForaDoMix,
   settlePurchaseOrder,
   type MovementClass,
   type PurchaseOrder,
   type ProductGroup,
   type PurchaseOrderRecord,
   type Recommendation,
+  type RateioLoja,
   type RebalanceSuggestion,
 } from '../api/client';
 import {
@@ -38,8 +46,17 @@ import {
 } from '../components/ui';
 import { Icon, type IconName } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
-import { downloadCsv, toCsv } from '../bi/csv';
+import { downloadCsv } from '../bi/csv';
+import { deadlineDate, orderCsv, rotuloDoPeso, slug } from '../lib/rateio';
 import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { recarregarDoTopo } from '../lib/consultaPaginada';
+import {
+  LINHAS_POR_CLIQUE,
+  juntarPaginas,
+  proximoPedido,
+  type PedidoDePagina,
+  restantes,
+} from '../lib/paginacao';
 import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
 
 /**
@@ -223,9 +240,6 @@ function WhyNote({ text }: { text: string }) {
   );
 }
 
-const deadlineDate = (inDays: number) =>
-  new Date(Date.now() + inDays * 86400000).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-
 const shortDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : '—';
 
@@ -293,55 +307,89 @@ function TwoStepButton({
   );
 }
 
-/** Linhas do CSV de uma ordem de compra (uma por item + total). */
-function orderCsv(order: PurchaseOrder): string {
-  type Row = {
-    fornecedor: string;
-    marca: string;
-    produto: string;
-    categoria: string;
-    quantidade: number | string;
-    custoUnit: string;
-    total: string;
-    pedirAte: string;
-    prazoEntregaDias: number | string;
-  };
-  const rows: Row[] = order.items.map((it) => ({
-    fornecedor: order.supplier,
-    marca: it.brand ?? '',
-    produto: it.description,
-    categoria: it.category ?? '',
-    quantidade: it.quantity,
-    custoUnit: it.unitCost.toFixed(2).replace('.', ','),
-    total: it.total.toFixed(2).replace('.', ','),
-    pedirAte: it.orderByInDays === null ? '' : it.orderByInDays === 0 ? 'hoje' : deadlineDate(it.orderByInDays),
-    prazoEntregaDias: order.leadTimeDays,
-  }));
-  rows.push({
-    fornecedor: order.supplier,
-    marca: '',
-    produto: 'TOTAL DO PEDIDO',
-    categoria: '',
-    quantidade: order.units,
-    custoUnit: '',
-    total: order.total.toFixed(2).replace('.', ','),
-    pedirAte: order.orderByInDays === null ? '' : order.orderByInDays === 0 ? 'hoje' : deadlineDate(order.orderByInDays),
-    prazoEntregaDias: order.leadTimeDays,
-  });
-  return toCsv(rows, [
-    { key: 'fornecedor', label: 'Fornecedor' },
-    { key: 'marca', label: 'Marca' },
-    { key: 'produto', label: 'Produto' },
-    { key: 'categoria', label: 'Categoria' },
-    { key: 'quantidade', label: 'Quantidade' },
-    { key: 'custoUnit', label: 'Custo unit. (R$)' },
-    { key: 'total', label: 'Total (R$)' },
-    { key: 'pedirAte', label: 'Pedir até' },
-    { key: 'prazoEntregaDias', label: 'Prazo de entrega (dias)' },
-  ]);
-}
+/**
+ * A tabela "quanto vai para cada loja". Nasceu dentro do plano de recebimento
+ * e saiu de lá porque a aba de COMPRAS passou a fazer a mesma pergunta — e
+ * duas tabelas com o mesmo conteúdo divergem: uma ganha a coluna de estoque,
+ * a outra não, e aí a mesma peça mostra números diferentes em duas telas.
+ *
+ * As colunas do meio são a CONTA INTEIRA, não decoração: vendeu tanto, tem
+ * tanto, falta tanto, leva tanto. Sem elas a tela mostra um número e pede fé;
+ * com elas o gestor confere — e é conferindo que ele passa a confiar.
+ *
+ * E é por isso que as colunas MUDAM com a base. Na necessidade, a corrente
+ * inteira aparece: venda → alvo → falta → participação. Na reserva não existe
+ * falta (a soma delas é zero, foi o que jogou o rateio para cá), e a venda
+ * desta peça costuma ser zero também — quem manda é o peso da escada. Manter
+ * as mesmas colunas ali mostrava quatro zeros ao lado de "mandar 28", que é a
+ * tela pedindo fé com cara de estar explicando.
+ */
+function RateioPorLoja({
+  rows,
+  pesoLabel,
+  porNecessidade,
+  excludedByMix,
+}: {
+  rows: RateioLoja[];
+  /** Rótulo da coluna de peso — diz de qual base saiu a participação. */
+  pesoLabel: string;
+  porNecessidade: boolean;
+  excludedByMix?: string[];
+}) {
+  return (
+    <>
+      {rows.length === 0 ? (
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+          Nenhuma loja com necessidade nem venda nesta base — divisão manual.
+        </p>
+      ) : (
+        <table style={{ marginTop: 6 }}>
+          <thead>
+            <tr>
+              <th>Loja</th>
+              <th className="num">{pesoLabel}</th>
+              <th className="num">Em estoque</th>
+              {porNecessidade && <th className="num">Falta p/ o alvo</th>}
+              <th className="num">Participação</th>
+              <th className="num">Mandar</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.storeId}>
+                <td>{r.storeName}</td>
+                <td className="num">{porNecessidade ? r.unitsSold : r.weightUnits}</td>
+                <td className="num">{r.stockUnits}</td>
+                {porNecessidade && <td className="num">{r.needUnits}</td>}
+                <td className="num">{r.sharePct}%</td>
+                <td className="num">
+                  <strong>{r.suggestedQty}</strong>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
 
-const slug = (s: string) => s.toLowerCase().normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+      {/* Na reserva, o percentual não saiu da falta — e a tabela precisa dizer
+          isso onde o gestor está olhando, não só na etiqueta acima dela. */}
+      {!porNecessidade && (
+        <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+          Nenhuma loja está abaixo da cobertura-alvo: a divisão saiu da coluna
+          "{pesoLabel}", não da falta.
+        </p>
+      )}
+
+      {/* Loja que some da lista sem motivo visível é o tipo de silêncio que
+          faz alguém desconfiar do resto da tela. */}
+      {excludedByMix && excludedByMix.length > 0 && (
+        <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+          Fora do rateio por não trabalharem a grife: {excludedByMix.join(', ')}.
+        </p>
+      )}
+    </>
+  );
+}
 
 /* Mesmo respiro que o `.stat .value` do indicador compartilhado usa entre o
    rótulo em mono e o número em Fraunces. Fica aqui porque styles.css é de
@@ -349,9 +397,13 @@ const slug = (s: string) => s.toLowerCase().normalize('NFD').replace(/[^\w]+/g, 
 const contadorHeroi = { marginTop: 6 } as const;
 
 /** Rascunho de ordem de compra de um fornecedor, com export CSV e envio. */
-function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
+function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(order.orderByInDays !== null && order.orderByInDays <= 7);
+  // Um rateio aberto por vez: cada um abre uma tabela de 16 linhas, e dois
+  // abertos dentro de um pedido de 30 itens viram uma parede. Mesmo critério do
+  // plano de recebimento, onde a decisão já tinha sido tomada.
+  const [rateioAberto, setRateioAberto] = useState<string | null>(null);
   const urgency =
     order.orderByInDays === null ? null : order.orderByInDays === 0 ? 'hoje' : `até ${deadlineDate(order.orderByInDays)}`;
 
@@ -369,7 +421,7 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
     });
     qc.invalidateQueries({ queryKey: ['planning-history'] });
     qc.invalidateQueries({ queryKey: ['planning-orders'] });
-    qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+    recarregarDoTopo(qc, 'purchase-suggestions');
   };
 
   return (
@@ -456,24 +508,94 @@ function PurchaseOrderCard({ order }: { order: PurchaseOrder }) {
               <th className="num">Total</th>
               <th>Pedir até</th>
               <th>Confiança</th>
+              <th>Distribuição</th>
             </tr>
           </thead>
           <tbody>
             {order.items.map((it) => (
-              <tr key={it.productId}>
-                <td>{it.description}</td>
-                <td>{it.brand ?? '—'}</td>
-                <td>{it.category ?? '—'}</td>
-                <td className="num">{it.quantity}</td>
-                <td className="num">{formatBRL(it.unitCost)}</td>
-                <td className="num">{formatBRL(it.total)}</td>
-                <td>
-                  <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
-                </td>
-                <td>
-                  <Confidence value={it.confidence} />
-                </td>
-              </tr>
+              <Fragment key={it.productId}>
+                <tr>
+                  <td>{it.description}</td>
+                  <td>{it.brand ?? '—'}</td>
+                  <td>{it.category ?? '—'}</td>
+                  <td className="num">{it.quantity}</td>
+                  <td className="num">{formatBRL(it.unitCost)}</td>
+                  <td className="num">{formatBRL(it.total)}</td>
+                  <td>
+                    <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
+                  </td>
+                  <td>
+                    <Confidence value={it.confidence} />
+                  </td>
+                  <td>
+                    {it.distribution ? (
+                      <Botao
+                        variante="discreto"
+                        pequeno
+                        icone={rateioAberto === it.productId ? 'chevron-baixo' : 'chevron-direita'}
+                        onClick={() =>
+                          setRateioAberto(rateioAberto === it.productId ? null : it.productId)
+                        }
+                        aria-expanded={rateioAberto === it.productId}
+                      >
+                        {it.distribution.rows.length} loja
+                        {it.distribution.rows.length === 1 ? '' : 's'}
+                      </Botao>
+                    ) : (
+                      // Ausente ≠ vazio, e são duas ausências diferentes: para
+                      // quem não é ADMIN o rateio é omitido (expõe venda e
+                      // estoque da rede inteira); com uma loja selecionada ele
+                      // não existe (a quantidade já é daquela loja). As duas
+                      // levam ao mesmo lugar — a visão da rede.
+                      <span className="muted" style={{ fontSize: 11.5 }}>
+                        só na visão da rede
+                      </span>
+                    )}
+                  </td>
+                </tr>
+                {it.distribution && rateioAberto === it.productId && (
+                  <tr>
+                    {/* `--panel-2` é o fundo de segundo nível do tema; a linha
+                        expandida precisa se destacar da linha do item sem virar
+                        um bloco de outra tela. */}
+                    <td colSpan={9} style={{ background: 'var(--panel-2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                        <Selo tom="blue" icone="ideia" title={it.distribution.basisLabel}>
+                          por {it.distribution.basis}
+                        </Selo>
+                        {/* O número que o percentual esconde: 100% de um rateio
+                            parece sempre a mesma coisa, cubra ele a falta da
+                            rede ou um vigésimo dela. */}
+                        <span className="muted" style={{ fontSize: 12 }}>
+                          {it.quantity}
+                          <Unidade>un.</Unidade> a dividir
+                          {/* Na reserva a falta é zero por definição, e "para
+                              uma falta de 0 un." seria a tela explicando o
+                              número com um número que não explica nada. */}
+                          {it.distribution.totalNeed > 0 && (
+                            <>
+                              {' '}
+                              para uma falta de {it.distribution.totalNeed}
+                              <Unidade>un.</Unidade> na rede
+                            </>
+                          )}
+                        </span>
+                      </div>
+                      <RateioPorLoja
+                        rows={it.distribution.rows}
+                        pesoLabel={rotuloDoPeso(it.distribution.basis, `${dias} dias`)}
+                        porNecessidade={it.distribution.basis === 'necessidade'}
+                      />
+                      {it.distribution.unassigned > 0 && (
+                        <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
+                          {it.distribution.unassigned} un. sem rateio possível — nenhuma loja tem
+                          falta nem histórico desta peça. Ficam para divisão manual.
+                        </p>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -537,8 +659,11 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
   return (
     <div style={{ padding: '4px 0 8px' }}>
       <p className="hint" style={{ margin: '0 0 10px' }}>
-        Cada item é dividido pela participação de cada loja nas vendas — a mesma lógica do Modo
-        Feira, agora aplicada ao pedido inteiro de uma vez. A soma fecha com a quantidade comprada.
+        Cada item é dividido pela <strong>falta de cada loja até a cobertura-alvo</strong> — quem
+        vende mais tem alvo maior, e o que a loja já tem em estoque é descontado antes. Quando
+        ninguém está abaixo do alvo (peça nova, por exemplo), a divisão cai na participação nas
+        vendas, e a etiqueta ao lado do item diz qual das duas valeu. A soma fecha com a quantidade
+        comprada.
       </p>
 
       {plano.data.items.map((item) => (
@@ -548,6 +673,13 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
             <span className="muted" style={{ fontSize: 12 }}>
               {item.quantity}
               <Unidade>un.</Unidade> a dividir
+              {item.totalNeed > 0 && (
+                <>
+                  {' '}
+                  para uma falta de {item.totalNeed}
+                  <Unidade>un.</Unidade> na rede
+                </>
+              )}
             </span>
             {/* A base é selo informativo, nunca de estado: dizer que o rateio
                 saiu da categoria não é um alerta, é uma ressalva de precisão. */}
@@ -556,42 +688,14 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
             </Selo>
           </div>
 
-          {item.rows.length === 0 ? (
-            <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-              Nenhuma loja com venda nesta base — divisão manual.
-            </p>
-          ) : (
-            <table style={{ marginTop: 6 }}>
-              <thead>
-                <tr>
-                  <th>Loja</th>
-                  <th className="num">Vendeu (12 m)</th>
-                  <th className="num">Participação</th>
-                  <th className="num">Mandar</th>
-                </tr>
-              </thead>
-              <tbody>
-                {item.rows.map((r) => (
-                  <tr key={r.storeId}>
-                    <td>{r.storeName}</td>
-                    <td className="num">{r.unitsSold}</td>
-                    <td className="num">{r.sharePct}%</td>
-                    <td className="num">
-                      <strong>{r.quantity}</strong>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {/* Loja que some da lista sem motivo visível é o tipo de silêncio que
-              faz alguém desconfiar do resto da tela. */}
-          {item.excludedByMix && item.excludedByMix.length > 0 && (
-            <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
-              Fora do rateio por não trabalharem a grife: {item.excludedByMix.join(', ')}.
-            </p>
-          )}
+          {/* 12 meses fixos: é a janela que `distributionPlan` consulta, e ela
+              não segue o seletor de período desta tela. */}
+          <RateioPorLoja
+            rows={item.rows}
+            pesoLabel={rotuloDoPeso(item.basis, '12 m')}
+            porNecessidade={item.basis === 'necessidade'}
+            excludedByMix={item.excludedByMix}
+          />
         </div>
       ))}
 
@@ -664,7 +768,7 @@ function OrderHistory() {
     await settlePurchaseOrder(id, action);
     qc.invalidateQueries({ queryKey: ['planning-history'] });
     qc.invalidateQueries({ queryKey: ['planning-orders'] });
-    qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+    recarregarDoTopo(qc, 'purchase-suggestions');
     qc.invalidateQueries({ queryKey: ['stock'] });
   };
 
@@ -762,6 +866,37 @@ function OrderHistory() {
   );
 }
 
+/**
+ * As duas travas do remanejamento, ditas na tela — e o que há de frágil nelas.
+ *
+ * A idade da peça POR LOJA é estimativa, não medição: o ERP não manda data de
+ * chegada por filial. Esconder isso seria pior do que não ter a trava, porque
+ * o lojista passaria a confiar num número que erra de um jeito só. Erra sempre
+ * para o mesmo lado (peça parece mais VELHA do que é, e por isso pode ser
+ * doada), o que é decisão deliberada: uma sugestão a mais ele recusa em um
+ * clique, uma sugestão a menos ele nunca vê.
+ */
+function NotaDeIdadeEstimada({ guards }: { guards: { newProductDays: number; donorFloorUnits: number } }) {
+  return (
+    <div
+      className="muted"
+      style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 11.5, marginTop: 10, lineHeight: 1.4 }}
+    >
+      <Icon name="informacao" size={14} style={{ marginTop: 1 }} />
+      <span>
+        A loja de origem nunca fica com menos de {guards.donorFloorUnits}{' '}
+        {guards.donorFloorUnits === 1 ? 'unidade' : 'unidades'} em vitrine, e peça com menos de{' '}
+        {guards.newProductDays} dias na loja não é remanejada — ela ainda nem foi vista.{' '}
+        <strong>Essa idade é estimativa</strong>: o ERP não informa quando a peça chegou em cada
+        filial, então usamos a data mais antiga entre a criação da posição de estoque e o cadastro
+        do produto. Ela erra para mais quando a peça zerou e voltou à prateleira, e quando o
+        produto já rodava na rede antes de chegar nesta loja — nos dois casos a peça parece mais
+        velha do que é, e o motor prefere sugerir a mais do que sugerir a menos.
+      </span>
+    </div>
+  );
+}
+
 /** Linha de transferência sugerida com ação de 1 clique e feedback de estado. */
 function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
   const qc = useQueryClient();
@@ -803,7 +938,18 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
         {s.fromStoreName.replace('Nova Ótica — ', '')} <span className="muted">→</span>{' '}
         <strong>{s.toStoreName.replace('Nova Ótica — ', '')}</strong>
       </td>
-      <td className="num">{s.quantity}</td>
+      <td className="num">
+        {s.quantity}
+        {/* O que SOBRA na origem, ao lado do que sai dela. É a conferência que
+            o lojista fazia de cabeça antes de recusar a sugestão — "vai me
+            deixar sem?" — e não custa nada responder antes de ele perguntar.
+            A condição fica escrita: cada linha tem botão próprio, o número é o
+            piso de quem aprovar TODAS as desta peça, e um piso que se anuncia
+            como certeza é pior do que piso nenhum. */}
+        <div className="muted" style={{ fontSize: 11, whiteSpace: 'normal', lineHeight: 1.25 }}>
+          aprovando todas desta peça, a origem fica com {s.fromRemainingUnits}
+        </div>
+      </td>
       <td className="num">
         {s.toCoverageDays === null ? '—' : `${s.toCoverageDays}d`}
         {s.stockoutInDays !== null && (
@@ -833,7 +979,7 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
   );
 }
 
-/** Editor de prazo por fornecedor (marca) — admin. */
+/** Editor de prazo por fornecedor — admin. */
 function SupplierRow({
   brand,
   leadTimeDays,
@@ -841,7 +987,6 @@ function SupplierRow({
   isDefault,
   defaultDays,
   canEdit,
-  discontinued,
 }: {
   brand: string;
   leadTimeDays: number | null;
@@ -849,20 +994,22 @@ function SupplierRow({
   isDefault: boolean;
   defaultDays: number;
   canEdit: boolean;
-  discontinued: boolean;
 }) {
   const qc = useQueryClient();
   const [value, setValue] = useState(leadTimeDays === null ? '' : String(leadTimeDays));
-  const [foraDoMix, setForaDoMix] = useState(discontinued);
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const save = async () => {
     setState('saving');
     try {
-      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value), foraDoMix);
+      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value));
       setState('saved');
       qc.invalidateQueries({ queryKey: ['planning-suppliers'] });
-      qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+      recarregarDoTopo(qc, 'purchase-suggestions');
+      // O prazo de entrega entra em `minCover = leadTimeDays + safetyDays`, que
+      // é o corte de quem precisa receber peça. Mudar o prazo e não refazer o
+      // remanejamento deixava a aba ao lado com um plano calculado sobre a
+      // régua antiga — sem nada na tela dizendo isso.
       qc.invalidateQueries({ queryKey: ['planning-rebalance'] });
       window.setTimeout(() => setState('idle'), 1600);
     } catch {
@@ -890,31 +1037,6 @@ function SupplierRow({
           <span>{leadTimeDays ?? defaultDays} dias{isDefault ? ' (padrão)' : ''}</span>
         )}
       </td>
-      {/* Feedback 6.0 · item 03 — "grifes que não fazem mais parte de nosso mix
-          de produto". Nenhum dado do ERP diz isso: é decisão comercial, e por
-          isso precisa ser declarada aqui. Marcar corta a SUGESTÃO DE COMPRA e
-          nada mais — a liquidação continua (descontinuado com saldo é o que se
-          quer escoar) e o remanejamento também. */}
-      <td className="num">
-        {canEdit ? (
-          <label
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
-            title="Marcada: o motor para de sugerir compra desta grife. A liquidação e o remanejamento continuam."
-          >
-            <input
-              type="checkbox"
-              checked={foraDoMix}
-              onChange={(e) => setForaDoMix(e.target.checked)}
-              aria-label={`${brand} está fora do mix atual da rede`}
-            />
-            fora do mix
-          </label>
-        ) : foraDoMix ? (
-          <Selo tom="amber" icone="atencao">Fora do mix</Selo>
-        ) : (
-          <span className="muted">—</span>
-        )}
-      </td>
       {canEdit && (
         <td className="right">
           <Botao
@@ -937,6 +1059,156 @@ function SupplierRow({
         </td>
       )}
     </tr>
+  );
+}
+
+/**
+ * Mix de grifes (feedback 6.0 · item 03) — "sugere grifes que inclusive não
+ * fazem mais parte de nosso mix de produto".
+ *
+ * Lista separada da de fornecedores de propósito, e não por organização de
+ * tela: são chaves diferentes. Prazo de entrega é do FORNECEDOR ("Luxottica
+ * entrega em 30 dias"); mix é da GRIFE ("a rede não trabalha mais Ray-Ban").
+ * Enquanto as duas dividiram a mesma tabela, esta marcação era oferecida
+ * sobre nomes de razão social que o motor nunca consulta — dava para marcar
+ * e não acontecia nada.
+ */
+function BrandMixRow({ brand, products, discontinued, canEdit }: {
+  brand: string;
+  products: number;
+  discontinued: boolean;
+  canEdit: boolean;
+}) {
+  const qc = useQueryClient();
+  const [state, setState] = useState<'idle' | 'saving' | 'error'>('idle');
+
+  const alternar = async (valor: boolean) => {
+    setState('saving');
+    try {
+      await setGrifeForaDoMix(brand, valor);
+      // A sugestão de compra e o quadro de decisões mudam com isto: as duas
+      // precisam ser refeitas, senão a tela ao lado continua mostrando a
+      // compra da grife que acabou de sair do mix.
+      //
+      // `'decisions'`, e não `'decision-board'`: a chave do quadro é
+      // `['decisions', params]` (Decisions.tsx). O nome errado não dava erro
+      // nenhum — `invalidateQueries` numa chave que não existe é uma operação
+      // válida sobre o conjunto vazio — e por isso o quadro simplesmente não
+      // era refeito, calado, desde que a linha foi escrita.
+      await qc.invalidateQueries({ queryKey: ['planning-brand-mix'] });
+      recarregarDoTopo(qc, 'purchase-suggestions');
+      recarregarDoTopo(qc, 'decisions');
+      await qc.invalidateQueries({ queryKey: ['planning-orders'] });
+      setState('idle');
+    } catch {
+      setState('error');
+    }
+  };
+
+  return (
+    <tr>
+      <td>
+        {brand}{' '}
+        {/* Uma grife marcada que não casa com produto nenhum é uma marcação
+            inerte — nome digitado diferente, ou grife que saiu do catálogo. A
+            linha continua visível justamente para poder ser desmarcada. */}
+        {products === 0 && (
+          <Selo tom="amber" icone="atencao">sem produto no catálogo</Selo>
+        )}
+      </td>
+      <td className="num">{products}</td>
+      <td className="num">
+        {canEdit ? (
+          <label
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+            title="Marcada: o motor para de sugerir compra desta grife. A liquidação e o remanejamento continuam."
+          >
+            <input
+              type="checkbox"
+              checked={discontinued}
+              disabled={state === 'saving'}
+              onChange={(e) => void alternar(e.target.checked)}
+              aria-label={`${brand} está fora do mix atual da rede`}
+            />
+            fora do mix
+          </label>
+        ) : discontinued ? (
+          <Selo tom="amber" icone="atencao">Fora do mix</Selo>
+        ) : (
+          <span className="muted">—</span>
+        )}
+        {state === 'error' && (
+          <div style={{ fontSize: 11, color: 'var(--red)' }}>
+            <Icon name="atencao" size={12} /> Erro ao salvar
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+/** Tabela do mix de grifes, com busca — são dezenas de linhas. */
+function MixDeGrifes({ canEdit }: { canEdit: boolean }) {
+  const mix = useQuery({ queryKey: ['planning-brand-mix'], queryFn: getMixDeGrifes });
+  const [busca, setBusca] = useState('');
+
+  const linhas = (mix.data?.rows ?? []).filter((r) =>
+    busca.trim() === '' ? true : r.brand.toLowerCase().includes(busca.trim().toLowerCase()),
+  );
+  const fora = (mix.data?.rows ?? []).filter((r) => r.discontinued).length;
+
+  return (
+    <>
+      <AberturaDeSecao
+        eyebrow="Mix"
+        titulo="Grifes fora do mix"
+        descricao="Marque as grifes que a rede parou de trabalhar. O motor deixa de sugerir COMPRA delas — e só isso: a liquidação continua (grife descontinuada com saldo é exatamente o que se quer escoar) e o remanejamento também. Nenhum dado do ERP diz que uma grife saiu do mix; é decisão comercial e precisa ser declarada aqui."
+      />
+      <div className="card">
+        {mix.isLoading || !mix.data ? (
+          <Loading />
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <input
+                type="search"
+                value={busca}
+                placeholder="Buscar grife…"
+                onChange={(e) => setBusca(e.target.value)}
+                aria-label="Buscar grife"
+                style={{ maxWidth: 260 }}
+              />
+              <span className="muted" style={{ fontSize: 12 }}>
+                {mix.data.rows.length} grifes · {fora} fora do mix
+              </span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Grife</th>
+                  <th className="num">Produtos</th>
+                  <th className="num">Mix</th>
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map((r) => (
+                  <BrandMixRow
+                    key={r.brand}
+                    brand={r.brand}
+                    products={r.products}
+                    discontinued={r.discontinued}
+                    canEdit={canEdit}
+                  />
+                ))}
+              </tbody>
+            </table>
+            {linhas.length === 0 && (
+              <p className="muted" style={{ marginTop: 12 }}>Nenhuma grife com esse nome.</p>
+            )}
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -1102,29 +1374,62 @@ export function Planning() {
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
   const params = { days, storeId: storeId || undefined, group };
+  // O recorte por recomendação virou pergunta ao servidor pelo mesmo motivo do
+  // quadro de decisões: as linhas vêm paginadas, e filtrar a PÁGINA mostraria
+  // "nenhum item nesta categoria" com a lista cheia deles logo adiante.
+  const sugParams = {
+    ...params,
+    recomendacao: filter === 'ALL' ? undefined : filter,
+  };
 
   const overview = useQuery({ queryKey: ['planning-overview', days, storeId, group], queryFn: () => getPlanningOverview(params) });
-  const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId, group], queryFn: () => getPurchaseSuggestions(params) });
+  // Mesmo conserto do quadro de decisões, pela mesma razão: "ver mais" pedia um
+  // `pageSize` cada vez maior e nunca mandava `page`. A rota prende o tamanho
+  // em 2.000 linhas, então a partir do 20º clique a tabela parava de crescer,
+  // o rótulo seguia prometendo "11.000 restantes" e as linhas 2.001+ ficavam
+  // inalcançáveis — cada clique inútil pagando um recálculo completo das
+  // sugestões. Agora se pede a PÁGINA seguinte, com tamanho fixo, e a tela
+  // acumula.
+  //
+  // `signal` vai ao axios para a requisição em voo morrer quando a chave muda;
+  // `keepPreviousData` evita que a tabela volte a "Carregando…" a cada clique.
+  const suggestions = useInfiniteQuery({
+    queryKey: ['purchase-suggestions', sugParams],
+    queryFn: ({ pageParam, signal }) =>
+      getPurchaseSuggestions({ ...sugParams, ...pageParam, pageSize: LINHAS_POR_CLIQUE }, signal),
+    initialPageParam: { page: 1 } as PedidoDePagina,
+    // Âncora: o SKU da última linha desta resposta — ver `proximoPedido`.
+    getNextPageParam: (ultima) =>
+      proximoPedido(ultima.pagina, ultima.rows[ultima.rows.length - 1]?.productId),
+    placeholderData: keepPreviousData,
+  });
   const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
   const orders = useQuery({ queryKey: ['planning-orders', days, storeId, group], queryFn: () => getPurchaseOrders(params) });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
-  const filteredRows = useMemo(() => {
-    const rows = suggestions.data?.rows ?? [];
-    return filter === 'ALL' ? rows : rows.filter((r) => r.recommendation === filter);
-  }, [suggestions.data, filter]);
-
-  const urgentCount = useMemo(
-    () => (suggestions.data?.rows ?? []).filter((r) => r.stockoutInDays !== null).length,
-    [suggestions.data],
+  const sugPaginas = suggestions.data?.pages;
+  /** A resposta mais recente: dela saem o resumo e o tamanho da vista. */
+  const ultimaSug = sugPaginas?.[sugPaginas.length - 1];
+  const filteredRows = juntarPaginas(
+    sugPaginas?.map((p) => p.rows),
+    (r) => r.productId,
   );
+  /** Linhas que a vista ainda tem para entregar — não as que já estão na tela. */
+  const faltamLinhas = restantes(ultimaSug?.pagina, filteredRows.length);
+  // Trocar o recorte muda a chave da consulta e a acumulação recomeça na
+  // primeira página sozinha — não há mais contador para zerar à mão.
+  const buscandoSug = suggestions.isFetching;
+
+  // "Risco de faltar" vem CONTADO do servidor. A tela percorria as 13 mil
+  // linhas para chegar a este inteiro, o que obrigava a baixar as 13 mil.
+  const urgentCount = ultimaSug?.summary.emRisco ?? 0;
 
   const goTo = (ref: typeof purchaseRef, f?: Filter) => {
     if (f) setFilter(f);
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const summary = suggestions.data?.summary;
+  const summary = ultimaSug?.summary;
   const reb = rebalance.data;
 
   return (
@@ -1265,6 +1570,7 @@ export function Planning() {
             </tbody>
           </table>
         )}
+        {reb && <NotaDeIdadeEstimada guards={reb.guards} />}
       </div>
 
       {/* ── 2º: pedidos prontos por fornecedor, com total e data-limite ── */}
@@ -1297,9 +1603,17 @@ export function Planning() {
               {orders.data!.summary.items} itens · {orders.data!.summary.units} un. ·{' '}
               <strong>{formatBRL(orders.data!.summary.total)}</strong>
             </div>
+            {/* Com uma loja selecionada não há rateio, e o silêncio sozinho
+                pareceria falta de permissão ou defeito. */}
+            {storeId && (
+              <div className="hint" style={{ margin: '0 0 10px' }}>
+                O rateio por loja só aparece na visão da rede: com uma loja selecionada, a
+                quantidade sugerida já é a dessa loja e não há o que repartir.
+              </div>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {orders.data!.orders.map((o) => (
-                <PurchaseOrderCard key={o.supplier} order={o} />
+                <PurchaseOrderCard key={o.supplier} order={o} dias={orders.data!.days} />
               ))}
             </div>
           </>
@@ -1316,6 +1630,10 @@ export function Planning() {
           titulo="O que comprar (e o que não)"
           descricao="A análise completa por SKU, com o giro, a cobertura e o veredito do motor para cada um."
           acoes={
+          /* Inertes enquanto há busca em voo: o recorte virou pergunta ao
+             servidor, e cada pergunta reexecuta o motor inteiro. Quatro cliques
+             na janela de uma resposta empilham quatro execuções concorrentes, e
+             o processo tem 768 MB de heap. */
           <div className="segmented">
             {([
               ['ALL', 'Todos'],
@@ -1327,6 +1645,7 @@ export function Planning() {
                 key={k}
                 type="button"
                 className={filter === k ? 'active' : ''}
+                disabled={buscandoSug}
                 onClick={() => setFilter(k)}
                 aria-pressed={filter === k}
               >
@@ -1343,15 +1662,14 @@ export function Planning() {
             atual é uma AMOSTRA da grade do CDS. Dizer "126 de 440 analisados,
             num recorte que tem 5.849 na rede" transforma "está baixo" numa
             pergunta respondível. */}
-        {suggestions.data?.summary.analisados ? (
+        {summary?.analisados ? (
           <p className="muted" style={{ fontSize: 12.5, margin: '-6px 0 12px' }}>
-            <strong>{suggestions.data.summary.buy}</strong> sugestões de compra entre{' '}
-            <strong>{suggestions.data.summary.analisados.toLocaleString('pt-BR')}</strong> SKUs analisados.
-            {suggestions.data.summary.universo &&
-            suggestions.data.summary.universo > suggestions.data.summary.analisados ? (
+            <strong>{summary.buy}</strong> sugestões de compra entre{' '}
+            <strong>{summary.analisados.toLocaleString('pt-BR')}</strong> SKUs analisados.
+            {summary.universo && summary.universo > summary.analisados ? (
               <>
                 {' '}O recorte tem cerca de{' '}
-                <strong>{suggestions.data.summary.universo.toLocaleString('pt-BR')}</strong> SKUs na rede — a
+                <strong>{summary.universo.toLocaleString('pt-BR')}</strong> SKUs na rede — a
                 extração atual do CDS trouxe uma amostra da grade, e o motor só decide sobre o que
                 enxerga.
               </>
@@ -1359,7 +1677,7 @@ export function Planning() {
           </p>
         ) : null}
 
-        {suggestions.isLoading || !suggestions.data ? (
+        {suggestions.isLoading || !ultimaSug ? (
           <Loading />
         ) : (
           <div className="card" style={{ padding: 0 }}>
@@ -1466,6 +1784,25 @@ export function Planning() {
                 )}
               </tbody>
             </table>
+            {/* O corte é do SERVIDOR: "ver mais" busca a PÁGINA seguinte e a
+                junta com o que já está na tabela. Quem sabe se ainda há página
+                é o `pagina` da resposta (`hasNextPage`) — não uma comparação de
+                tamanhos feita aqui, que era o que deixava o botão de pé
+                prometendo linhas que a rota não entregava mais. */}
+            {suggestions.hasNextPage && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+                <Botao
+                  variante="discreto"
+                  icone="mais"
+                  disabled={buscandoSug}
+                  onClick={() => suggestions.fetchNextPage()}
+                >
+                  {buscandoSug
+                    ? 'Buscando…'
+                    : `Ver mais ${Math.min(LINHAS_POR_CLIQUE, faltamLinhas)} de ${faltamLinhas} restantes`}
+                </Botao>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1474,7 +1811,7 @@ export function Planning() {
       <AberturaDeSecao
         eyebrow="Prazos"
         titulo="Prazos dos fornecedores (lead time)"
-        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias. Marque “fora do mix” nas grifes que a rede não trabalha mais: o motor para de sugerir compra delas, mas continua sugerindo liquidação do saldo.`}
+        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo do fornecedor daquele produto. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias.`}
       />
       <div className="card">
         {suppliers.isLoading || !suppliers.data ? (
@@ -1483,10 +1820,9 @@ export function Planning() {
           <table>
             <thead>
               <tr>
-                <th>Fornecedor (marca)</th>
+                <th>Fornecedor</th>
                 <th className="num">Produtos</th>
                 <th className="num">Prazo de entrega</th>
-                <th className="num">Mix</th>
                 {isAdmin && <th className="right">Ação</th>}
               </tr>
             </thead>
@@ -1500,13 +1836,19 @@ export function Planning() {
                   isDefault={s.isDefault}
                   defaultDays={suppliers.data!.defaultLeadTimeDays}
                   canEdit={isAdmin}
-                  discontinued={s.discontinued ?? false}
                 />
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* ── Mix de grifes: o que a rede parou de trabalhar (ADMIN) ──
+          Só o ADMIN, como o Modo Feira logo abaixo. A seção era renderizada
+          para todo mundo em modo leitura, e a rota que a alimenta varre o
+          catálogo inteiro a cada abertura — custo de rede pago por quem não
+          tem decisão a tomar com a lista. Marcar sempre foi ADMIN. */}
+      {isAdmin && <MixDeGrifes canEdit={isAdmin} />}
 
       {/* ── Modo Feira: distribuir uma compra nova entre as lojas (ADMIN) ── */}
       {isAdmin && <FairSplit />}

@@ -335,15 +335,49 @@ model InventoryMovement {
 /// Prazo de ressuprimento por fornecedor (mapeado pela marca do produto).
 /// Usado no planejamento para calcular o ponto de reposição e o prazo-limite
 /// do pedido de cada item ("pedir até"). Sem registro, vale o prazo padrão.
+/// Prazo de entrega POR FORNECEDOR. A chave é o campo `brand` do CDS, que
+/// carrega o fornecedor ("LUXOTTICA BRASIL PRODUTOS OTICOS E ESPORTIVOS
+/// LTDA"), e é essa mesma string que `supplierConfigResolver` procura.
 model SupplierSetting {
   id           String   @id @default(cuid())
   brand        String   @unique
   leadTimeDays Int
 
-  /// Grife fora do mix atual da rede (feedback 6.0 · item 03: "sugere grifes
-  /// que inclusive não fazem mais parte de nosso mix de produto"). Corta a
-  /// sugestão de compra; não corta a liquidação — descontinuado com saldo é
-  /// exatamente o que se quer escoar — nem o remanejamento.
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// Grife fora do mix atual da rede (feedback 6.0 · item 03: "sugere grifes que
+/// inclusive não fazem mais parte de nosso mix de produto"). Corta a sugestão
+/// de compra; não corta a liquidação — descontinuado com saldo é exatamente o
+/// que se quer escoar — nem o remanejamento.
+///
+/// TABELA PRÓPRIA, e não mais uma coluna em `SupplierSetting`, porque as duas
+/// coisas são chaveadas por espaços de nome DIFERENTES e a confusão entre eles
+/// deixava o recurso inerte:
+///
+///   · prazo de entrega é do FORNECEDOR — "Luxottica entrega em 30 dias";
+///   · mix é da GRIFE — "a rede não trabalha mais Ray-Ban".
+///
+/// Enquanto as duas moraram na mesma linha, a tela oferecia para marcar as
+/// linhas que ela sabia listar (fornecedores, via `Product.brand`) e o motor
+/// procurava pelo que ele usa (`analysisBrand`, a grife da descrição). Medido
+/// no catálogo real: das 16 linhas oferecidas na tela, 7 nunca casariam com
+/// nada — e são justamente as de moda (Danyselle, Luxottica, Technos,
+/// Marcolin, Safilo, Marchon), 160 produtos. As 9 que casavam eram de
+/// laboratório, e só casavam por acaso: lente não tem grife na descrição, e
+/// aí `analysisBrand` cai no fornecedor. As 63 grifes que o motor conhece —
+/// RAY BAN, OAKLEY, ARNETTE, MIU MIU — não apareciam em lugar nenhum.
+model BrandMix {
+  id           String   @id @default(cuid())
+  /// A GRIFE na forma NORMALIZADA por `normBrandKey` — maiúscula, sem acento,
+  /// espaços colapsados —, para "Dolce & Gabbana" casar com "DOLCE E GABBANA".
+  ///
+  /// A leitura sempre comparou assim; a escrita gravava a string literal da
+  /// tela, e as duas só concordavam por acaso. Grave por `setBrandMix`, que
+  /// normaliza: gravar a forma literal aqui cria uma linha que a leitura
+  /// enxerga mas o `deleteMany` da tela nunca acha.
+  brand        String   @unique
   discontinued Boolean  @default(false)
 
   createdAt    DateTime @default(now())

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, DEMO, getToken } from '../api/client';
+import { atualizarChave } from '../lib/consultaPaginada';
 
 // Prefixos das queries "ao vivo" que devem refazer fetch quando algo muda.
 const LIVE_KEYS = [
@@ -56,7 +57,7 @@ export function useLiveInvalidation(): void {
         if (cancelled) return;
         es = new EventSource(`/api/stream?ticket=${encodeURIComponent(ticket)}`);
         es.onmessage = () => {
-          for (const key of LIVE_KEYS) qc.invalidateQueries({ queryKey: [key] });
+          for (const key of LIVE_KEYS) atualizarChave(qc, key);
         };
         es.onerror = () => {
           es?.close();

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import type { Request } from 'express';
 import { redact } from '../src/lib/logger.js';
@@ -101,5 +102,38 @@ describe('parseDays (janela limitada)', () => {
     expect(parseDays('-5')).toBe(30);
     expect(parseDays('abc')).toBe(30);
     expect(parseDays('99999')).toBe(30);
+  });
+});
+
+/**
+ * As rotas que varrem o catálogo inteiro exigem papel.
+ *
+ * `GET /planning/brand-mix` conta as grifes percorrendo os 61 mil produtos, com
+ * extração de grife por linha, e estava aberta a qualquer sessão — num processo
+ * que a frente do 503 acabou de limitar a 768 MB. O PUT da mesma rota sempre
+ * exigiu ADMIN; a assimetria não protegia nada e custava caro.
+ *
+ * Guarda de fonte, e não de integração: não há harness de HTTP neste workspace,
+ * e um teste que lê o arquivo é melhor do que a ausência que deixou isso passar.
+ */
+describe('rotas caras exigem papel', () => {
+  const fonte = readFileSync(
+    new URL('../src/modules/planning/planning.routes.ts', import.meta.url),
+    'utf8',
+  );
+
+  it('brand-mix exige ADMIN nos dois verbos', () => {
+    // Cada bloco `planningRouter.<verbo>(` até o `asyncHandler` precisa citar
+    // o papel. Ler o trecho entre a chave e o handler evita casar com o
+    // `requireRole` da rota vizinha.
+    for (const verbo of ['get', 'put']) {
+      const bloco = new RegExp(
+        `planningRouter\\.${verbo}\\(\\s*'/brand-mix',([\\s\\S]*?)asyncHandler`,
+      ).exec(fonte);
+      expect(bloco, `rota ${verbo} /brand-mix não encontrada`).not.toBeNull();
+      expect(bloco![1], `${verbo} /brand-mix precisa de requireRole('ADMIN')`).toContain(
+        "requireRole('ADMIN')",
+      );
+    }
   });
 });
