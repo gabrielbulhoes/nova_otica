@@ -30,6 +30,30 @@ d('mix de grifes · a chave gravada é a chave lida', () => {
   let grife = '';
   let fornecedor: string | null = null;
   let productId = '';
+  let antes: { brand: string; discontinued: boolean }[] = [];
+
+  const ORFA = 'GRIFE QUE NAO EXISTE ZZZ';
+  /**
+   * Só as chaves que esta suíte escreve.
+   *
+   * O que estava aqui era `deleteMany({})` — cinco vezes, mais uma no
+   * `afterAll`. Contra o banco de desenvolvimento de quem roda a suíte, isso
+   * apaga TODA marcação de fora-do-mix que a rede tenha feito, sem aviso e sem
+   * volta. Um teste não tem licença para apagar o dado de quem o roda.
+   */
+  const limpar = async () => {
+    const chaves = new Set([normBrandKey(grife), ORFA]);
+    if (fornecedor) chaves.add(normBrandKey(fornecedor));
+    // O casamento é pela chave NORMALIZADA, calculada aqui e não no `where`:
+    // uma linha gravada em forma literal (o defeito que estes testes prendem,
+    // ou uma escrita à mão pelo psql) não sai por igualdade de string, e
+    // sobreviveria à limpeza para envenenar a execução seguinte. Foi o que
+    // aconteceu comigo: a rodada que provou o vermelho deixou uma linha em
+    // minúscula, e a rodada verde seguinte falhou por causa dela.
+    const todas = await prisma.brandMix.findMany({ select: { brand: true } });
+    const alvos = todas.map((r) => r.brand).filter((b) => chaves.has(normBrandKey(b)));
+    if (alvos.length) await prisma.brandMix.deleteMany({ where: { brand: { in: alvos } } });
+  };
 
   beforeAll(async () => {
     // Um produto de MODA de verdade do banco, em que a grife extraída da
@@ -48,10 +72,22 @@ d('mix de grifes · a chave gravada é a chave lida', () => {
     productId = alvo.id;
     fornecedor = alvo.brand;
     grife = analysisBrand(alvo.description, alvo.category, alvo.brand)!;
+
+    antes = await prisma.brandMix.findMany({ select: { brand: true, discontinued: true } });
+    await limpar();
   });
 
   afterAll(async () => {
-    await prisma.brandMix.deleteMany({});
+    // Volta ao estado exato de antes: apaga o que a suíte escreveu e recoloca
+    // o que ela por acaso tenha sobrescrito.
+    await limpar();
+    for (const r of antes) {
+      await prisma.brandMix.upsert({
+        where: { brand: r.brand },
+        create: { brand: r.brand, discontinued: r.discontinued },
+        update: { discontinued: r.discontinued },
+      });
+    }
   });
 
   it('a tela oferece a GRIFE, e ela tem produto atrás', async () => {
@@ -75,7 +111,7 @@ d('mix de grifes · a chave gravada é a chave lida', () => {
   });
 
   it('marcar o FORNECEDOR não afeta a grife — é o defeito que motivou a separação', async () => {
-    await prisma.brandMix.deleteMany({});
+    await limpar();
     if (fornecedor === null || fornecedor === '—') return; // nada a provar
 
     await setBrandMix(fornecedor, true);
@@ -86,21 +122,57 @@ d('mix de grifes · a chave gravada é a chave lida', () => {
   });
 
   it('desmarcar apaga a linha em vez de guardar `false`', async () => {
-    await prisma.brandMix.deleteMany({});
+    await limpar();
+    const daGrife = () => prisma.brandMix.count({ where: { brand: normBrandKey(grife) } });
     await setBrandMix(grife, true);
-    expect(await prisma.brandMix.count()).toBe(1);
+    expect(await daGrife()).toBe(1);
     await setBrandMix(grife, false);
-    expect(await prisma.brandMix.count()).toBe(0);
+    expect(await daGrife()).toBe(0);
+  });
+
+  it('desmarcar funciona com OUTRA forma do mesmo nome', async () => {
+    // A escrita gravava a string literal da tela; a leitura sempre comparou
+    // normalizada. Marcar como "Dolce & Gabbana" e desmarcar como
+    // "DOLCE & GABBANA" apagava zero linhas — sem erro, porque `deleteMany`
+    // que não encontra nada é operação válida. A tela dizia que desmarcou e o
+    // motor continuava cortando a grife da compra.
+    await limpar();
+    await setBrandMix(grife.toLowerCase(), true);
+    expect(await discontinuedBrandResolver().then((f) => f(grife))).toBe(true);
+
+    await setBrandMix(grife.toUpperCase(), false);
+    expect(await prisma.brandMix.count({ where: { brand: normBrandKey(grife) } })).toBe(0);
+    expect(await discontinuedBrandResolver().then((f) => f(grife))).toBe(false);
+  });
+
+  it('marcar duas formas do mesmo nome não cria duas linhas', async () => {
+    await limpar();
+    await setBrandMix(grife.toLowerCase(), true);
+    await setBrandMix(grife.toUpperCase(), true);
+    // Contando pela chave NORMALIZADA, e não por igualdade de string: com a
+    // gravação literal ficavam duas linhas distintas que colapsam na mesma
+    // grife, e um `count` por string exata veria uma só — passando sem ver o
+    // defeito. `brand` é único sobre a string literal, então nem o banco
+    // reclamava.
+    const todas = await prisma.brandMix.findMany({ select: { brand: true } });
+    const daGrife = todas.filter((r) => normBrandKey(r.brand) === normBrandKey(grife));
+    expect(daGrife.length).toBe(1);
+    // E desmarcar por qualquer forma limpa de verdade.
+    await setBrandMix(grife, false);
+    const sobrou = (await prisma.brandMix.findMany({ select: { brand: true } })).filter(
+      (r) => normBrandKey(r.brand) === normBrandKey(grife),
+    );
+    expect(sobrou.length).toBe(0);
   });
 
   it('marcação órfã continua visível, com o aviso de que não casa com nada', async () => {
     // O caso da grife digitada errada, ou que saiu do catálogo. Se a linha
     // sumisse da tela, a marcação continuaria valendo no banco sem ninguém
     // conseguir desfazê-la.
-    await prisma.brandMix.deleteMany({});
-    await setBrandMix('GRIFE QUE NAO EXISTE ZZZ', true);
+    await limpar();
+    await setBrandMix(ORFA, true);
     const { rows } = await listBrandMix();
-    const orfa = rows.find((r) => r.brand === 'GRIFE QUE NAO EXISTE ZZZ');
+    const orfa = rows.find((r) => r.brand === ORFA);
     expect(orfa).toBeDefined();
     expect(orfa!.products).toBe(0);
     expect(orfa!.discontinued).toBe(true);

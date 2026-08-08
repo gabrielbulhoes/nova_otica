@@ -93,6 +93,27 @@ describe('orderCsv (CSV do pedido de compra)', () => {
     expect(semRateio.MIDWAY).toBe('');
     expect(semRateio.GUARABIRA).toBe('');
   });
+
+  it('com um item sem rateio, a linha do TOTAL também fica vazia', () => {
+    // O cuidado das linhas de item — vazio, não zero — era desmentido uma
+    // linha abaixo: o TOTAL somava só os itens que TINHAM rateio e publicava o
+    // resultado como número. Uma soma de subconjunto apresentada como total é
+    // pior que célula vazia, porque parece conferível: quem abrisse o arquivo
+    // encontraria colunas vazias que "somam" 5.
+    const pedido: PurchaseOrder = buildPurchaseOrders(
+      [plano('p1', 90, 3), plano('p2', 90, 3)],
+      90,
+      undefined,
+      posicoes('p1'),
+    ).orders[0];
+    const linhas = lerCsv(orderCsv(pedido));
+    const total = linhas.find((l) => l.Produto === 'TOTAL DO PEDIDO')!;
+    expect(total.MIDWAY).toBe('');
+    expect(total.GUARABIRA).toBe('');
+    // A quantidade total do pedido continua sendo número: essa não depende de
+    // rateio nenhum.
+    expect(Number(total.Quantidade)).toBeGreaterThan(0);
+  });
 });
 
 describe('rotuloDoPeso (a coluna que explica a participação)', () => {

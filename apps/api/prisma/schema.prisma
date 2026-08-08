@@ -370,9 +370,13 @@ model SupplierSetting {
 /// RAY BAN, OAKLEY, ARNETTE, MIU MIU — não apareciam em lugar nenhum.
 model BrandMix {
   id           String   @id @default(cuid())
-  /// A GRIFE, na forma em que `analysisBrand` a produz. A comparação é
-  /// normalizada por `normBrandKey` (maiúscula, sem acento) na leitura, para
-  /// "Dolce & Gabbana" casar com "DOLCE E GABBANA".
+  /// A GRIFE na forma NORMALIZADA por `normBrandKey` — maiúscula, sem acento,
+  /// espaços colapsados —, para "Dolce & Gabbana" casar com "DOLCE E GABBANA".
+  ///
+  /// A leitura sempre comparou assim; a escrita gravava a string literal da
+  /// tela, e as duas só concordavam por acaso. Grave por `setBrandMix`, que
+  /// normaliza: gravar a forma literal aqui cria uma linha que a leitura
+  /// enxerga mas o `deleteMany` da tela nunca acha.
   brand        String   @unique
   discontinued Boolean  @default(false)
 

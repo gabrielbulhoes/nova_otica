@@ -908,17 +908,36 @@ export async function setBrandMix(brand: string, discontinued: boolean) {
   const clean = brand.trim();
   if (!clean) throw badRequest('Informe a grife.');
 
+  /*
+   * GRAVA NA CHAVE NORMALIZADA — a mesma que a leitura usa.
+   *
+   * `listBrandMix` e `discontinuedBrandResolver` comparam por `normBrandKey`
+   * (maiúscula, sem acento, espaços colapsados); a escrita usava a string
+   * literal que veio da tela. As duas pontas concordavam por acaso, enquanto a
+   * tela mandasse exatamente o texto que ela mesma tinha renderizado — e
+   * desmontavam nos dois casos que a operação produz sozinha:
+   *
+   *  · DESMARCAR com outra forma da mesma grife ("Dolce & Gabbana" contra
+   *    "DOLCE & GABBANA" gravado) apagava zero linhas. A tela dizia que
+   *    desmarcou, a linha continuava no banco, e o motor continuava cortando a
+   *    grife da compra. Silêncio dos dois lados: `deleteMany` que não encontra
+   *    nada não é erro.
+   *  · MARCAR com duas formas criava DUAS linhas — `brand` é único sobre a
+   *    string literal — e desmarcar uma delas deixava a outra valendo.
+   */
+  const chave = normBrandKey(clean);
+
   if (!discontinued) {
     // Desmarcar apaga a linha em vez de guardar `false`: a tabela existe para
     // registrar exceções, e uma lista de exceções cheia de não-exceções é uma
     // lista que ninguém consegue ler.
-    await prisma.brandMix.deleteMany({ where: { brand: clean } });
-    return { brand: clean, discontinued: false };
+    await prisma.brandMix.deleteMany({ where: { brand: chave } });
+    return { brand: chave, discontinued: false };
   }
 
   const row = await prisma.brandMix.upsert({
-    where: { brand: clean },
-    create: { brand: clean, discontinued: true },
+    where: { brand: chave },
+    create: { brand: chave, discontinued: true },
     update: { discontinued: true },
   });
   return { brand: row.brand, discontinued: row.discontinued };

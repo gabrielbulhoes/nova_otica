@@ -72,6 +72,8 @@ export function orderCsv(order: PurchaseOrder): string {
     return out;
   };
 
+  const rateioCompleto = order.items.length > 0 && order.items.every((it) => it.distribution);
+
   const rows: Row[] = order.items.map((it) => ({
     fornecedor: order.supplier,
     marca: it.brand ?? '',
@@ -98,13 +100,21 @@ export function orderCsv(order: PurchaseOrder): string {
     prazoEntregaDias: order.leadTimeDays,
     baseDoRateio: '',
     faltaNaRede: '',
+    // O total de cada coluna de loja só é um NÚMERO se todos os itens tiverem
+    // rateio. Basta um item sem — e o pedido misto existe, porque o rateio some
+    // item a item quando o produto sai do cadastro — para a soma passar a ser
+    // de um subconjunto, e apresentá-la como número afirma um total que não é
+    // total. É o mesmo cuidado das linhas de item logo acima, que escrevem
+    // vazio em vez de zero: aqui a linha do TOTAL desmentia o cuidado delas.
     ...Object.fromEntries(
       lojas.map((l) => [
         `loja:${l}`,
-        order.items.reduce(
-          (a, it) => a + ((it.distribution?.rows.find((r) => r.storeName === l)?.suggestedQty) ?? 0),
-          0,
-        ),
+        rateioCompleto
+          ? order.items.reduce(
+              (a, it) => a + ((it.distribution?.rows.find((r) => r.storeName === l)?.suggestedQty) ?? 0),
+              0,
+            )
+          : '',
       ]),
     ),
   });

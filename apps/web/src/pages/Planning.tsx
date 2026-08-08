@@ -1005,6 +1005,11 @@ function SupplierRow({
       setState('saved');
       qc.invalidateQueries({ queryKey: ['planning-suppliers'] });
       recarregarDoTopo(qc, 'purchase-suggestions');
+      // O prazo de entrega entra em `minCover = leadTimeDays + safetyDays`, que
+      // é o corte de quem precisa receber peça. Mudar o prazo e não refazer o
+      // remanejamento deixava a aba ao lado com um plano calculado sobre a
+      // régua antiga — sem nada na tela dizendo isso.
+      qc.invalidateQueries({ queryKey: ['planning-rebalance'] });
       window.setTimeout(() => setState('idle'), 1600);
     } catch {
       setState('error');
@@ -1083,12 +1088,16 @@ function BrandMixRow({ brand, products, discontinued, canEdit }: {
       // A sugestão de compra e o quadro de decisões mudam com isto: as duas
       // precisam ser refeitas, senão a tela ao lado continua mostrando a
       // compra da grife que acabou de sair do mix.
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ['planning-brand-mix'] }),
-        recarregarDoTopo(qc, 'purchase-suggestions'),
-        qc.invalidateQueries({ queryKey: ['planning-orders'] }),
-        qc.invalidateQueries({ queryKey: ['decision-board'] }),
-      ]);
+      //
+      // `'decisions'`, e não `'decision-board'`: a chave do quadro é
+      // `['decisions', params]` (Decisions.tsx). O nome errado não dava erro
+      // nenhum — `invalidateQueries` numa chave que não existe é uma operação
+      // válida sobre o conjunto vazio — e por isso o quadro simplesmente não
+      // era refeito, calado, desde que a linha foi escrita.
+      await qc.invalidateQueries({ queryKey: ['planning-brand-mix'] });
+      recarregarDoTopo(qc, 'purchase-suggestions');
+      recarregarDoTopo(qc, 'decisions');
+      await qc.invalidateQueries({ queryKey: ['planning-orders'] });
       setState('idle');
     } catch {
       setState('error');
