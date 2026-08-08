@@ -16,7 +16,8 @@ import type {
 import {
   CARDS_POR_CLIQUE,
   juntarPaginas,
-  proximaPagina,
+  proximoPedido,
+  type PedidoDePagina,
   restantes,
 } from '../lib/paginacao';
 import {
@@ -765,9 +766,13 @@ export function Decisions() {
   const board = useInfiniteQuery({
     queryKey: ['decisions', params],
     queryFn: ({ pageParam, signal }) =>
-      getDecisionBoard({ ...params, page: pageParam, pageSize: CARDS_POR_CLIQUE }, signal),
-    initialPageParam: 1,
-    getNextPageParam: (ultima) => proximaPagina(ultima.pagina),
+      getDecisionBoard({ ...params, ...pageParam, pageSize: CARDS_POR_CLIQUE }, signal),
+    initialPageParam: { page: 1 } as PedidoDePagina,
+    // A ÂNCORA é o id do último card desta resposta: é dele que a próxima ida
+    // continua, em vez de contar 60 posições numa lista que encolheu no meio
+    // do caminho. Ver `proximoPedido`.
+    getNextPageParam: (ultima) =>
+      proximoPedido(ultima.pagina, ultima.cards[ultima.cards.length - 1]?.id),
     placeholderData: keepPreviousData,
   });
   const lojas = useQuery({ queryKey: ['stores'], queryFn: getStores });

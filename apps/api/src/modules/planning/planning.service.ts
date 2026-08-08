@@ -334,6 +334,8 @@ export async function planningOverview(days: number, storeId?: string, group: Pr
 export interface OpcoesDeSugestoes {
   page?: number;
   pageSize?: number;
+  /** Chave do último item que o cliente já tem — ver `paginar`. */
+  apos?: string;
   recomendacao?: Recommendation;
 }
 
@@ -354,7 +356,10 @@ export async function purchaseSuggestions(
   const vista = opcoes.recomendacao
     ? r.rows.filter((x) => x.recommendation === opcoes.recomendacao)
     : r.rows;
-  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? LINHAS_POR_PAGINA);
+  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? LINHAS_POR_PAGINA, {
+    chave: opcoes.apos,
+    de: (r) => r.productId,
+  });
   return { ...r, rows: itens, pagina };
 }
 
@@ -464,6 +469,8 @@ export async function purchaseOrders(
 export interface OpcoesDoQuadro {
   page?: number;
   pageSize?: number;
+  /** Chave do último card que o cliente já tem — ver `paginar`. */
+  apos?: string;
   vista?: FiltroDeVista;
 }
 
@@ -513,7 +520,10 @@ export async function decisionBoard(
   const grifes = grifesDoQuadro(quadro.cards);
 
   const vista = filtrarVista(quadro.cards, opcoes.vista ?? {});
-  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? CARDS_POR_PAGINA);
+  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? CARDS_POR_PAGINA, {
+    chave: opcoes.apos,
+    de: (c) => c.id,
+  });
 
   return annotateCardAges(
     { summary: quadro.summary, cards: itens, grifes, pagina },

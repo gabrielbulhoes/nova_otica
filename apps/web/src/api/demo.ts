@@ -1419,14 +1419,12 @@ const recorte = (
   params: Record<string, string | string[] | undefined>,
   padrao: number,
   teto: number,
-): [number, number] => {
-  const { page, pageSize } = recortePedido(
-    { page: one(params.page), pageSize: one(params.pageSize) },
+): { page: number; pageSize: number; apos?: string } =>
+  recortePedido(
+    { page: one(params.page), pageSize: one(params.pageSize), apos: one(params.apos) },
     padrao,
     teto,
   );
-  return [page, pageSize];
-};
 
 export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest): unknown {
   const m = method.toUpperCase();
@@ -1863,7 +1861,11 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     // cortam as linhas, e o `summary` continua sendo do conjunto analisado.
     const rec = umDe(one(params.recomendacao), RECOMENDACOES);
     const vista = rec ? r.rows.filter((x) => x.recommendation === rec) : r.rows;
-    const { itens, pagina } = paginar(vista, ...recorte(params, LINHAS_POR_PAGINA, TETO_DE_LINHAS));
+    const corte = recorte(params, LINHAS_POR_PAGINA, TETO_DE_LINHAS);
+    const { itens, pagina } = paginar(vista, corte.page, corte.pageSize, {
+      chave: corte.apos,
+      de: (r) => r.productId,
+    });
     return { ...r, rows: itens, pagina };
   }
   if (url === '/planning/purchase-orders' && m === 'GET') {
@@ -2124,7 +2126,11 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       loja: one(params.loja) || undefined,
       grife: one(params.grife) || undefined,
     });
-    const { itens, pagina } = paginar(vista, ...recorte(params, CARDS_POR_PAGINA, TETO_DE_CARDS));
+    const corte = recorte(params, CARDS_POR_PAGINA, TETO_DE_CARDS);
+    const { itens, pagina } = paginar(vista, corte.page, corte.pageSize, {
+      chave: corte.apos,
+      de: (c) => c.id,
+    });
     return annotateCardAges(
       { summary: board.summary, cards: itens, grifes, pagina },
       history,

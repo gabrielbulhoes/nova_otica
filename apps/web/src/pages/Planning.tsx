@@ -53,7 +53,8 @@ import { recarregarDoTopo } from '../lib/consultaPaginada';
 import {
   LINHAS_POR_CLIQUE,
   juntarPaginas,
-  proximaPagina,
+  proximoPedido,
+  type PedidoDePagina,
   restantes,
 } from '../lib/paginacao';
 import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
@@ -1395,9 +1396,11 @@ export function Planning() {
   const suggestions = useInfiniteQuery({
     queryKey: ['purchase-suggestions', sugParams],
     queryFn: ({ pageParam, signal }) =>
-      getPurchaseSuggestions({ ...sugParams, page: pageParam, pageSize: LINHAS_POR_CLIQUE }, signal),
-    initialPageParam: 1,
-    getNextPageParam: (ultima) => proximaPagina(ultima.pagina),
+      getPurchaseSuggestions({ ...sugParams, ...pageParam, pageSize: LINHAS_POR_CLIQUE }, signal),
+    initialPageParam: { page: 1 } as PedidoDePagina,
+    // Âncora: o SKU da última linha desta resposta — ver `proximoPedido`.
+    getNextPageParam: (ultima) =>
+      proximoPedido(ultima.pagina, ultima.rows[ultima.rows.length - 1]?.productId),
     placeholderData: keepPreviousData,
   });
   const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });

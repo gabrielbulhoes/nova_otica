@@ -148,4 +148,19 @@ describe('fiação: nenhuma tela invalida consulta paginada direto', () => {
       expect(src, `${arq} deveria recarregar do topo após mutação`).toContain('recarregarDoTopo(qc,');
     }
   });
+
+  it('as telas paginadas pedem a próxima página COM âncora', () => {
+    // `proximaPagina` sozinha volta a pedir por deslocamento, e o deslocamento
+    // pula item quando a lista encolhe entre um clique e o seguinte — que é o
+    // que acontece toda vez que um card é decidido. O defeito é invisível na
+    // tela (o card some, não aparece erro), então a guarda tem de ser aqui.
+    for (const arq of ['src/pages/Decisions.tsx', 'src/pages/Planning.tsx']) {
+      const src = readFileSync(new URL(`../../${arq}`, import.meta.url), 'utf8');
+      expect(src, `${arq} deveria usar proximoPedido(pagina, ancora)`).toContain('proximoPedido(');
+      expect(
+        /getNextPageParam:\s*\(ultima\)\s*=>\s*proximaPagina\(/.test(src),
+        `${arq} voltou a paginar só por deslocamento`,
+      ).toBe(false);
+    }
+  });
 });

@@ -42,6 +42,36 @@ export function proximaPagina(pagina: PaginaDaResposta | undefined): number | un
   return jaEntregues < pagina.total ? pagina.page + 1 : undefined;
 }
 
+/** O que uma ida ao servidor pede: a página e o item em que o cliente parou. */
+export interface PedidoDePagina {
+  page: number;
+  /** Chave do último item já recebido — ver `paginar` no motor. */
+  apos?: string;
+}
+
+/**
+ * O pedido da próxima ida, com a ÂNCORA junto.
+ *
+ * `proximaPagina` sozinha resolve metade do problema: ela faz o botão parar na
+ * hora certa. A outra metade é que o deslocamento aritmético mente quando a
+ * lista muda entre um clique e o seguinte — e ela muda o tempo todo, porque
+ * decidir um card o remove do quadro e empurra os seguintes para trás. Com 60
+ * por página, decidir um card da primeira página faz o antigo 60 virar 59, e
+ * pedir a página 2 devolve o antigo 61: o card 60 PULA e some da tela até
+ * alguém recarregar.
+ *
+ * A deduplicação de `juntarPaginas` cobre o caso oposto (item repetido quando
+ * a lista cresce). Do item PULADO não havia defesa nenhuma — e é o pior dos
+ * dois, porque some sem deixar rastro.
+ */
+export function proximoPedido(
+  pagina: PaginaDaResposta | undefined,
+  ancora: string | undefined,
+): PedidoDePagina | undefined {
+  const page = proximaPagina(pagina);
+  return page === undefined ? undefined : { page, apos: ancora };
+}
+
 /**
  * Os itens de todas as páginas recebidas, na ordem em que chegaram e sem
  * repetir.

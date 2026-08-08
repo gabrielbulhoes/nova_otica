@@ -2458,10 +2458,39 @@ export function paginar<T>(
   itens: readonly T[],
   page: number,
   pageSize: number,
+  /**
+   * ÂNCORA: a chave do último item que o cliente já tem. Quando ela é
+   * encontrada, o corte começa logo DEPOIS dela, e não no deslocamento
+   * aritmético da página.
+   *
+   * O motivo é o defeito que o corte por deslocamento tem e que nenhum
+   * `page`/`pageSize` conserta: a lista MUDA entre um clique e o seguinte. O
+   * quadro é recalculado a cada pedido, e decidir um card o remove — todos os
+   * seguintes escorregam uma posição para trás. Com 60 por página, decidir um
+   * card da primeira página faz o antigo item 60 virar o 59, e o pedido da
+   * página 2 (deslocamento 60) devolve o antigo 61: o card 60 PULA, e some da
+   * tela até alguém recarregar. Quanto mais o gestor decide — que é o uso
+   * normal da Central — mais cards ele deixa de ver.
+   *
+   * A âncora ignora quanto a lista andou: o que importa é onde o cliente
+   * parou. Some do item repetido a lista já se defende (`juntarPaginas`
+   * deduplica por chave); do item pulado, não havia defesa.
+   *
+   * Sem âncora, ou com uma âncora que sumiu da lista (o próprio card que
+   * acabou de ser decidido, quando ele era o último da página), cai no
+   * deslocamento — o comportamento de sempre. É degradação, não erro: volta a
+   * poder pular, e é o melhor que dá para fazer sem o item de referência.
+   */
+  ancora?: { chave?: string; de: (item: T) => string },
 ): { itens: T[]; pagina: PaginaDaResposta } {
   const tamanho = Math.max(1, Math.trunc(pageSize) || 1);
   const numero = Math.max(1, Math.trunc(page) || 1);
-  const inicio = (numero - 1) * tamanho;
+
+  let inicio = (numero - 1) * tamanho;
+  if (ancora?.chave) {
+    const i = itens.findIndex((item) => ancora.de(item) === ancora.chave);
+    if (i >= 0) inicio = i + 1;
+  }
   return {
     itens: itens.slice(inicio, inicio + tamanho),
     pagina: { page: numero, pageSize: tamanho, total: itens.length },
@@ -2503,15 +2532,20 @@ export const LINHAS_POR_PAGINA = 100;
  * assim que o teto ficou de fora do lado da demo.
  */
 export function recortePedido(
-  bruto: { page?: unknown; pageSize?: unknown },
+  bruto: { page?: unknown; pageSize?: unknown; apos?: unknown },
   padrao: number,
   teto: number,
-): { page: number; pageSize: number } {
+): { page: number; pageSize: number; apos?: string } {
   const page = Math.trunc(Number(bruto.page));
   const pageSize = Math.trunc(Number(bruto.pageSize));
+  // `apos` é a chave do último item que o cliente já tem — ver `paginar`.
+  // Chega como string da query; qualquer outra coisa é tratada como ausente.
+  const bruta = Array.isArray(bruto.apos) ? bruto.apos[0] : bruto.apos;
+  const apos = typeof bruta === 'string' && bruta.trim() !== '' ? bruta.trim() : undefined;
   return {
     page: Number.isFinite(page) && page > 0 ? page : 1,
     pageSize: Number.isFinite(pageSize) && pageSize > 0 ? Math.min(pageSize, teto) : padrao,
+    apos,
   };
 }
 

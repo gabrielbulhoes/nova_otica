@@ -11,6 +11,7 @@ import {
   LINHAS_POR_CLIQUE,
   juntarPaginas,
   proximaPagina,
+  proximoPedido,
   restantes,
 } from './paginacao';
 
@@ -200,5 +201,90 @@ describe('paginação: restantes', () => {
     expect(restantes({ page: 1, pageSize: 60, total: 1260 }, 60)).toBe(1200);
     // O quadro encolheu entre as idas: o acumulado passou do total mais novo.
     expect(restantes({ page: 3, pageSize: 60, total: 100 }, 180)).toBe(0);
+  });
+});
+
+describe('paginação: a lista que ENCOLHE entre cliques não pula item', () => {
+  /**
+   * O defeito que só aparece com a lista viva.
+   *
+   * O quadro é recalculado a cada pedido, e decidir um card o remove: todos os
+   * seguintes escorregam uma posição para trás. Com 60 por página, decidir um
+   * card da primeira página faz o antigo item 60 virar o 59 — e o pedido da
+   * página 2, que corta no deslocamento 60, devolve o antigo 61.
+   *
+   * O card 60 PULA. Ele não aparece na página 1 (já entregue), não aparece na
+   * página 2, e some da tela até alguém recarregar. Quanto mais o gestor
+   * decide — que é o uso normal da Central — mais cards ele deixa de ver.
+   *
+   * `juntarPaginas` já cobria o caso oposto: item REPETIDO quando a lista
+   * cresce. Do pulado não havia defesa, e ele é o pior dos dois, porque some
+   * sem deixar rastro.
+   */
+  const TAMANHO = 10;
+  const universo = () => Array.from({ length: 40 }, (_, i) => ({ id: `card-${i}` }));
+
+  /** A rota, com a lista já encolhida pelas decisões tomadas. */
+  const rota = (
+    decididos: Set<string>,
+    query: { page?: string; pageSize?: string; apos?: string },
+  ) => {
+    const vivos = universo().filter((c) => !decididos.has(c.id));
+    const { page, pageSize, apos } = recortePedido(query, TAMANHO, TETO_DE_CARDS);
+    return paginar(vivos, page, pageSize, { chave: apos, de: (c) => c.id });
+  };
+
+  it('sem âncora, o deslocamento pula o item que escorregou', () => {
+    // A prova pelo avesso, primeiro: é assim que a tela pedia.
+    const decididos = new Set(['card-0', 'card-1', 'card-2']);
+    const p1 = rota(new Set(), { page: '1', pageSize: String(TAMANHO) });
+    const p2 = rota(decididos, { page: '2', pageSize: String(TAMANHO) });
+    const vistos = new Set([...p1.itens, ...p2.itens].map((c) => c.id));
+
+    // Três decididos → os três seguintes escorregam para dentro da página 1,
+    // que já foi entregue, e nunca chegam à tela.
+    expect(vistos.has('card-10')).toBe(false);
+    expect(vistos.has('card-11')).toBe(false);
+    expect(vistos.has('card-12')).toBe(false);
+  });
+
+  it('com âncora, o corte continua de onde o cliente parou', () => {
+    const decididos = new Set(['card-0', 'card-1', 'card-2']);
+    const p1 = rota(new Set(), { page: '1', pageSize: String(TAMANHO) });
+    const ultimo = p1.itens[p1.itens.length - 1].id;
+    const p2 = rota(decididos, { page: '2', pageSize: String(TAMANHO), apos: ultimo });
+
+    expect(p2.itens[0].id).toBe('card-10');
+    const juntos = juntarPaginas([p1.itens, p2.itens], (c) => c.id);
+    // Nenhum buraco entre 0 e 19, tirando nada: os decididos JÁ estavam na tela.
+    expect(juntos.map((c) => c.id)).toEqual(universo().slice(0, 20).map((c) => c.id));
+  });
+
+  it('âncora que sumiu da lista cai no deslocamento — degradação, não erro', () => {
+    // O próprio último card da página foi decidido. Não há de onde continuar,
+    // e o melhor disponível é o comportamento antigo.
+    const p1 = rota(new Set(), { page: '1', pageSize: String(TAMANHO) });
+    const ultimo = p1.itens[p1.itens.length - 1].id;
+    const p2 = rota(new Set([ultimo]), { page: '2', pageSize: String(TAMANHO), apos: ultimo });
+    expect(p2.itens.length).toBe(TAMANHO);
+    expect(p2.itens[0].id).toBe('card-11'); // o 10 escorregou para a página 1
+  });
+
+  it('o "Ver mais" com âncora chega ao fim, e sem repetir', () => {
+    // A garantia que os testes acima não dão sozinhos: a âncora não quebra o
+    // caminho normal, sem nada sendo decidido.
+    const paginas: { id: string }[][] = [];
+    let pedido: { page: number; apos?: string } | undefined = { page: 1 };
+    while (pedido) {
+      const r = rota(new Set(), {
+        page: String(pedido.page),
+        pageSize: String(TAMANHO),
+        apos: pedido.apos,
+      });
+      paginas.push(r.itens);
+      pedido = proximoPedido(r.pagina, r.itens[r.itens.length - 1]?.id);
+    }
+    const juntos = juntarPaginas(paginas, (c) => c.id);
+    expect(juntos.map((c) => c.id)).toEqual(universo().map((c) => c.id));
   });
 });
