@@ -6,7 +6,6 @@ import {
   recortePedido,
   type PaginaDaResposta,
 } from '@planning';
-import { demoHandle } from '../api/demo';
 import {
   CARDS_POR_CLIQUE,
   LINHAS_POR_CLIQUE,

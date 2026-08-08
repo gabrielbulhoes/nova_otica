@@ -49,6 +49,7 @@ import { useAuth } from '../auth/AuthContext';
 import { downloadCsv } from '../bi/csv';
 import { deadlineDate, orderCsv, rotuloDoPeso, slug } from '../lib/rateio';
 import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import { recarregarDoTopo } from '../lib/consultaPaginada';
 import {
   LINHAS_POR_CLIQUE,
   juntarPaginas,
@@ -419,7 +420,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
     });
     qc.invalidateQueries({ queryKey: ['planning-history'] });
     qc.invalidateQueries({ queryKey: ['planning-orders'] });
-    qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+    recarregarDoTopo(qc, 'purchase-suggestions');
   };
 
   return (
@@ -766,7 +767,7 @@ function OrderHistory() {
     await settlePurchaseOrder(id, action);
     qc.invalidateQueries({ queryKey: ['planning-history'] });
     qc.invalidateQueries({ queryKey: ['planning-orders'] });
-    qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+    recarregarDoTopo(qc, 'purchase-suggestions');
     qc.invalidateQueries({ queryKey: ['stock'] });
   };
 
@@ -1003,7 +1004,7 @@ function SupplierRow({
       await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value));
       setState('saved');
       qc.invalidateQueries({ queryKey: ['planning-suppliers'] });
-      qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
+      recarregarDoTopo(qc, 'purchase-suggestions');
       window.setTimeout(() => setState('idle'), 1600);
     } catch {
       setState('error');
@@ -1084,7 +1085,7 @@ function BrandMixRow({ brand, products, discontinued, canEdit }: {
       // compra da grife que acabou de sair do mix.
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['planning-brand-mix'] }),
-        qc.invalidateQueries({ queryKey: ['purchase-suggestions'] }),
+        recarregarDoTopo(qc, 'purchase-suggestions'),
         qc.invalidateQueries({ queryKey: ['planning-orders'] }),
         qc.invalidateQueries({ queryKey: ['decision-board'] }),
       ]);

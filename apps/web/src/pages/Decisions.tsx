@@ -32,6 +32,7 @@ import {
   type TomDeSelo,
 } from '../components/ui';
 import { Icon, type IconName } from '../brand/Icon';
+import { recarregarDoTopo } from '../lib/consultaPaginada';
 
 /**
  * Portal de Decisões — o quadro onde o gerente decide o que fazer hoje.
@@ -262,7 +263,7 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
       // invalidar rebuscaria TODAS as páginas já carregadas — uma execução do
       // motor por página. Voltar à primeira custa uma, e é a leitura honesta:
       // a transferência muda o quadro inteiro, não só a página em que se está.
-      qc.resetQueries({ queryKey: ['decisions'] });
+      recarregarDoTopo(qc, 'decisions');
     } catch (e) {
       setEscoa('error');
       const ex = e as { response?: { data?: { error?: string } } };
@@ -285,7 +286,7 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
       setState('done');
       qc.invalidateQueries({ queryKey: ['movements'] });
       // Mesma razão do escoamento: uma execução do motor, não N.
-      qc.resetQueries({ queryKey: ['decisions'] });
+      recarregarDoTopo(qc, 'decisions');
     } catch (e) {
       setState('error');
       const ex = e as { response?: { data?: { error?: string } } };
@@ -809,7 +810,7 @@ export function Decisions() {
    * os seguintes para trás — as páginas antigas passariam a descrever um quadro
    * que não existe mais.
    */
-  const recomecar = () => qc.resetQueries({ queryKey: ['decisions'] });
+  const recomecar = () => recarregarDoTopo(qc, 'decisions');
 
   return (
     <>
