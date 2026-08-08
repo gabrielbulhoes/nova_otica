@@ -24,6 +24,18 @@ const LIVE_KEYS = [
   'purchase-suggestions',
 ];
 
+/**
+ * Das chaves acima, as que são consultas PAGINADAS.
+ *
+ * Elas VOLTAM À PRIMEIRA página em vez de serem invalidadas. Invalidar uma
+ * consulta paginada refaz todas as páginas já acumuladas, uma a uma — e cada
+ * página de sugestões é um recálculo completo do motor. Com trinta páginas
+ * abertas, um único evento de movimentação viraria trinta recálculos em fila,
+ * o oposto do que esta frente veio fazer. Voltar à primeira custa um, e é a
+ * leitura honesta: o evento mudou a lista inteira, não a página em que se está.
+ */
+const CHAVES_PAGINADAS = new Set(['purchase-suggestions']);
+
 const RECONNECT_DELAY_MS = 5_000;
 
 /**
@@ -56,7 +68,10 @@ export function useLiveInvalidation(): void {
         if (cancelled) return;
         es = new EventSource(`/api/stream?ticket=${encodeURIComponent(ticket)}`);
         es.onmessage = () => {
-          for (const key of LIVE_KEYS) qc.invalidateQueries({ queryKey: [key] });
+          for (const key of LIVE_KEYS) {
+            if (CHAVES_PAGINADAS.has(key)) qc.resetQueries({ queryKey: [key] });
+            else qc.invalidateQueries({ queryKey: [key] });
+          }
         };
         es.onerror = () => {
           es?.close();

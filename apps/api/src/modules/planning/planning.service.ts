@@ -18,17 +18,26 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
+  contarIdades,
+  filtrarVista,
+  finalizarBoard,
+  grifesDoQuadro,
+  paginar,
   supplierFor,
   storeCarriesBrand,
+  CARDS_POR_PAGINA,
   DEFAULT_PLANNING_CONFIG,
+  LINHAS_POR_PAGINA,
   matchesProductGroup,
   normBrandKey,
   type FairSplitInput,
+  type FiltroDeVista,
   type PlanningConfig,
   type DemandHistory,
   type ProductGroup,
   type ProductMetricsInput,
   type ProductPlan,
+  type Recommendation,
   type StoreProductInput,
 } from './planning.math.js';
 
@@ -277,9 +286,32 @@ export async function planningOverview(days: number, storeId?: string, group: Pr
   return buildOverview(await plans(days, storeId, group), days);
 }
 
-/** Recomendações de compra (comprar / manter / não comprar / liquidar). */
-export async function purchaseSuggestions(days: number, storeId?: string, group: ProductGroup = 'todos') {
-  return buildSuggestions(await plans(days, storeId, group), days);
+/** Recorte de vista da lista de sugestões (não muda nenhum número do resumo). */
+export interface OpcoesDeSugestoes {
+  page?: number;
+  pageSize?: number;
+  recomendacao?: Recommendation;
+}
+
+/**
+ * Recomendações de compra (comprar / manter / não comprar / liquidar).
+ *
+ * O resumo é sempre do CONJUNTO analisado; `rows` é a página. A tela mostrava
+ * as 13 mil linhas de uma vez — 11 MB por requisição para uma tabela que
+ * ninguém rola até o fim.
+ */
+export async function purchaseSuggestions(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'todos',
+  opcoes: OpcoesDeSugestoes = {},
+) {
+  const r = buildSuggestions(await plans(days, storeId, group), days);
+  const vista = opcoes.recomendacao
+    ? r.rows.filter((x) => x.recommendation === opcoes.recomendacao)
+    : r.rows;
+  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? LINHAS_POR_PAGINA);
+  return { ...r, rows: itens, pagina };
 }
 
 /**
@@ -382,12 +414,28 @@ export async function purchaseOrders(
   return buildPurchaseOrders(productPlans, days, resolve, posicoes);
 }
 
+/** Recorte da resposta do quadro: página + filtros de vista. */
+export interface OpcoesDoQuadro {
+  page?: number;
+  pageSize?: number;
+  vista?: FiltroDeVista;
+}
+
 /**
  * Feed unificado de cards de decisão (compra + remanejamento + liquidação),
  * com tipo, prioridade e impacto — a visualização de "portal de decisões".
  * Compra/liquidação respeitam o recorte de loja; o remanejamento é de rede.
+ *
+ * A resposta vem PAGINADA e o resumo vem do quadro INTEIRO. Era a origem do
+ * 503 que o cliente fotografou: 18,5 mil cards viravam 16,5 MB de JSON por
+ * requisição, e três requisições concorrentes levavam o processo a 856 MB.
  */
-export async function decisionBoard(days: number, storeId?: string, group: ProductGroup = 'principal') {
+export async function decisionBoard(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'principal',
+  opcoes: OpcoesDoQuadro = {},
+) {
   const generated = await generateCards(days, storeId, group);
   const ids = generated.cards.map((c) => c.id);
 
@@ -400,14 +448,35 @@ export async function decisionBoard(days: number, storeId?: string, group: Produ
     latestBatch(),
   ]);
 
-  const open = buildDecisionCards(
-    generated.plans,
-    generated.rebalance,
-    new Set(decided.keys()),
-    generated.positions,
-    generated.brandPositions,
+  // `finalizarBoard` sobre os cards que JÁ existem. Antes daqui saía um
+  // `buildDecisionCards` novo, que refazia do zero os mesmos cards que
+  // `generateCards` acabara de montar. Numa base de 20 mil SKUs e 12.737 cards,
+  // parar de construir duas vezes tirou 15% do tempo da rota (mediana de 10
+  // execuções: 1,890 s → 1,598 s) — menos do que parece porque quem manda no
+  // relógio são as consultas e o `analyzeProduct`, não a montagem dos cards.
+  const quadro = finalizarBoard(generated.cards, new Set(decided.keys()));
+
+  // As três coisas que TÊM de sair do conjunto inteiro: o resumo (já vem de
+  // `finalizarBoard`), a contagem de novos/atrasados e a lista de grifes do
+  // seletor. Derivar qualquer uma delas da página daria um número plausível e
+  // errado, com a tela idêntica.
+  // Um `agora` só para a contagem e para a anotação: com dois relógios, um card
+  // podia ser contado como atrasado e chegar à tela com a idade do dia anterior.
+  const agora = new Date();
+  const contagem = contarIdades(quadro.cards, history, DECISION_SLA_DAYS, agora);
+  const grifes = grifesDoQuadro(quadro.cards);
+
+  const vista = filtrarVista(quadro.cards, opcoes.vista ?? {});
+  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? CARDS_POR_PAGINA);
+
+  return annotateCardAges(
+    { summary: quadro.summary, cards: itens, grifes, pagina },
+    history,
+    batch,
+    DECISION_SLA_DAYS,
+    agora,
+    contagem,
   );
-  return annotateCardAges(open, history, batch, DECISION_SLA_DAYS);
 }
 
 /**

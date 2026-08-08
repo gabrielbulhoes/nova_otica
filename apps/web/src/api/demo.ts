@@ -26,7 +26,19 @@ import {
   buildSuggestions,
   computeCoverage,
   computeStoreCoverage,
+  contarIdades,
+  filtrarVista,
+  grifesDoQuadro,
+  paginar,
+  recortePedido,
+  DECISION_PRIORITIES,
+  DECISION_TYPES,
   DEFAULT_PLANNING_CONFIG,
+  RECOMENDACOES,
+  CARDS_POR_PAGINA,
+  LINHAS_POR_PAGINA,
+  TETO_DE_CARDS,
+  TETO_DE_LINHAS,
   type AbcItem,
   type BrandBannerInput,
   type FairSplitInput,
@@ -1377,6 +1389,34 @@ export interface DemoRequest {
 /** Colapsa um param que deveria ser único (1º valor quando vier array). */
 const one = (v?: string | string[]) => (Array.isArray(v) ? v[0] : v);
 
+/** Valor de query só é aceito quando está no conjunto conhecido (como na API). */
+const umDe = <T extends string>(v: unknown, aceitos: readonly T[]): T | undefined =>
+  aceitos.includes(v as T) ? (v as T) : undefined;
+
+/**
+ * `page` e `pageSize` da query, saneados pela MESMA função da rota — teto
+ * incluído. Devolve na ordem em que `paginar` os recebe, para o chamador não
+ * poder trocar os dois de lugar.
+ *
+ * A demo tinha um saneamento próprio, e ele não tinha teto: `?pageSize=100000`
+ * devolvia os 1.260 cards aqui e 1.000 contra a API. Um espelho cego no eixo
+ * que a mudança introduziu deixa os testes verdes justamente onde o contrato
+ * aperta — e ainda faz o "Ver mais" da demonstração chegar a um fim que a tela
+ * de produção não alcança.
+ */
+const recorte = (
+  params: Record<string, string | string[] | undefined>,
+  padrao: number,
+  teto: number,
+): [number, number] => {
+  const { page, pageSize } = recortePedido(
+    { page: one(params.page), pageSize: one(params.pageSize) },
+    padrao,
+    teto,
+  );
+  return [page, pageSize];
+};
+
 export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest): unknown {
   const m = method.toUpperCase();
   const p = (re: RegExp) => re.exec(url);
@@ -1802,7 +1842,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       const noRecorte = products.filter((p) => matchesProductGroup(p.category, planGroup)).length;
       r.summary.universo = Math.round(naRede * (noRecorte / products.length));
     }
-    return r;
+    // Mesmo recorte da API: `recomendacao` é filtro de vista, `page`/`pageSize`
+    // cortam as linhas, e o `summary` continua sendo do conjunto analisado.
+    const rec = umDe(one(params.recomendacao), RECOMENDACOES);
+    const vista = rec ? r.rows.filter((x) => x.recommendation === rec) : r.rows;
+    const { itens, pagina } = paginar(vista, ...recorte(params, LINHAS_POR_PAGINA, TETO_DE_LINHAS));
+    return { ...r, rows: itens, pagina };
   }
   if (url === '/planning/purchase-orders' && m === 'GET') {
     const lojaFiltrada = one(params.storeId);
@@ -2039,14 +2084,38 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const history = new Map(
       board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),
     );
-    return annotateCardAges(board, history, {
+    const lote = {
       id: 'demo-batch',
       generatedAt: demoBatchAt.toISOString(),
-      source: 'CRON',
+      source: 'CRON' as const,
       cardsTotal: board.cards.length + demoDecisions.length,
       cardsNew: [...history.values()].filter((h) => h.timesSeen <= 1).length,
       simulated: true,
+    };
+    // Daqui para baixo é a MESMA sequência da API (planning.service.ts): a
+    // contagem de idades e a lista de grifes saem do quadro inteiro, os filtros
+    // de vista recortam, e só então a página é cortada. A demo é o espelho
+    // offline da API — se ela paginasse de outro jeito, o teste da demo
+    // deixaria de provar qualquer coisa sobre a rota.
+    // Um `agora` só para contar e para anotar, como na API.
+    const agora = new Date();
+    const contagem = contarIdades(board.cards, history, 30, agora);
+    const grifes = grifesDoQuadro(board.cards);
+    const vista = filtrarVista(board.cards, {
+      tipo: umDe(one(params.tipo), DECISION_TYPES),
+      prioridade: umDe(one(params.prioridade), DECISION_PRIORITIES),
+      loja: one(params.loja) || undefined,
+      grife: one(params.grife) || undefined,
     });
+    const { itens, pagina } = paginar(vista, ...recorte(params, CARDS_POR_PAGINA, TETO_DE_CARDS));
+    return annotateCardAges(
+      { summary: board.summary, cards: itens, grifes, pagina },
+      history,
+      lote,
+      30,
+      agora,
+      contagem,
+    );
   }
   if (url === '/planning/batches') {
     // Série curta de lotes: um por dia às 6h, como o cron produz.

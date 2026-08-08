@@ -1,5 +1,10 @@
-import { Fragment, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Fragment, useRef, useState, type ReactNode } from 'react';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   createMovement,
   formatBRL,
@@ -44,6 +49,12 @@ import { useAuth } from '../auth/AuthContext';
 import { downloadCsv } from '../bi/csv';
 import { deadlineDate, orderCsv, rotuloDoPeso, slug } from '../lib/rateio';
 import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
+import {
+  LINHAS_POR_CLIQUE,
+  juntarPaginas,
+  proximaPagina,
+  restantes,
+} from '../lib/paginacao';
 import { LegendaDaAmostra } from '../components/LegendaDaAmostra';
 
 /**
@@ -1352,29 +1363,60 @@ export function Planning() {
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
   const params = { days, storeId: storeId || undefined, group };
+  // O recorte por recomendação virou pergunta ao servidor pelo mesmo motivo do
+  // quadro de decisões: as linhas vêm paginadas, e filtrar a PÁGINA mostraria
+  // "nenhum item nesta categoria" com a lista cheia deles logo adiante.
+  const sugParams = {
+    ...params,
+    recomendacao: filter === 'ALL' ? undefined : filter,
+  };
 
   const overview = useQuery({ queryKey: ['planning-overview', days, storeId, group], queryFn: () => getPlanningOverview(params) });
-  const suggestions = useQuery({ queryKey: ['purchase-suggestions', days, storeId, group], queryFn: () => getPurchaseSuggestions(params) });
+  // Mesmo conserto do quadro de decisões, pela mesma razão: "ver mais" pedia um
+  // `pageSize` cada vez maior e nunca mandava `page`. A rota prende o tamanho
+  // em 2.000 linhas, então a partir do 20º clique a tabela parava de crescer,
+  // o rótulo seguia prometendo "11.000 restantes" e as linhas 2.001+ ficavam
+  // inalcançáveis — cada clique inútil pagando um recálculo completo das
+  // sugestões. Agora se pede a PÁGINA seguinte, com tamanho fixo, e a tela
+  // acumula.
+  //
+  // `signal` vai ao axios para a requisição em voo morrer quando a chave muda;
+  // `keepPreviousData` evita que a tabela volte a "Carregando…" a cada clique.
+  const suggestions = useInfiniteQuery({
+    queryKey: ['purchase-suggestions', sugParams],
+    queryFn: ({ pageParam, signal }) =>
+      getPurchaseSuggestions({ ...sugParams, page: pageParam, pageSize: LINHAS_POR_CLIQUE }, signal),
+    initialPageParam: 1,
+    getNextPageParam: (ultima) => proximaPagina(ultima.pagina),
+    placeholderData: keepPreviousData,
+  });
   const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
   const orders = useQuery({ queryKey: ['planning-orders', days, storeId, group], queryFn: () => getPurchaseOrders(params) });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
-  const filteredRows = useMemo(() => {
-    const rows = suggestions.data?.rows ?? [];
-    return filter === 'ALL' ? rows : rows.filter((r) => r.recommendation === filter);
-  }, [suggestions.data, filter]);
-
-  const urgentCount = useMemo(
-    () => (suggestions.data?.rows ?? []).filter((r) => r.stockoutInDays !== null).length,
-    [suggestions.data],
+  const sugPaginas = suggestions.data?.pages;
+  /** A resposta mais recente: dela saem o resumo e o tamanho da vista. */
+  const ultimaSug = sugPaginas?.[sugPaginas.length - 1];
+  const filteredRows = juntarPaginas(
+    sugPaginas?.map((p) => p.rows),
+    (r) => r.productId,
   );
+  /** Linhas que a vista ainda tem para entregar — não as que já estão na tela. */
+  const faltamLinhas = restantes(ultimaSug?.pagina, filteredRows.length);
+  // Trocar o recorte muda a chave da consulta e a acumulação recomeça na
+  // primeira página sozinha — não há mais contador para zerar à mão.
+  const buscandoSug = suggestions.isFetching;
+
+  // "Risco de faltar" vem CONTADO do servidor. A tela percorria as 13 mil
+  // linhas para chegar a este inteiro, o que obrigava a baixar as 13 mil.
+  const urgentCount = ultimaSug?.summary.emRisco ?? 0;
 
   const goTo = (ref: typeof purchaseRef, f?: Filter) => {
     if (f) setFilter(f);
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const summary = suggestions.data?.summary;
+  const summary = ultimaSug?.summary;
   const reb = rebalance.data;
 
   return (
@@ -1575,6 +1617,10 @@ export function Planning() {
           titulo="O que comprar (e o que não)"
           descricao="A análise completa por SKU, com o giro, a cobertura e o veredito do motor para cada um."
           acoes={
+          /* Inertes enquanto há busca em voo: o recorte virou pergunta ao
+             servidor, e cada pergunta reexecuta o motor inteiro. Quatro cliques
+             na janela de uma resposta empilham quatro execuções concorrentes, e
+             o processo tem 768 MB de heap. */
           <div className="segmented">
             {([
               ['ALL', 'Todos'],
@@ -1586,6 +1632,7 @@ export function Planning() {
                 key={k}
                 type="button"
                 className={filter === k ? 'active' : ''}
+                disabled={buscandoSug}
                 onClick={() => setFilter(k)}
                 aria-pressed={filter === k}
               >
@@ -1602,15 +1649,14 @@ export function Planning() {
             atual é uma AMOSTRA da grade do CDS. Dizer "126 de 440 analisados,
             num recorte que tem 5.849 na rede" transforma "está baixo" numa
             pergunta respondível. */}
-        {suggestions.data?.summary.analisados ? (
+        {summary?.analisados ? (
           <p className="muted" style={{ fontSize: 12.5, margin: '-6px 0 12px' }}>
-            <strong>{suggestions.data.summary.buy}</strong> sugestões de compra entre{' '}
-            <strong>{suggestions.data.summary.analisados.toLocaleString('pt-BR')}</strong> SKUs analisados.
-            {suggestions.data.summary.universo &&
-            suggestions.data.summary.universo > suggestions.data.summary.analisados ? (
+            <strong>{summary.buy}</strong> sugestões de compra entre{' '}
+            <strong>{summary.analisados.toLocaleString('pt-BR')}</strong> SKUs analisados.
+            {summary.universo && summary.universo > summary.analisados ? (
               <>
                 {' '}O recorte tem cerca de{' '}
-                <strong>{suggestions.data.summary.universo.toLocaleString('pt-BR')}</strong> SKUs na rede — a
+                <strong>{summary.universo.toLocaleString('pt-BR')}</strong> SKUs na rede — a
                 extração atual do CDS trouxe uma amostra da grade, e o motor só decide sobre o que
                 enxerga.
               </>
@@ -1618,7 +1664,7 @@ export function Planning() {
           </p>
         ) : null}
 
-        {suggestions.isLoading || !suggestions.data ? (
+        {suggestions.isLoading || !ultimaSug ? (
           <Loading />
         ) : (
           <div className="card" style={{ padding: 0 }}>
@@ -1725,6 +1771,25 @@ export function Planning() {
                 )}
               </tbody>
             </table>
+            {/* O corte é do SERVIDOR: "ver mais" busca a PÁGINA seguinte e a
+                junta com o que já está na tabela. Quem sabe se ainda há página
+                é o `pagina` da resposta (`hasNextPage`) — não uma comparação de
+                tamanhos feita aqui, que era o que deixava o botão de pé
+                prometendo linhas que a rota não entregava mais. */}
+            {suggestions.hasNextPage && (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+                <Botao
+                  variante="discreto"
+                  icone="mais"
+                  disabled={buscandoSug}
+                  onClick={() => suggestions.fetchNextPage()}
+                >
+                  {buscandoSug
+                    ? 'Buscando…'
+                    : `Ver mais ${Math.min(LINHAS_POR_CLIQUE, faltamLinhas)} de ${faltamLinhas} restantes`}
+                </Botao>
+              </div>
+            )}
           </div>
         )}
       </div>
