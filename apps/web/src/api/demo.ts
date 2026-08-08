@@ -1880,10 +1880,24 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const { saindo, chegando } = transferenciasEmAberto();
     for (const s of stores)
       for (const prod of products.filter(
-        // O recorte já é uma partição: quem está em `planGroup` não está em
-        // lentes. A exclusão extra que existia aqui era de quando 'principal'
-        // ainda podia deixar lente passar.
-        (x) => matchesProductGroup(x.category, planGroup),
+        // As DUAS condições, e a segunda não é redundante.
+        //
+        // O comentário que estava aqui dizia que o recorte já era uma partição
+        // — que quem está em `planGroup` não está em lentes — e por isso tinha
+        // apagado a exclusão explícita. Vale para 'principal' e 'relogios'.
+        // NÃO vale para `group=todos`, que é justamente o que a Central usa no
+        // consolidado: 'todos' aceita tudo, lente inclusive.
+        //
+        // Produção nunca dependeu dessa partição: `rebalancePlan` tem a regra
+        // absoluta escrita à parte ("lentes não se transferem entre lojas —
+        // só óculos e relógio"), aplicada depois do recorte de grupo. A demo
+        // se declara espelho da API e estava sem ela.
+        //
+        // Ficou latente até a demonstração passar a informar idade: com a
+        // demanda medida pelos dias reais de presença, uma lente com poucos
+        // dias na loja e uma venda passou a ter cobertura baixa o bastante
+        // para virar destino. O defeito não nasceu daí — só ficou visível.
+        (x) => matchesProductGroup(x.category, planGroup) && !matchesProductGroup(x.category, 'lentes'),
       )) {
         const k = key(s.id, prod.id);
         inputs.push({

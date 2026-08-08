@@ -13,6 +13,7 @@
     "dev:web": "npm run dev --workspace=@nova-otica/web",
     "build": "npm run build --workspace=@nova-otica/api && npm run build --workspace=@nova-otica/web",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:web:ci": "bash scripts/testar-web-como-a-ci.sh",
     "db:up": "docker compose up -d db",
     "db:migrate": "npm run prisma:migrate --workspace=@nova-otica/api",
     "db:seed": "npm run seed --workspace=@nova-otica/api"
