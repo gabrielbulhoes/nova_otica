@@ -63,7 +63,7 @@ async function supplierConfigResolver(): Promise<(brand: string | null) => Plann
  * acento) para "Dolce & Gabbana" casar com "DOLCE E GABBANA".
  */
 export async function discontinuedBrandResolver(): Promise<(brand: string | null) => boolean> {
-  const rows = await prisma.supplierSetting.findMany({
+  const rows = await prisma.brandMix.findMany({
     where: { discontinued: true },
     select: { brand: true },
   });
@@ -524,7 +524,7 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
   return { ...plan, inputs };
 }
 
-/** Fornecedores (marcas) com seus prazos: cadastrados ou padrão da rede. */
+/** Fornecedores com seus prazos de entrega: cadastrados ou padrão da rede. */
 export async function listSupplierSettings() {
   const [brands, settings] = await Promise.all([
     prisma.product.groupBy({ by: ['brand'], where: { brand: { not: null } }, _count: true }),
@@ -534,28 +534,98 @@ export async function listSupplierSettings() {
   const doCatalogo = brands.map((b) => ({
     brand: b.brand as string,
     leadTimeDays: cadastrada.get(b.brand as string)?.leadTimeDays ?? null,
-    discontinued: cadastrada.get(b.brand as string)?.discontinued ?? false,
     products: b._count,
     isDefault: !cadastrada.has(b.brand as string),
   }));
 
-  // Uma grife marcada como fora do mix pode não existir no campo `brand` do
-  // ERP — que é o FORNECEDOR e vem vazio na maior parte do catálogo. Sem esta
-  // união, o operador marcaria "MIU MIU" como descontinuada e a linha sumiria
-  // da tela no recarregamento, como se nada tivesse sido salvo.
+  // Um prazo cadastrado para um fornecedor que sumiu do catálogo continua
+  // aparecendo: senão o operador salvaria e a linha desapareceria no
+  // recarregamento, como se nada tivesse sido gravado.
   const noCatalogo = new Set(doCatalogo.map((r) => r.brand));
   const soltas = settings
     .filter((s) => !noCatalogo.has(s.brand))
-    .map((s) => ({
-      brand: s.brand,
-      leadTimeDays: s.leadTimeDays,
-      discontinued: s.discontinued,
-      products: 0,
-      isDefault: false,
-    }));
+    .map((s) => ({ brand: s.brand, leadTimeDays: s.leadTimeDays, products: 0, isDefault: false }));
 
   const rows = [...doCatalogo, ...soltas].sort((a, b) => a.brand.localeCompare(b.brand, 'pt-BR'));
   return { defaultLeadTimeDays: DEFAULT_PLANNING_CONFIG.leadTimeDays, rows };
+}
+
+/**
+ * Mix de grifes: a lista que a operação usa para declarar o que a rede parou
+ * de trabalhar (feedback 6.0 · item 03).
+ *
+ * As linhas são as GRIFES que o motor de fato usa — `analysisBrand`, a mesma
+ * função que decide a marca de um card, de um pedido e de um remanejamento —
+ * e NÃO o campo `brand` do CDS, que é o fornecedor. Enquanto a tela ofereceu
+ * fornecedores, marcar "fora do mix" numa grife de moda era impossível: RAY
+ * BAN, OAKLEY e ARNETTE não estavam na lista, e "LUXOTTICA BRASIL PRODUTOS
+ * OTICOS E ESPORTIVOS LTDA", que estava, nunca era consultado pelo motor.
+ *
+ * A agregação é em memória porque `analysisBrand` é derivada da descrição —
+ * não existe coluna para agrupar em SQL. São três campos por produto; num
+ * catálogo do tamanho do da rede (61 mil) isso é alguns MB numa tela de
+ * administração, consultada raramente.
+ */
+export async function listBrandMix() {
+  const [produtos, marcados] = await Promise.all([
+    prisma.product.findMany({ select: { description: true, category: true, brand: true } }),
+    prisma.brandMix.findMany(),
+  ]);
+
+  const contagem = new Map<string, { brand: string; products: number }>();
+  for (const p of produtos) {
+    const grife = analysisBrand(p.description, p.category, p.brand);
+    if (!grife) continue;
+    const k = normBrandKey(grife);
+    const atual = contagem.get(k);
+    if (atual) atual.products += 1;
+    else contagem.set(k, { brand: grife, products: 1 });
+  }
+
+  const fora = new Map(marcados.map((m) => [normBrandKey(m.brand), m]));
+  const rows = [...contagem.values()].map((c) => ({
+    brand: c.brand,
+    products: c.products,
+    discontinued: fora.get(normBrandKey(c.brand))?.discontinued ?? false,
+  }));
+
+  // Uma grife marcada que não casa com produto nenhum continua visível, com
+  // `products: 0`. É o aviso de que aquela marcação está inerte — pode ter
+  // sido digitada errada, ou a grife pode ter saído do catálogo. Esconder a
+  // linha faria a marcação sumir da tela e continuar valendo no banco.
+  const conhecidas = new Set(rows.map((r) => normBrandKey(r.brand)));
+  for (const m of marcados) {
+    if (!conhecidas.has(normBrandKey(m.brand))) {
+      rows.push({ brand: m.brand, products: 0, discontinued: m.discontinued });
+    }
+  }
+
+  rows.sort((a, b) => b.products - a.products || a.brand.localeCompare(b.brand, 'pt-BR'));
+  return { rows };
+}
+
+/**
+ * Marca (ou desmarca) uma grife como fora do mix. Decisão comercial: nenhum
+ * dado do ERP diz que a rede parou de trabalhar uma grife.
+ */
+export async function setBrandMix(brand: string, discontinued: boolean) {
+  const clean = brand.trim();
+  if (!clean) throw badRequest('Informe a grife.');
+
+  if (!discontinued) {
+    // Desmarcar apaga a linha em vez de guardar `false`: a tabela existe para
+    // registrar exceções, e uma lista de exceções cheia de não-exceções é uma
+    // lista que ninguém consegue ler.
+    await prisma.brandMix.deleteMany({ where: { brand: clean } });
+    return { brand: clean, discontinued: false };
+  }
+
+  const row = await prisma.brandMix.upsert({
+    where: { brand: clean },
+    create: { brand: clean, discontinued: true },
+    update: { discontinued: true },
+  });
+  return { brand: row.brand, discontinued: row.discontinued };
 }
 
 // ─── Ciclo do pedido: enviado → recebido (com histórico) ─────────────────────
@@ -624,41 +694,26 @@ export async function purchaseOrderHistory(limit = 50) {
  * não há nada a dizer sobre o mix — senão marcar uma grife como fora do mix
  * sem informar prazo apagaria o próprio registro que acabou de ser criado.
  */
-export async function setSupplierSetting(
-  brand: string,
-  leadTimeDays: number | null,
-  discontinued?: boolean,
-) {
+export async function setSupplierSetting(brand: string, leadTimeDays: number | null) {
   const clean = brand.trim();
   if (!clean) throw badRequest('Informe a marca/fornecedor.');
   if (leadTimeDays !== null && (!Number.isInteger(leadTimeDays) || leadTimeDays < 1 || leadTimeDays > 365)) {
     throw badRequest('Prazo do fornecedor deve ser um número inteiro entre 1 e 365 dias.');
   }
 
-  const atual = await prisma.supplierSetting.findUnique({ where: { brand: clean } });
-  const foraDoMix = discontinued ?? atual?.discontinued ?? false;
-
-  if (leadTimeDays === null && !foraDoMix) {
+  // Sem prazo próprio, o fornecedor volta ao padrão da rede — e a linha deixa
+  // de existir. É o que "voltar ao padrão" significa.
+  if (leadTimeDays === null) {
     await prisma.supplierSetting.deleteMany({ where: { brand: clean } });
-    return { brand: clean, leadTimeDays: null, discontinued: false };
+    return { brand: clean, leadTimeDays: null };
   }
 
   const row = await prisma.supplierSetting.upsert({
     where: { brand: clean },
-    // Sem prazo próprio a marca fica no padrão da rede — guardamos o padrão
-    // como valor, porque a coluna é obrigatória e o registro precisa existir
-    // para carregar a marcação de mix.
-    create: {
-      brand: clean,
-      leadTimeDays: leadTimeDays ?? DEFAULT_PLANNING_CONFIG.leadTimeDays,
-      discontinued: foraDoMix,
-    },
-    update: {
-      ...(leadTimeDays !== null ? { leadTimeDays } : {}),
-      discontinued: foraDoMix,
-    },
+    create: { brand: clean, leadTimeDays },
+    update: { leadTimeDays },
   });
-  return { brand: row.brand, leadTimeDays: row.leadTimeDays, discontinued: row.discontinued };
+  return { brand: row.brand, leadTimeDays: row.leadTimeDays };
 }
 
 // ─── Modo Feira: rateio de compra por loja (feedback 08, MVP) ────────────────

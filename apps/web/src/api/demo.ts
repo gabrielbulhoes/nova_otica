@@ -2014,7 +2014,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         leadTimeDays: demoLeadTimes.get(brand) ?? null,
         products: products.filter((x) => x.brand === brand).length,
         isDefault: !demoLeadTimes.has(brand),
-        discontinued: demoForaDoMix.has(brand),
       })),
     };
   }
@@ -2023,10 +2022,39 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const lt = body.leadTimeDays;
     if (lt === null) demoLeadTimes.delete(brand);
     else demoLeadTimes.set(brand, Number(lt));
-    // Feedback 6.0 · item 03 — grife fora do mix atual da rede.
+    return { brand, leadTimeDays: lt };
+  }
+
+  // Mix de grifes (feedback 6.0 · item 03). Chave diferente da de
+  // fornecedores: aqui é `analysisBrand`, a grife da descrição, que é o que o
+  // motor consulta. É a mesma agregação que o backend faz — em memória,
+  // porque a grife é derivada e não existe coluna para agrupar.
+  if (url === '/planning/brand-mix' && m === 'GET') {
+    const contagem = new Map<string, { brand: string; products: number }>();
+    for (const p of products) {
+      const grife = analysisBrand(p.description, p.category, p.brand);
+      if (!grife) continue;
+      const k = grife.toUpperCase();
+      const atual = contagem.get(k);
+      if (atual) atual.products += 1;
+      else contagem.set(k, { brand: grife, products: 1 });
+    }
+    const rows = [...contagem.values()].map((c) => ({
+      brand: c.brand,
+      products: c.products,
+      discontinued: demoForaDoMix.has(c.brand),
+    }));
+    for (const b of demoForaDoMix) {
+      if (!contagem.has(b.toUpperCase())) rows.push({ brand: b, products: 0, discontinued: true });
+    }
+    rows.sort((a, b) => b.products - a.products || a.brand.localeCompare(b.brand, 'pt-BR'));
+    return { rows };
+  }
+  if (url === '/planning/brand-mix' && m === 'PUT') {
+    const brand = String(body.brand ?? '');
     if (body.discontinued === true) demoForaDoMix.add(brand);
-    else if (body.discontinued === false) demoForaDoMix.delete(brand);
-    return { brand, leadTimeDays: lt, discontinued: demoForaDoMix.has(brand) };
+    else demoForaDoMix.delete(brand);
+    return { brand, discontinued: demoForaDoMix.has(brand) };
   }
 
   // Mix de marcas por bandeira (feedback 04 fase 2)

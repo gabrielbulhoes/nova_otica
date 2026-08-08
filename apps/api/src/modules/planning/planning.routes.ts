@@ -20,6 +20,7 @@ import {
   commercialStrategy,
   decisionBoard,
   fairSplit,
+  listBrandMix,
   listSupplierSettings,
   planningOverview,
   purchaseOrderHistory,
@@ -27,6 +28,7 @@ import {
   purchaseSuggestions,
   rebalancePlan,
   registerPurchaseOrder,
+  setBrandMix,
   setSupplierSetting,
   settlePurchaseOrder,
 } from './planning.service.js';
@@ -230,21 +232,46 @@ planningRouter.get(
 const supplierSchema = z.object({
   brand: z.string().min(1).max(120),
   leadTimeDays: z.number().int().min(1).max(365).nullable(),
-  /** Grife fora do mix atual da rede — corta a sugestão de compra. */
-  discontinued: z.boolean().optional(),
 });
 
-/**
- * PUT /api/planning/suppliers — prazo do fornecedor e/ou marcação de mix
- * (ADMIN). Marcar `discontinued` é decisão comercial: nenhum dado do ERP diz
- * que a rede parou de trabalhar uma grife, então ela precisa ser declarada.
- */
+/** PUT /api/planning/suppliers — prazo de entrega do fornecedor (ADMIN). */
 planningRouter.put(
   '/suppliers',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const input = supplierSchema.parse(req.body);
-    res.json(await setSupplierSetting(input.brand, input.leadTimeDays, input.discontinued));
+    res.json(await setSupplierSetting(input.brand, input.leadTimeDays));
+  }),
+);
+
+/**
+ * GET /api/planning/brand-mix — as grifes que o motor conhece, com a marcação
+ * de "fora do mix". Lista separada da de fornecedores porque são chaves
+ * diferentes: prazo é do fornecedor, mix é da grife.
+ */
+planningRouter.get(
+  '/brand-mix',
+  asyncHandler(async (_req, res) => {
+    res.json(await listBrandMix());
+  }),
+);
+
+const brandMixSchema = z.object({
+  brand: z.string().min(1).max(120),
+  discontinued: z.boolean(),
+});
+
+/**
+ * PUT /api/planning/brand-mix — marca ou desmarca uma grife como fora do mix
+ * (ADMIN). É decisão comercial: nenhum dado do ERP diz que a rede parou de
+ * trabalhar uma grife, então ela precisa ser declarada.
+ */
+planningRouter.put(
+  '/brand-mix',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const input = brandMixSchema.parse(req.body);
+    res.json(await setBrandMix(input.brand, input.discontinued));
   }),
 );
 

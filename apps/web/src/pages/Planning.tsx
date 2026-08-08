@@ -17,6 +17,8 @@ import {
   getSupplierSettings,
   registerPurchaseOrder,
   setSupplierLeadTime,
+  getMixDeGrifes,
+  setGrifeForaDoMix,
   settlePurchaseOrder,
   type MovementClass,
   type PurchaseOrder,
@@ -833,7 +835,7 @@ function RebalanceRow({ s }: { s: RebalanceSuggestion }) {
   );
 }
 
-/** Editor de prazo por fornecedor (marca) — admin. */
+/** Editor de prazo por fornecedor — admin. */
 function SupplierRow({
   brand,
   leadTimeDays,
@@ -841,7 +843,6 @@ function SupplierRow({
   isDefault,
   defaultDays,
   canEdit,
-  discontinued,
 }: {
   brand: string;
   leadTimeDays: number | null;
@@ -849,21 +850,18 @@ function SupplierRow({
   isDefault: boolean;
   defaultDays: number;
   canEdit: boolean;
-  discontinued: boolean;
 }) {
   const qc = useQueryClient();
   const [value, setValue] = useState(leadTimeDays === null ? '' : String(leadTimeDays));
-  const [foraDoMix, setForaDoMix] = useState(discontinued);
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const save = async () => {
     setState('saving');
     try {
-      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value), foraDoMix);
+      await setSupplierLeadTime(brand, value.trim() === '' ? null : Number(value));
       setState('saved');
       qc.invalidateQueries({ queryKey: ['planning-suppliers'] });
       qc.invalidateQueries({ queryKey: ['purchase-suggestions'] });
-      qc.invalidateQueries({ queryKey: ['planning-rebalance'] });
       window.setTimeout(() => setState('idle'), 1600);
     } catch {
       setState('error');
@@ -890,31 +888,6 @@ function SupplierRow({
           <span>{leadTimeDays ?? defaultDays} dias{isDefault ? ' (padrão)' : ''}</span>
         )}
       </td>
-      {/* Feedback 6.0 · item 03 — "grifes que não fazem mais parte de nosso mix
-          de produto". Nenhum dado do ERP diz isso: é decisão comercial, e por
-          isso precisa ser declarada aqui. Marcar corta a SUGESTÃO DE COMPRA e
-          nada mais — a liquidação continua (descontinuado com saldo é o que se
-          quer escoar) e o remanejamento também. */}
-      <td className="num">
-        {canEdit ? (
-          <label
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
-            title="Marcada: o motor para de sugerir compra desta grife. A liquidação e o remanejamento continuam."
-          >
-            <input
-              type="checkbox"
-              checked={foraDoMix}
-              onChange={(e) => setForaDoMix(e.target.checked)}
-              aria-label={`${brand} está fora do mix atual da rede`}
-            />
-            fora do mix
-          </label>
-        ) : foraDoMix ? (
-          <Selo tom="amber" icone="atencao">Fora do mix</Selo>
-        ) : (
-          <span className="muted">—</span>
-        )}
-      </td>
       {canEdit && (
         <td className="right">
           <Botao
@@ -937,6 +910,152 @@ function SupplierRow({
         </td>
       )}
     </tr>
+  );
+}
+
+/**
+ * Mix de grifes (feedback 6.0 · item 03) — "sugere grifes que inclusive não
+ * fazem mais parte de nosso mix de produto".
+ *
+ * Lista separada da de fornecedores de propósito, e não por organização de
+ * tela: são chaves diferentes. Prazo de entrega é do FORNECEDOR ("Luxottica
+ * entrega em 30 dias"); mix é da GRIFE ("a rede não trabalha mais Ray-Ban").
+ * Enquanto as duas dividiram a mesma tabela, esta marcação era oferecida
+ * sobre nomes de razão social que o motor nunca consulta — dava para marcar
+ * e não acontecia nada.
+ */
+function BrandMixRow({ brand, products, discontinued, canEdit }: {
+  brand: string;
+  products: number;
+  discontinued: boolean;
+  canEdit: boolean;
+}) {
+  const qc = useQueryClient();
+  const [state, setState] = useState<'idle' | 'saving' | 'error'>('idle');
+
+  const alternar = async (valor: boolean) => {
+    setState('saving');
+    try {
+      await setGrifeForaDoMix(brand, valor);
+      // A sugestão de compra e o quadro de decisões mudam com isto: as duas
+      // precisam ser refeitas, senão a tela ao lado continua mostrando a
+      // compra da grife que acabou de sair do mix.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['planning-brand-mix'] }),
+        qc.invalidateQueries({ queryKey: ['purchase-suggestions'] }),
+        qc.invalidateQueries({ queryKey: ['planning-orders'] }),
+        qc.invalidateQueries({ queryKey: ['decision-board'] }),
+      ]);
+      setState('idle');
+    } catch {
+      setState('error');
+    }
+  };
+
+  return (
+    <tr>
+      <td>
+        {brand}{' '}
+        {/* Uma grife marcada que não casa com produto nenhum é uma marcação
+            inerte — nome digitado diferente, ou grife que saiu do catálogo. A
+            linha continua visível justamente para poder ser desmarcada. */}
+        {products === 0 && (
+          <Selo tom="amber" icone="atencao">sem produto no catálogo</Selo>
+        )}
+      </td>
+      <td className="num">{products}</td>
+      <td className="num">
+        {canEdit ? (
+          <label
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+            title="Marcada: o motor para de sugerir compra desta grife. A liquidação e o remanejamento continuam."
+          >
+            <input
+              type="checkbox"
+              checked={discontinued}
+              disabled={state === 'saving'}
+              onChange={(e) => void alternar(e.target.checked)}
+              aria-label={`${brand} está fora do mix atual da rede`}
+            />
+            fora do mix
+          </label>
+        ) : discontinued ? (
+          <Selo tom="amber" icone="atencao">Fora do mix</Selo>
+        ) : (
+          <span className="muted">—</span>
+        )}
+        {state === 'error' && (
+          <div style={{ fontSize: 11, color: 'var(--red)' }}>
+            <Icon name="atencao" size={12} /> Erro ao salvar
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+/** Tabela do mix de grifes, com busca — são dezenas de linhas. */
+function MixDeGrifes({ canEdit }: { canEdit: boolean }) {
+  const mix = useQuery({ queryKey: ['planning-brand-mix'], queryFn: getMixDeGrifes });
+  const [busca, setBusca] = useState('');
+
+  const linhas = (mix.data?.rows ?? []).filter((r) =>
+    busca.trim() === '' ? true : r.brand.toLowerCase().includes(busca.trim().toLowerCase()),
+  );
+  const fora = (mix.data?.rows ?? []).filter((r) => r.discontinued).length;
+
+  return (
+    <>
+      <AberturaDeSecao
+        eyebrow="Mix"
+        titulo="Grifes fora do mix"
+        descricao="Marque as grifes que a rede parou de trabalhar. O motor deixa de sugerir COMPRA delas — e só isso: a liquidação continua (grife descontinuada com saldo é exatamente o que se quer escoar) e o remanejamento também. Nenhum dado do ERP diz que uma grife saiu do mix; é decisão comercial e precisa ser declarada aqui."
+      />
+      <div className="card">
+        {mix.isLoading || !mix.data ? (
+          <Loading />
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <input
+                type="search"
+                value={busca}
+                placeholder="Buscar grife…"
+                onChange={(e) => setBusca(e.target.value)}
+                aria-label="Buscar grife"
+                style={{ maxWidth: 260 }}
+              />
+              <span className="muted" style={{ fontSize: 12 }}>
+                {mix.data.rows.length} grifes · {fora} fora do mix
+              </span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Grife</th>
+                  <th className="num">Produtos</th>
+                  <th className="num">Mix</th>
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map((r) => (
+                  <BrandMixRow
+                    key={r.brand}
+                    brand={r.brand}
+                    products={r.products}
+                    discontinued={r.discontinued}
+                    canEdit={canEdit}
+                  />
+                ))}
+              </tbody>
+            </table>
+            {linhas.length === 0 && (
+              <p className="muted" style={{ marginTop: 12 }}>Nenhuma grife com esse nome.</p>
+            )}
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -1474,7 +1593,7 @@ export function Planning() {
       <AberturaDeSecao
         eyebrow="Prazos"
         titulo="Prazos dos fornecedores (lead time)"
-        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo da marca. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias. Marque “fora do mix” nas grifes que a rede não trabalha mais: o motor para de sugerir compra delas, mas continua sugerindo liquidação do saldo.`}
+        descricao={`Cada fornecedor entrega num prazo diferente — o ponto de reposição e o “pedir até” de cada item usam o prazo do fornecedor daquele produto. Sem prazo definido, vale o padrão de ${suppliers.data?.defaultLeadTimeDays ?? 14} dias.`}
       />
       <div className="card">
         {suppliers.isLoading || !suppliers.data ? (
@@ -1483,10 +1602,9 @@ export function Planning() {
           <table>
             <thead>
               <tr>
-                <th>Fornecedor (marca)</th>
+                <th>Fornecedor</th>
                 <th className="num">Produtos</th>
                 <th className="num">Prazo de entrega</th>
-                <th className="num">Mix</th>
                 {isAdmin && <th className="right">Ação</th>}
               </tr>
             </thead>
@@ -1500,13 +1618,15 @@ export function Planning() {
                   isDefault={s.isDefault}
                   defaultDays={suppliers.data!.defaultLeadTimeDays}
                   canEdit={isAdmin}
-                  discontinued={s.discontinued ?? false}
                 />
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* ── Mix de grifes: o que a rede parou de trabalhar ── */}
+      <MixDeGrifes canEdit={isAdmin} />
 
       {/* ── Modo Feira: distribuir uma compra nova entre as lojas (ADMIN) ── */}
       {isAdmin && <FairSplit />}

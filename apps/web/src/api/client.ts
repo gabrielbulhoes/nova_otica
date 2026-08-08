@@ -558,8 +558,22 @@ export interface SupplierSetting {
   leadTimeDays: number | null;
   products: number;
   isDefault: boolean;
-  /** Grife fora do mix atual da rede — corta a sugestão de compra. */
-  discontinued?: boolean;
+}
+
+/**
+ * Uma grife do catálogo com a marcação de mix. Chave DIFERENTE da de
+ * `SupplierSetting`: ali é o fornecedor do ERP, aqui é a grife extraída da
+ * descrição — a mesma que o motor usa para decidir compra e liquidação.
+ *
+ * Nome distinto de `BrandMixRow` (linha 407) de propósito: aquele é o mix de
+ * marcas POR BANDEIRA do relatório, outra pergunta inteiramente.
+ */
+export interface GrifeDoMix {
+  brand: string;
+  /** Produtos do catálogo cuja grife de análise é esta. 0 = marcação inerte. */
+  products: number;
+  /** Fora do mix atual da rede — corta a sugestão de compra. */
+  discontinued: boolean;
 }
 
 export interface PurchaseOrderItem {
@@ -850,11 +864,12 @@ export const distributeOrder = (id: string, fromStoreId: string) =>
     .then((r) => r.data);
 export const getSupplierSettings = () =>
   api.get<{ defaultLeadTimeDays: number; rows: SupplierSetting[] }>('/planning/suppliers').then((r) => r.data);
-export const setSupplierLeadTime = (
-  brand: string,
-  leadTimeDays: number | null,
-  discontinued?: boolean,
-) => api.put('/planning/suppliers', { brand, leadTimeDays, discontinued }).then((r) => r.data);
+export const setSupplierLeadTime = (brand: string, leadTimeDays: number | null) =>
+  api.put('/planning/suppliers', { brand, leadTimeDays }).then((r) => r.data);
+export const getMixDeGrifes = () =>
+  api.get<{ rows: GrifeDoMix[] }>('/planning/brand-mix').then((r) => r.data);
+export const setGrifeForaDoMix = (brand: string, discontinued: boolean) =>
+  api.put('/planning/brand-mix', { brand, discontinued }).then((r) => r.data);
 
 // ─── BI ──────────────────────────────────────────────────────────────────────
 
