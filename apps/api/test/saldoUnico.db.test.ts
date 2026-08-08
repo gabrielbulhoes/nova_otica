@@ -73,7 +73,21 @@ d('uma conta de estoque só (integração com Postgres)', () => {
       where: { productId: alvo, store: PLANNED_STORE_WHERE },
       data: { quantity: 0, available: 0, reserved: 0 },
     });
-    loja = anterior[0].storeId;
+    // A loja que MAIS vende esta peça, e não uma qualquer.
+    //
+    // `splitByNeed` só dá linha a quem tem falta até o alvo de cobertura, e a
+    // falta sai da venda DAQUELA loja. Uma loja sem venda da peça não aparece
+    // no rateio por mérito próprio — então, com ela como alvo, a asserção
+    // mediria a ausência de demanda em vez do saldo, e passaria (ou falharia)
+    // pelo motivo errado.
+    const vendaPorLoja = await prisma.$queryRaw<{ storeId: string; units: number }[]>`
+      SELECT s."storeId" AS "storeId", SUM(si.quantity)::int AS units
+      FROM "SaleItem" si JOIN "Sale" s ON s.id = si."saleId"
+      WHERE si."productId" = ${alvo}
+      GROUP BY s."storeId" ORDER BY 2 DESC
+    `;
+    const comEstoque = new Set(anterior.map((e) => e.storeId));
+    loja = vendaPorLoja.find((v) => comEstoque.has(v.storeId))?.storeId ?? anterior[0].storeId;
     await prisma.stockItem.update({
       where: { storeId_productId: { storeId: loja, productId: alvo } },
       // `reserved` escrito à mão é o que `recomputeReserved` teria escrito para
@@ -128,14 +142,13 @@ d('uma conta de estoque só (integração com Postgres)', () => {
     const item = po.orders.flatMap((o) => o.items).find((i) => i.productId === alvo);
     expect(item?.distribution).toBeDefined();
     const noRateio = item!.distribution!.rows.find((r) => r.storeId === loja);
-    // Sem isto o teste passa por acaso: linha ausente com `?? 0` bateria com um
-    // esperado zero, e a asserção não afirmaria nada.
-    expect(noRateio).toBeDefined();
 
-    // O defeito, em uma linha: aqui vinha 3 — `StockItem.quantity` cru — na
-    // mesma tela em que a aba ao lado mostrava 2. E a unidade que já
-    // tinha dono contava como cobertura desta loja, desviando a compra de
-    // quem realmente precisava.
+    // ESTA é a forma mais visível do defeito, e é por ela que o teste falha no
+    // código anterior: lendo `StockItem.quantity` cru (3), a loja aparece
+    // coberta, a falta dá zero, e `splitByNeed` a DESCARTA — a linha some do
+    // rateio. A loja que mais vende a peça e tem uma unidade vendável recebia
+    // zero, e a carga inteira ia para as outras.
+    expect(noRateio, 'a loja com falta precisa ter linha no rateio').toBeDefined();
     expect(noRateio!.stockUnits).toBe(FISICO - RESERVADO - SOLICITADO);
   });
 });

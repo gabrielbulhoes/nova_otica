@@ -334,8 +334,9 @@ describe('buildRebalance · carência, reserva e unidades a caminho', () => {
   });
 
   it('a demanda é medida pelos dias de presença da peça, não pela janela', () => {
-    // 2 un. em 10 dias é 0,2/dia (12 un. no alvo de 60 dias), não 0,022/dia
-    // (2/90). Com 1 un. em estoque, a cobertura é 5 dias e a loja é receptora.
+    // 2 un. numa peça de 10 dias não é 0,022/dia (2/90, a janela inteira): é a
+    // taxa dos dias em que ela pôde vender. Com 1 un. em estoque, a loja fica
+    // abaixo do mínimo e é receptora.
     const comIdade = buildRebalance(
       [mk('a', 2, 1, { ageDays: 10 }), mk('b', 0, 30)],
       90,
@@ -343,7 +344,11 @@ describe('buildRebalance · carência, reserva e unidades a caminho', () => {
     );
     expect(comIdade.rows).toHaveLength(1);
     expect(comIdade.rows[0].toStoreId).toBe('a');
-    expect(comIdade.rows[0].quantity).toBe(11); // ceil(0,2 × 60) − 1
+    // 10 dias de presença sobem para o piso de observação (14): 2/14 = 0,143/dia
+    // → ceil(0,143 × 60) = 9, menos 1 em estoque. Era 11, com a taxa lida sobre
+    // os 10 dias crus; o piso existe porque a mesma conta sobre 3 dias pediria
+    // 20 unidades por causa de UMA venda.
+    expect(comIdade.rows[0].quantity).toBe(8);
 
     // A mesma peça medida pela janela inteira "vende" 0,022/dia: cobertura de
     // 45 dias, acima do mínimo (21) — e a loja que está acabando não recebe.

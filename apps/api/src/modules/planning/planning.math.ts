@@ -1308,6 +1308,21 @@ export interface RebalanceSuggestion {
   confidence: number;
 }
 
+/**
+ * Janela mínima de observação da demanda, em dias.
+ *
+ * Duas semanas: dois fins de semana e um ciclo de vitrine — a mesma razão que
+ * `newProductDays` documenta ("uma armação precisa passar por vitrine e por fim
+ * de semana antes de alguém dizer que ela não vende"), aplicada ao lado oposto
+ * da conta. Abaixo disso não se estima taxa de venda; extrapolar de três dias é
+ * inventar precisão, e o erro cresce justamente quando a evidência encolhe.
+ *
+ * Não vem de `PlanningConfig` porque a idade é lida antes de a configuração da
+ * grife ser resolvida, e porque isto não é política comercial por fornecedor —
+ * é o limite do que o dado suporta afirmar.
+ */
+const PISO_DE_OBSERVACAO_DIAS = 14;
+
 export interface RebalancePlan {
   days: number;
   summary: { suggestions: number; units: number; storesInvolved: number };
@@ -1382,9 +1397,20 @@ export function buildRebalance(
     // 2 vende 0,2/dia, não 0,022/dia (2/90) — e a diferença é o que separa
     // "está acabando, mande mais" de "não vende, tire daqui".
     //
-    // Piso de 1 dia: peça chegada hoje com venda no mesmo dia dividiria por
-    // zero. Sem idade conhecida, a janela inteira — o comportamento antigo.
-    const presentDays = r.ageDays != null ? Math.min(days, Math.max(1, r.ageDays)) : days;
+    // O piso era de 1 dia — só o suficiente para não dividir por zero — e isso
+    // transformava a correção acima numa máquina de extrapolar. Uma peça
+    // presente há 3 dias com UMA venda lia 0,33/dia, e o alvo de 60 dias pedia
+    // 20 unidades: a rede inteira remanejada por causa de uma venda. Quanto
+    // mais nova a peça, mais alto o número — exatamente ao contrário da
+    // confiança que se pode ter nele.
+    //
+    // O piso agora é a janela mínima de observação (`PISO_DE_OBSERVACAO_DIAS`),
+    // limitada pela janela pedida: não se pode observar mais dias do que se
+    // olhou. A mesma peça passa a ler 1/14 = 0,07/dia e pedir 5, que é uma
+    // aposta do tamanho da evidência. Sem idade conhecida, a janela inteira —
+    // o comportamento antigo.
+    const presentDays =
+      r.ageDays != null ? Math.min(days, Math.max(PISO_DE_OBSERVACAO_DIAS, r.ageDays)) : days;
     const dailyDemand = presentDays > 0 ? r.unitsSold / presentDays : 0;
     const reserved = Math.max(0, r.reserved ?? 0);
     /*

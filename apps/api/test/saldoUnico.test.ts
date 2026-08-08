@@ -82,6 +82,42 @@ describe('cobertura se mede em unidades vendáveis — dos dois lados', () => {
     expect(plan.rows[0]?.toCoverageDays).toBe(10);
   });
 
+  it('uma venda em três dias não vira vinte unidades remanejadas', () => {
+    // A correção que mede a demanda pelos DIAS DE PRESENÇA da peça — certa, e
+    // que resolveu uma queixa real — vinha com piso de 1 dia, o mínimo para
+    // não dividir por zero. Isso a transformava numa máquina de extrapolar:
+    //
+    //   1 venda ÷ 3 dias = 0,33/dia  →  alvo de 60 dias = 20 unidades
+    //
+    // A rede inteira remanejada por causa de uma venda, e o número subindo
+    // quanto MENOS evidência houvesse. Com o piso de observação de 14 dias, a
+    // mesma peça lê 1/14 = 0,07/dia e pede 5: uma aposta do tamanho do dado.
+    const novaComUmaVenda = linha({
+      storeId: 'midway',
+      storeName: 'A GRACIOSA — MIDWAY',
+      unitsSold: 1,
+      currentStock: 0,
+      ageDays: 3,
+    });
+    const plan = buildRebalance([novaComUmaVenda, guarabiraParada], DIAS, () => CFG);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(5); // ceil(1/14 × 60) − 0
+  });
+
+  it('peça madura não é afetada pelo piso de observação', () => {
+    // Guarda de não-regressão: o piso só levanta janelas CURTAS. Uma peça de
+    // 90 dias com 90 vendas continua lendo 1/dia.
+    const madura = linha({
+      storeId: 'midway',
+      storeName: 'A GRACIOSA — MIDWAY',
+      unitsSold: 90,
+      currentStock: 0,
+      ageDays: 90,
+    });
+    const plan = buildRebalance([madura, guarabiraParada], DIAS, () => CFG);
+    expect(plan.rows[0]?.quantity).toBe(60); // 1/dia × alvo de 60
+  });
+
   it('a doadora continua descontando o reservado, como já descontava', () => {
     // Guarda de regressão da metade que já estava certa: 100 na prateleira, 95
     // reservadas, piso de vitrine de 1 → doa no máximo 4.

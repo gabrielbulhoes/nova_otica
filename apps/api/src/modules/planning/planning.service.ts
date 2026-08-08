@@ -119,22 +119,42 @@ export async function planningInputs(
   // Uma conta só, na mesma função que a tela de Estoque e o `availableAt`
   // usam. Duas contas de saldo ao vivo que precisam concordar por disciplina
   // são a próxima divergência silenciosa.
+  //
+  // SOMADO NO BANCO, e não linha a linha em memória. A primeira versão desta
+  // correção trazia TODA posição do escopo (`findMany` sobre 61 mil peças × 16
+  // lojas) e depois pedia `liveDeltas` com um `IN` de vinte mil parâmetros — na
+  // rota mais quente da plataforma, e logo depois de uma frente inteira gasta
+  // tirando memória de cima deste processo. Trocar um `groupBy` por um
+  // `findMany` para corrigir o saldo foi consertar o número certo pelo caminho
+  // errado.
+  //
+  // O que salva a soma é que `onHand` NÃO usa `reserved` — é `quantity +
+  // delta`. Somando por peça sobre as lojas do escopo, isso é
+  // `Σ quantity + Σ entradas − Σ saídas`, e as três parcelas são agregados que
+  // o Postgres faz sozinho. Nenhuma linha de posição atravessa a rede.
   const stockWhere: Prisma.StockItemWhereInput = { ...stockPlannedWhere };
   if (storeId) stockWhere.storeId = storeId;
-  const posicoes = await prisma.stockItem.findMany({
-    where: stockWhere,
-    select: { storeId: true, productId: true, quantity: true, reserved: true },
-  });
-  const deltasAoVivo = await liveDeltas([...new Set(posicoes.map((p) => p.productId))]);
+  // O mesmo recorte de loja, do lado das movimentações: sem ele, uma
+  // transferência confirmada de/para a retaguarda entraria numa conta que
+  // declara ser só das lojas planejáveis.
+  const lojaDaMovimentacao = storeId ? { id: storeId } : PLANNED_STORE_WHERE;
+  const [sincronizado, entradas, saidas] = await Promise.all([
+    prisma.stockItem.groupBy({ by: ['productId'], where: stockWhere, _sum: { quantity: true } }),
+    prisma.inventoryMovement.groupBy({
+      by: ['productId'],
+      where: { status: 'CONFIRMED', toStore: lojaDaMovimentacao },
+      _sum: { quantity: true },
+    }),
+    prisma.inventoryMovement.groupBy({
+      by: ['productId'],
+      where: { status: 'CONFIRMED', fromStore: lojaDaMovimentacao },
+      _sum: { quantity: true },
+    }),
+  ]);
   const stockBy = new Map<string, number>();
-  for (const pos of posicoes) {
-    const { onHand } = computeLiveStock(
-      pos.quantity,
-      pos.reserved,
-      deltasAoVivo.get(`${pos.storeId}:${pos.productId}`) ?? 0,
-    );
-    stockBy.set(pos.productId, (stockBy.get(pos.productId) ?? 0) + onHand);
-  }
+  for (const r of sincronizado) stockBy.set(r.productId, r._sum.quantity ?? 0);
+  for (const r of entradas) stockBy.set(r.productId, (stockBy.get(r.productId) ?? 0) + (r._sum.quantity ?? 0));
+  for (const r of saidas) stockBy.set(r.productId, (stockBy.get(r.productId) ?? 0) - (r._sum.quantity ?? 0));
 
   // Janela recente (até 30 dias) para a suavização com peso recente.
   const recentDays = Math.min(30, days);
@@ -858,16 +878,36 @@ export async function listSupplierSettings() {
  * OTICOS E ESPORTIVOS LTDA", que estava, nunca era consultado pelo motor.
  *
  * A agregação é em memória porque `analysisBrand` é derivada da descrição —
- * não existe coluna para agrupar em SQL. São três campos por produto; num
- * catálogo do tamanho do da rede (61 mil) isso é alguns MB numa tela de
- * administração, consultada raramente.
+ * não existe coluna para agrupar em SQL.
+ *
+ * "Consultada raramente" era o que o comentário anterior dizia, e era uma
+ * suposição sobre o comportamento da tela, não um fato do código: a rota não
+ * exigia papel nenhum, e a contagem varria o catálogo inteiro — 61 mil linhas,
+ * três campos, mais uma extração de grife por linha — a CADA requisição. Um F5
+ * repetido custava o catálogo inteiro, num processo que a frente do 503 acabou
+ * de limitar a 768 MB. Duas mudanças fecham isso: a rota passou a exigir ADMIN
+ * (a decisão é comercial, e o PUT já exigia) e a contagem é memorizada.
+ *
+ * A memória é do PROCESSO e curta de propósito. Não vale a pena invalidar por
+ * evento aqui: o que a torna obsoleta é a sincronização do ERP mexendo no
+ * catálogo, e um minuto de atraso numa contagem de produtos por grife não muda
+ * decisão nenhuma. A marcação, essa sim, é imediata — `setBrandMix` derruba a
+ * memória, porque ver o próprio clique refletido é o mínimo que a tela deve.
  */
-export async function listBrandMix() {
-  const [produtos, marcados] = await Promise.all([
-    prisma.product.findMany({ select: { description: true, category: true, brand: true } }),
-    prisma.brandMix.findMany(),
-  ]);
+const MEMORIA_DO_MIX_MS = 60_000;
+let memoriaDoMix: { em: number; contagem: Map<string, { brand: string; products: number }> } | null = null;
 
+/** Derruba a contagem memorizada de grifes (chamada por quem escreve o mix). */
+export function esquecerContagemDeGrifes() {
+  memoriaDoMix = null;
+}
+
+async function contagemDeGrifes(agora: number) {
+  if (memoriaDoMix && agora - memoriaDoMix.em < MEMORIA_DO_MIX_MS) return memoriaDoMix.contagem;
+
+  const produtos = await prisma.product.findMany({
+    select: { description: true, category: true, brand: true },
+  });
   const contagem = new Map<string, { brand: string; products: number }>();
   for (const p of produtos) {
     const grife = analysisBrand(p.description, p.category, p.brand);
@@ -877,6 +917,18 @@ export async function listBrandMix() {
     if (atual) atual.products += 1;
     else contagem.set(k, { brand: grife, products: 1 });
   }
+  memoriaDoMix = { em: agora, contagem };
+  return contagem;
+}
+
+export async function listBrandMix() {
+  // A contagem pode vir da memória; a MARCAÇÃO nunca — é o dado que a tela
+  // acabou de escrever, e lê-la de um instantâneo faria o clique parecer
+  // perdido.
+  const [contagem, marcados] = await Promise.all([
+    contagemDeGrifes(Date.now()),
+    prisma.brandMix.findMany(),
+  ]);
 
   const fora = new Map(marcados.map((m) => [normBrandKey(m.brand), m]));
   const rows = [...contagem.values()].map((c) => ({
@@ -932,6 +984,7 @@ export async function setBrandMix(brand: string, discontinued: boolean) {
     // registrar exceções, e uma lista de exceções cheia de não-exceções é uma
     // lista que ninguém consegue ler.
     await prisma.brandMix.deleteMany({ where: { brand: chave } });
+    esquecerContagemDeGrifes();
     return { brand: chave, discontinued: false };
   }
 
@@ -940,6 +993,7 @@ export async function setBrandMix(brand: string, discontinued: boolean) {
     create: { brand: chave, discontinued: true },
     update: { discontinued: true },
   });
+  esquecerContagemDeGrifes();
   return { brand: row.brand, discontinued: row.discontinued };
 }
 

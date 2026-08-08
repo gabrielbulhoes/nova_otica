@@ -331,9 +331,16 @@ planningRouter.put(
  * GET /api/planning/brand-mix — as grifes que o motor conhece, com a marcação
  * de "fora do mix". Lista separada da de fornecedores porque são chaves
  * diferentes: prazo é do fornecedor, mix é da grife.
+ *
+ * ADMIN, como o PUT logo abaixo. A rota estava aberta a qualquer sessão e a
+ * contagem varre o catálogo inteiro — 61 mil produtos, com extração de grife
+ * por linha —, então um F5 repetido de qualquer usuário custava o catálogo
+ * inteiro num processo limitado a 768 MB. E a assimetria não fazia sentido
+ * sozinha: quem não pode marcar não tem decisão a tomar com esta lista.
  */
 planningRouter.get(
   '/brand-mix',
+  requireRole('ADMIN'),
   asyncHandler(async (_req, res) => {
     res.json(await listBrandMix());
   }),

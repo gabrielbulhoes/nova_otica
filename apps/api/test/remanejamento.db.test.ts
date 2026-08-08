@@ -305,13 +305,19 @@ d('remanejamento · os insumos chegam do banco ao motor', () => {
   });
 
   it('a demanda do destino sai dos dias de presença da peça, não da janela', async () => {
-    // Destino tem 1 un. e vendeu 2 em 10 dias de presença: 0,2/dia, cobertura
-    // de 5 dias — está acabando e precisa de 11 un. para os 60 dias de alvo.
+    // Destino tem 1 un. e vendeu 2 numa peça de 10 dias. A presença sobe para o
+    // piso de observação (14 dias): 2/14 = 0,143/dia, cobertura de 7 dias —
+    // está acabando e precisa de 8 un. para os 60 dias de alvo.
+    //
+    // Eram 11 un. e 5 dias, com a taxa lida sobre os 10 dias crus. O piso
+    // existe porque a mesma conta sobre 3 dias de presença pediria 20 unidades
+    // por causa de UMA venda: quanto mais nova a peça, mais alto o número — o
+    // contrário da confiança que se pode ter nele.
     const linhas = await linhasDe(recemChegadoId);
     expect(linhas).toHaveLength(1);
     expect(linhas[0].toStoreId).toBe(destinoId);
-    expect(linhas[0].quantity).toBe(11);
-    expect(linhas[0].toCoverageDays).toBe(5);
+    expect(linhas[0].quantity).toBe(8);
+    expect(linhas[0].toCoverageDays).toBe(7);
 
     // Medida pela janela inteira, a mesma peça "vende" 2/90 = 0,022/dia e a
     // cobertura vira 45 dias: acima do mínimo, e a loja que está acabando não
@@ -401,8 +407,17 @@ d('remanejamento · as duas frestas do saldo', () => {
     const { planningInputs } = await import('../src/modules/planning/planning.service.js');
     const { computeLiveStock, liveDeltas } = await import('../src/modules/stock/stock.service.js');
 
-    const daCompra = async () =>
-      (await planningInputs(JANELA)).find((i) => i.productId === produtoId)?.currentStock ?? null;
+    // A loja de destino também precisa ter posição desta peça — como tem em
+    // produção, onde a sincronização cria a linha. Sem ela o cenário é
+    // impossível e o teste mede um artefato: as 4 unidades transferidas somem
+    // da conta da rede porque não há linha onde somá-las, e a rede inteira
+    // parece ter 8 quando as 12 continuam dentro dela.
+    await prisma.stockItem.create({
+      data: { storeId: outraId, productId: produtoId, quantity: 0, reserved: 0, available: 0 },
+    });
+
+    const daCompra = async (escopo?: string) =>
+      (await planningInputs(JANELA, escopo)).find((i) => i.productId === produtoId)?.currentStock ?? null;
     const doEstoque = async () => {
       const pos = await prisma.stockItem.findFirstOrThrow({
         where: { storeId: lojaId, productId: produtoId },
@@ -412,6 +427,7 @@ d('remanejamento · as duas frestas do saldo', () => {
     };
 
     expect(await daCompra()).toBe(12);
+    expect(await daCompra(lojaId)).toBe(12);
     expect(await doEstoque()).toBe(12);
 
     // Quatro unidades já saíram da loja (confirmadas), e a sincronização ainda
@@ -428,8 +444,16 @@ d('remanejamento · as duas frestas do saldo', () => {
       },
     });
 
-    // Antes do conserto: a compra dizia 12 e o estoque dizia 8.
+    // NO ESCOPO DA LOJA — que é onde a queixa nasceu: antes do conserto a
+    // compra dizia 12 e o estoque dizia 8, e o motor comprava para repor peça
+    // que ainda estava na rede.
     expect(await doEstoque()).toBe(8);
-    expect(await daCompra()).toBe(8);
+    expect(await daCompra(lojaId)).toBe(8);
+
+    // NA REDE, o total NÃO muda: transferência entre duas lojas planejáveis
+    // move a peça de lugar, não a tira da rede. Uma conta de rede que caísse
+    // para 8 aqui mandaria comprar quatro unidades que a rede já tem — o erro
+    // simétrico, e mais caro que o primeiro.
+    expect(await daCompra()).toBe(12);
   });
 });

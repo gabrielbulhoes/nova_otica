@@ -1840,8 +1840,12 @@ export function Planning() {
         )}
       </div>
 
-      {/* ── Mix de grifes: o que a rede parou de trabalhar ── */}
-      <MixDeGrifes canEdit={isAdmin} />
+      {/* ── Mix de grifes: o que a rede parou de trabalhar (ADMIN) ──
+          Só o ADMIN, como o Modo Feira logo abaixo. A seção era renderizada
+          para todo mundo em modo leitura, e a rota que a alimenta varre o
+          catálogo inteiro a cada abertura — custo de rede pago por quem não
+          tem decisão a tomar com a lista. Marcar sempre foi ADMIN. */}
+      {isAdmin && <MixDeGrifes canEdit={isAdmin} />}
 
       {/* ── Modo Feira: distribuir uma compra nova entre as lojas (ADMIN) ── */}
       {isAdmin && <FairSplit />}
