@@ -535,6 +535,12 @@ export interface RebalanceSuggestion {
   toStoreId: string;
   toStoreName: string;
   quantity: number;
+  /**
+   * PISO de unidades vendáveis que ficam na origem: o que sobra se TODAS as
+   * linhas desta peça saindo dela forem aprovadas, não só esta. Nunca zero, e
+   * a tela precisa dizer a condição — cada linha é aprovada isolada.
+   */
+  fromRemainingUnits: number;
   /** Cobertura (dias) na origem e no destino antes da transferência. */
   fromCoverageDays: number | null;
   toCoverageDays: number | null;
@@ -551,6 +557,8 @@ export interface RebalancePlan {
   days: number;
   summary: { suggestions: number; units: number; storesInvolved: number };
   rows: RebalanceSuggestion[];
+  /** As guardas que o motor aplicou ao escolher doadoras — a tela as declara. */
+  guards: { newProductDays: number; donorFloorUnits: number };
 }
 
 export interface SupplierSetting {

@@ -28,6 +28,7 @@ import {
   buildPriceBands,
   paretoSummary,
   type ProductMetricsInput,
+  type StoreProductInput,
 } from '../src/modules/planning/planning.math.js';
 
 const base: ProductMetricsInput = {
@@ -169,7 +170,7 @@ describe('buildRebalance (redistribuição entre lojas)', () => {
     currentStock,
   });
 
-  it('sugere transferir de onde está parado para onde vende e falta', () => {
+  it('doadora parada doa quase tudo, mas nunca fica com zero na vitrine', () => {
     const plan = buildRebalance(
       [mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 0, 18)], // A vende 1/dia com 3 un.; B parada com 18
       90,
@@ -179,17 +180,28 @@ describe('buildRebalance (redistribuição entre lojas)', () => {
     const s = plan.rows[0];
     expect(s.fromStoreId).toBe('b');
     expect(s.toStoreId).toBe('a');
-    // necessidade de A: alvo 60 un. − 3 em estoque = 57; B só tem 18 → transfere 18.
-    expect(s.quantity).toBe(18);
+    // Este teste dizia 18 — "parado: pode doar tudo", como estava escrito no
+    // motor. Era o comportamento que o Galbe reclamou: a origem ficava com
+    // zero, e peça que ninguém vê não vende. A necessidade de A continua 57
+    // (alvo 60 − 3), B continua sendo a única fonte, e o que muda é o piso:
+    // doa 17 de 18 e o mostruário fica.
+    expect(s.quantity).toBe(17);
+    expect(s.fromRemainingUnits).toBe(cfg.donorFloorUnits);
+    expect(s.fromRemainingUnits).toBeGreaterThan(0);
     expect(s.stockoutInDays).toBe(3);
     expect(plan.summary.storesInvolved).toBe(2);
   });
 
-  it('doadora com giro preserva a própria cobertura-alvo', () => {
+  it('doadora com giro preserva a própria cobertura-alvo, sem descontar o piso duas vezes', () => {
     // B vende 0,1/dia (alvo 6 un.) e tem 30 → pode doar 24.
+    //
+    // O piso de vitrine é MÍNIMO ABSOLUTO, não parcela somada ao alvo: quem
+    // tem giro já está protegido por `targetCoverDays`. Se este número virar
+    // 23, o piso foi implementado somando — e o errado é a implementação.
     const plan = buildRebalance([mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 9, 30)], 90, () => cfg);
     expect(plan.rows).toHaveLength(1);
     expect(plan.rows[0].quantity).toBe(24);
+    expect(plan.rows[0].fromRemainingUnits).toBe(6);
   });
 
   it('não sugere nada quando o estoque está equilibrado', () => {
@@ -200,6 +212,173 @@ describe('buildRebalance (redistribuição entre lojas)', () => {
   it('não transfere para loja sem vendas', () => {
     const plan = buildRebalance([mk('a', 'Loja A', 0, 0), mk('b', 'Loja B', 0, 18)], 90, () => cfg);
     expect(plan.rows).toHaveLength(0);
+  });
+
+  it('doadora com uma peça só não doa: o piso come a única unidade', () => {
+    const plan = buildRebalance([mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 0, 1)], 90, () => cfg);
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('o plano declara as guardas que aplicou, para a tela poder dizê-las', () => {
+    const plan = buildRebalance([mk('a', 'Loja A', 90, 3), mk('b', 'Loja B', 0, 18)], 90, () => cfg);
+    expect(plan.guards.donorFloorUnits).toBe(cfg.donorFloorUnits);
+    expect(plan.guards.newProductDays).toBe(cfg.newProductDays);
+  });
+});
+
+/**
+ * Queixa do Galbe (WhatsApp): "o sistema manda remanejar peça que acabou de
+ * chegar na loja" e "esvazia a loja de origem".
+ *
+ * As duas travas moram na mesma função. O que estes testes prendem é o
+ * CONTRATO de cada uma, incluindo a direção do erro quando falta dado.
+ */
+describe('buildRebalance · carência, reserva e unidades a caminho', () => {
+  const cfg = { ...DEFAULT_PLANNING_CONFIG, leadTimeDays: 14, safetyDays: 7, targetCoverDays: 60 };
+  const mk = (
+    storeId: string,
+    unitsSold: number,
+    currentStock: number,
+    extra: Partial<StoreProductInput> = {},
+  ): StoreProductInput => ({
+    storeId,
+    storeName: `Loja ${storeId.toUpperCase()}`,
+    productId: 'p1',
+    description: 'Armação X',
+    brand: 'Ray-Ban',
+    unitsSold,
+    currentStock,
+    ...extra,
+  });
+
+  it('peça recém-chegada na origem não é doada', () => {
+    const plan = buildRebalance(
+      // B tem 18 un. paradas, mas chegou há 10 dias — carência de 45.
+      [mk('a', 90, 3), mk('b', 0, 18, { ageDays: 10 })],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('passada a carência, a mesma peça volta a poder doar', () => {
+    const plan = buildRebalance(
+      [mk('a', 90, 3), mk('b', 0, 18, { ageDays: cfg.newProductDays })],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].fromStoreId).toBe('b');
+  });
+
+  it('idade desconhecida NÃO é peça nova — a trava é fail-open', () => {
+    // O contrato é o mesmo de `input.ageDays != null && …` da liquidação.
+    // Fechar aqui esvaziaria o plano em qualquer base sem data de posição, e
+    // uma sugestão a menos é uma sugestão que o lojista nunca vê.
+    const semIdade = buildRebalance([mk('a', 90, 3), mk('b', 0, 18)], 90, () => cfg);
+    const idadeNula = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { ageDays: null })], 90, () => cfg);
+    expect(semIdade.rows).toHaveLength(1);
+    expect(idadeNula.rows).toHaveLength(1);
+  });
+
+  it('a carência olha a ORIGEM, não o destino', () => {
+    // Destino recém-chegado continua podendo RECEBER: quem acabou de receber
+    // duas peças de uma coleção que vende não pode ficar esperando 45 dias.
+    const plan = buildRebalance(
+      [mk('a', 90, 3, { ageDays: 5 }), mk('b', 0, 18)],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].toStoreId).toBe('a');
+  });
+
+  it('unidade já reservada para outra transferência não é oferecida de novo', () => {
+    // B tem 18 un., 15 já comprometidas → livre 3, menos o piso → doa 2.
+    const plan = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { reserved: 15 })], 90, () => cfg);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(2);
+  });
+
+  it('reserva que consome o estoque livre zera a doação', () => {
+    const plan = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { reserved: 18 })], 90, () => cfg);
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('o que já está a caminho do destino abate a necessidade dele', () => {
+    // A precisa de 57 (alvo 60 − 3). Com 50 a caminho, precisa de 7.
+    const plan = buildRebalance(
+      [mk('a', 90, 3, { inboundUnits: 50 }), mk('b', 0, 18)],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(7);
+  });
+
+  it('destino já atendido por transferência pendente sai do plano', () => {
+    const plan = buildRebalance(
+      [mk('a', 90, 3, { inboundUnits: 60 }), mk('b', 0, 18)],
+      90,
+      () => cfg,
+    );
+    expect(plan.rows).toHaveLength(0);
+  });
+
+  it('a demanda é medida pelos dias de presença da peça, não pela janela', () => {
+    // 2 un. em 10 dias é 0,2/dia (12 un. no alvo de 60 dias), não 0,022/dia
+    // (2/90). Com 1 un. em estoque, a cobertura é 5 dias e a loja é receptora.
+    const comIdade = buildRebalance(
+      [mk('a', 2, 1, { ageDays: 10 }), mk('b', 0, 30)],
+      90,
+      () => cfg,
+    );
+    expect(comIdade.rows).toHaveLength(1);
+    expect(comIdade.rows[0].toStoreId).toBe('a');
+    expect(comIdade.rows[0].quantity).toBe(11); // ceil(0,2 × 60) − 1
+
+    // A mesma peça medida pela janela inteira "vende" 0,022/dia: cobertura de
+    // 45 dias, acima do mínimo (21) — e a loja que está acabando não recebe.
+    const pelaJanela = buildRebalance([mk('a', 2, 1), mk('b', 0, 30)], 90, () => cfg);
+    expect(pelaJanela.rows).toHaveLength(0);
+  });
+
+  it('idade maior que a janela não infla a demanda', () => {
+    // Peça de 3 anos com 90 vendas na janela vende 1/dia, não 90/dia.
+    const plan = buildRebalance([mk('a', 90, 3, { ageDays: 1095 }), mk('b', 0, 18)], 90, () => cfg);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].toCoverageDays).toBe(3);
+  });
+
+  /**
+   * "A origem fica com N" é o único número da tela que responde à pergunta que
+   * faz o lojista recusar a sugestão: "vai me deixar sem?". Para essa pergunta
+   * errar para MENOS é seguro e errar para MAIS não é — estes dois testes
+   * prendem a direção do erro, não só o valor.
+   */
+  it('o número da origem já desconta o que está reservado', () => {
+    // B tem 18 un. físicas, 16 já comprometidas com outra transferência:
+    // vendável são 2, o piso come 1, doa 1 — e fica com 1, não com 17.
+    const plan = buildRebalance([mk('a', 90, 3), mk('b', 0, 18, { reserved: 16 })], 90, () => cfg);
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0].quantity).toBe(1);
+    expect(plan.rows[0].fromRemainingUnits).toBe(1);
+    expect(plan.rows[0].reason).toContain('fica com 1 un');
+  });
+
+  it('o número da origem é o mesmo em toda linha dela e conta as outras sugestões', () => {
+    // B tem 100 un. paradas e atende duas lojas no mesmo plano: A leva 57 e C
+    // leva 28. Cada linha tem botão próprio, então o número precisa valer para
+    // quem aprovar QUALQUER subconjunto — e só o pior caso vale para todos.
+    const plan = buildRebalance([mk('a', 90, 3), mk('c', 45, 2), mk('b', 0, 100)], 90, () => cfg);
+    expect(plan.rows).toHaveLength(2);
+    expect(plan.rows.map((r) => r.quantity)).toEqual([57, 28]);
+    // 100 − 57 − 28 = 15 nas DUAS linhas. Por linha isolada seriam 43 e 15, e
+    // quem aprovasse só a segunda leria 15 e ficaria com 72.
+    expect(plan.rows.map((r) => r.fromRemainingUnits)).toEqual([15, 15]);
+    for (const r of plan.rows) {
+      expect(r.reason).toContain('Aprovando todas as sugestões desta peça');
+    }
   });
 });
 

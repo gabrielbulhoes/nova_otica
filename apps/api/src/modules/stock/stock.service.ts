@@ -58,25 +58,35 @@ export interface StockRow {
 /**
  * Delta por (storeId, productId) gerado pelas movimentações internas
  * confirmadas e ainda não reconciliadas: entradas somam, saídas subtraem.
+ *
+ * Exportada porque o planejamento precisa do MESMO saldo que esta tela e que a
+ * validação de saldo de `createMovement`. Uma segunda conta de estoque ao vivo,
+ * escrita em outro módulo e obrigada a concordar com esta por disciplina, é a
+ * próxima divergência silenciosa — foi assim que o remanejamento passou a
+ * sugerir de novo uma transferência que o operador já tinha confirmado.
+ *
+ * `productIds` é recorte opcional: o planejamento trabalha sobre um conjunto
+ * conhecido de produtos e não precisa varrer o histórico inteiro da rede.
  */
-async function liveDeltas(): Promise<Map<string, number>> {
+export async function liveDeltas(productIds?: string[]): Promise<Map<string, number>> {
   const deltas = new Map<string, number>();
   const add = (storeId: string | null, productId: string, qty: number) => {
     if (!storeId) return;
     const key = `${storeId}:${productId}`;
     deltas.set(key, (deltas.get(key) ?? 0) + qty);
   };
+  const doRecorte = productIds ? { productId: { in: productIds } } : {};
 
   const inbound = await prisma.inventoryMovement.groupBy({
     by: ['toStoreId', 'productId'],
-    where: { status: 'CONFIRMED', toStoreId: { not: null } },
+    where: { status: 'CONFIRMED', toStoreId: { not: null }, ...doRecorte },
     _sum: { quantity: true },
   });
   for (const r of inbound) add(r.toStoreId, r.productId, r._sum.quantity ?? 0);
 
   const outbound = await prisma.inventoryMovement.groupBy({
     by: ['fromStoreId', 'productId'],
-    where: { status: 'CONFIRMED', fromStoreId: { not: null } },
+    where: { status: 'CONFIRMED', fromStoreId: { not: null }, ...doRecorte },
     _sum: { quantity: true },
   });
   for (const r of outbound) add(r.fromStoreId, r.productId, -(r._sum.quantity ?? 0));

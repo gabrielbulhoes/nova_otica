@@ -189,6 +189,9 @@ describe('item 04 · prioridade composta', () => {
         toStoreId: 'b',
         toStoreName: 'B',
         quantity: 9,
+        // Doa 9 e fica com 1: o piso de vitrine é mínimo absoluto, então
+        // nenhuma sugestão que sai do motor deixa a origem zerada.
+        fromRemainingUnits: 1,
         fromCoverageDays: 300,
         toCoverageDays: 1,
         stockoutInDays: 0,

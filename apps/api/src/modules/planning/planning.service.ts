@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stores/store.scope.js';
+import { computeLiveStock, liveDeltas } from '../stock/stock.service.js';
 import { loadBrandCatalog } from './brandCatalog.js';
 import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
@@ -443,7 +444,12 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
       },
       select: { productId: true, quantity: true, sale: { select: { storeId: true } } },
     }),
-    prisma.stockItem.findMany({ where: stockPlannedWhere, select: { storeId: true, productId: true, quantity: true } }),
+    // `reserved` e `createdAt` entram aqui, e não numa consulta à parte, porque
+    // são colunas da MESMA linha que já vem: custo zero de ida ao banco.
+    prisma.stockItem.findMany({
+      where: stockPlannedWhere,
+      select: { storeId: true, productId: true, quantity: true, reserved: true, createdAt: true },
+    }),
     prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
     supplierConfigResolver(),
   ]);
@@ -451,30 +457,125 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
   const storeName = new Map(stores.map((s) => [s.id, s.name]));
   const key = (storeId: string, productId: string) => `${storeId}:${productId}`;
 
-  const positions = new Map<string, { storeId: string; productId: string; stock: number; sold: number }>();
+  const positions = new Map<
+    string,
+    {
+      storeId: string;
+      productId: string;
+      stock: number;
+      sold: number;
+      reserved: number;
+      /** Criação da POSIÇÃO nesta loja; `null` quando ela nem existe. */
+      posicaoDesde: Date | null;
+    }
+  >();
   for (const s of stock) {
     positions.set(key(s.storeId, s.productId), {
       storeId: s.storeId,
       productId: s.productId,
       stock: s.quantity,
       sold: 0,
+      reserved: s.reserved,
+      posicaoDesde: s.createdAt,
     });
   }
   for (const it of sold) {
     const sid = it.sale.storeId;
     if (!sid || !it.productId) continue;
     const k = key(sid, it.productId);
-    const cur = positions.get(k) ?? { storeId: sid, productId: it.productId, stock: 0, sold: 0 };
+    const cur = positions.get(k) ?? {
+      storeId: sid,
+      productId: it.productId,
+      stock: 0,
+      sold: 0,
+      reserved: 0,
+      posicaoDesde: null,
+    };
     cur.sold += it.quantity;
     positions.set(k, cur);
   }
 
   const productIds = Array.from(new Set(Array.from(positions.values()).map((p) => p.productId)));
-  const products = await prisma.product.findMany({
-    where: { id: { in: productIds } },
-    select: { id: true, description: true, brand: true, category: true },
-  });
+  const [products, emAberto, deltasAoVivo] = await Promise.all([
+    prisma.product.findMany({
+      where: { id: { in: productIds } },
+      // `includedAt` (data_cadastro do ERP) é a segunda metade da idade por
+      // loja — ver `idadeNaLoja` logo abaixo.
+      select: { id: true, description: true, brand: true, category: true, includedAt: true },
+    }),
+    // Transferências ainda NÃO efetivadas: a peça continua fisicamente na
+    // origem e ainda não chegou no destino. A consulta é por `productId` e
+    // `status`, as duas colunas com índice em InventoryMovement; as lojas
+    // ficam só na agregação em memória. O conjunto é pequeno por natureza (é
+    // fila de operação, não histórico).
+    //
+    // REQUESTED entra junto de PENDING porque toda transferência criada por
+    // gestor de loja nasce REQUESTED e só vira PENDING quando o ADMIN aprova
+    // (`decideInitialStatus`). O plano é tela de ADMIN: sem contar esse
+    // intervalo, ele reemitia a sugestão idêntica à que a loja acabou de
+    // pedir, e a rede passava a ter duas ordens para as mesmas unidades.
+    prisma.inventoryMovement.findMany({
+      where: {
+        status: { in: ['REQUESTED', 'PENDING'] },
+        type: 'TRANSFER',
+        productId: { in: productIds },
+      },
+      select: { productId: true, fromStoreId: true, toStoreId: true, quantity: true, status: true },
+    }),
+    // Transferências já efetivadas e ainda não reconciliadas pela sync: a peça
+    // JÁ saiu da origem e JÁ chegou no destino, mesmo que o `StockItem` da
+    // última sincronização não saiba disso (`reconcileMovements` só fecha o
+    // que tem `confirmedAt` antes do corte, no run seguinte).
+    //
+    // É o mesmo saldo que a tela de Estoque mostra e que `availableAt` usa
+    // para aceitar ou recusar o clique — daí vir da mesma função, e não de uma
+    // segunda conta escrita aqui.
+    liveDeltas(productIds),
+  ]);
   const productBy = new Map(products.map((p) => [p.id, p]));
+  const inboundBy = new Map<string, number>();
+  const solicitadoBy = new Map<string, number>();
+  for (const m of emAberto) {
+    if (m.toStoreId) {
+      const k = key(m.toStoreId, m.productId);
+      inboundBy.set(k, (inboundBy.get(k) ?? 0) + m.quantity);
+    }
+    // `StockItem.reserved` já soma as saídas PENDING (`recomputeReserved`),
+    // então só a parcela REQUESTED precisa ser somada aqui — contar as duas
+    // seria reservar a mesma unidade duas vezes.
+    if (m.fromStoreId && m.status === 'REQUESTED') {
+      const k = key(m.fromStoreId, m.productId);
+      solicitadoBy.set(k, (solicitadoBy.get(k) ?? 0) + m.quantity);
+    }
+  }
+
+  const agora = Date.now();
+  /**
+   * Idade ESTIMADA da peça naquela loja, em dias — a mais antiga entre a
+   * criação da posição de estoque e o cadastro do produto no ERP.
+   *
+   * É estimativa, e mente para MENOS em três situações conhecidas:
+   *  1. o sync apaga toda posição zerada, então peça de três anos que zerou e
+   *     voltou à prateleira ganha `createdAt` novo;
+   *  2. o recálculo de reservas faz `upsert` com `create`: uma transferência
+   *     pendente CRIA a linha de StockItem na loja de ORIGEM com `createdAt`
+   *     de agora — a própria sugestão envelhece o carimbo que a rodada
+   *     seguinte vai ler;
+   *  3. `includedAt` é da REDE, não da loja: peça antiga no catálogo que
+   *     acabou de chegar nesta loja parece antiga aqui também.
+   *
+   * Todas as três erram para o lado de deixar a peça DOAR. É de propósito:
+   * `Product.createdAt` local, que erraria para o outro lado, já é recusado
+   * pelo planejamento (a primeira carga carimbou o catálogo inteiro no mesmo
+   * instante). Preferimos uma sugestão a mais, que o lojista recusa, a uma
+   * sugestão a menos, que ele nunca vê. A tela diz que é estimativa.
+   */
+  const idadeNaLoja = (posicaoDesde: Date | null, includedAt: Date | null): number | null => {
+    const marcos = [posicaoDesde, includedAt].filter((d): d is Date => d != null);
+    if (marcos.length === 0) return null;
+    const maisAntigo = Math.min(...marcos.map((d) => d.getTime()));
+    return Math.max(0, Math.floor((agora - maisAntigo) / 86_400_000));
+  };
 
   const inputs: StoreProductInput[] = [];
   for (const pos of positions.values()) {
@@ -484,6 +585,9 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     // Regra absoluta da rede: lentes não se transferem entre lojas — só óculos
     // de grau/sol e relógio. Vale mesmo no consolidado ('todos').
     if (matchesProductGroup(product.category, 'lentes')) continue;
+    const k = key(pos.storeId, pos.productId);
+    const reservado = pos.reserved + (solicitadoBy.get(k) ?? 0);
+    const { onHand } = computeLiveStock(pos.stock, reservado, deltasAoVivo.get(k) ?? 0);
     inputs.push({
       storeId: pos.storeId,
       storeName: storeName.get(pos.storeId) ?? '—',
@@ -492,7 +596,15 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
       brand: product.brand,
       category: product.category,
       unitsSold: pos.sold,
-      currentStock: pos.stock,
+      // Saldo AO VIVO, não a quantidade da última sync. Saldo negativo é
+      // possível quando a sync já baixou a origem e a movimentação ainda não
+      // foi reconciliada; para o planejamento isso é zero, e não uma loja
+      // devendo peça — cobertura negativa faria a origem parecer a mais
+      // urgente da fila.
+      currentStock: Math.max(0, onHand),
+      reserved: reservado,
+      inboundUnits: inboundBy.get(k) ?? 0,
+      ageDays: idadeNaLoja(pos.posicaoDesde, product.includedAt),
     });
   }
 

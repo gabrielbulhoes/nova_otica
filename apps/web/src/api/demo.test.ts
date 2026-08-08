@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { demoHandle } from './demo';
+import { demoHandle, demoIdadeNaLoja } from './demo';
 
 /**
  * Handlers da demo exercitados no dataset FICTÍCIO (o JSON real é gitignorado
@@ -755,4 +755,75 @@ describe('demo: painel e BI contam o mesmo estoque', () => {
       expect(bi).toBe(painel);
     });
   }
+});
+
+/**
+ * A tela de Planejamento declara na `NotaDeIdadeEstimada`, a partir de
+ * `plan.guards`, duas travas do motor: a origem nunca fica sem vitrine e peça
+ * com menos de 45 dias na loja não é remanejada.
+ *
+ * A demo alimentava `buildRebalance` sem idade, sem reserva e sem unidades a
+ * caminho — caía no fail-open e remanejava peça de qualquer idade, e reoferecia
+ * unidade que já tinha dono. A nota estava certa; o motor da demonstração é que
+ * mentia. Estes testes prendem os dois lados.
+ */
+describe('demo: o remanejamento aplica as travas que a tela anuncia', () => {
+  const plano = () => get('/planning/rebalance', { days: '90' });
+  type Linha = {
+    productId: string;
+    description: string;
+    fromStoreId: string;
+    fromStoreName: string;
+    toStoreId: string;
+    quantity: number;
+    fromRemainingUnits: number;
+  };
+
+  it('nenhuma origem sugerida está dentro da carência declarada em guards', () => {
+    const p = plano();
+    const rows = p.rows as Linha[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      const idade = demoIdadeNaLoja(r.fromStoreId, r.productId);
+      expect(idade, `${r.description}: ${r.fromStoreName} doa peça de ${idade} dias`).toBeGreaterThanOrEqual(
+        p.guards.newProductDays,
+      );
+    }
+  });
+
+  it('a origem nunca é esvaziada: sobra ao menos o piso de vitrine declarado', () => {
+    const p = plano();
+    for (const r of p.rows as Linha[]) {
+      expect(r.fromRemainingUnits).toBeGreaterThanOrEqual(p.guards.donorFloorUnits);
+    }
+  });
+
+  it('transferência já pedida deixa de ser oferecida de novo, e volta se for cancelada', () => {
+    const alvo = (plano().rows as Linha[])[0];
+    const saindo = () =>
+      (plano().rows as Linha[])
+        .filter((r) => r.productId === alvo.productId && r.fromStoreId === alvo.fromStoreId)
+        .reduce((a, r) => a + r.quantity, 0);
+    const antes = saindo();
+    expect(antes).toBeGreaterThanOrEqual(alvo.quantity);
+
+    const mv = demoHandle({
+      method: 'POST',
+      url: '/movements',
+      body: {
+        type: 'TRANSFER',
+        productId: alvo.productId,
+        fromStoreId: alvo.fromStoreId,
+        toStoreId: alvo.toStoreId,
+        quantity: alvo.quantity,
+      },
+    }) as { id: string };
+
+    // As unidades pedidas saem da oferta: seguir oferecendo é criar uma segunda
+    // ordem para as mesmas peças.
+    expect(saindo()).toBeLessThanOrEqual(antes - alvo.quantity);
+
+    demoHandle({ method: 'POST', url: `/movements/${mv.id}/cancel`, body: {} });
+    expect(saindo()).toBe(antes);
+  });
 });
