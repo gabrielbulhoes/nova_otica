@@ -1442,7 +1442,6 @@ export function buildPurchaseOrders(
    * antes dele quebraria todas em silêncio — o tipo de quebra que compila.
    */
   positions?: Map<string, FairSplitInput[]>,
-  cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
 ): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
@@ -1487,7 +1486,7 @@ export function buildPurchaseOrders(
     // `totalNeed` como "o quanto a rede precisa comprar": ele é um piso de
     // média, e por isso aparece na tela AO LADO da quantidade, nunca no lugar.
     const posicoes = positions?.get(p.productId);
-    const rateio = posicoes ? splitByNeed(posicoes, p.suggestedQty, days, cfg) : null;
+    const rateio = posicoes ? splitByNeed(posicoes, p.suggestedQty, days) : null;
 
     order.items.push({
       productId: p.productId,
@@ -1839,12 +1838,20 @@ export function buildFairSplit(
 export type NeedBasis = 'necessidade' | 'participacao';
 
 export interface NeedSplitRow extends FairSplitInput {
-  /** Demanda diária da loja no período (unitsSold ÷ days). */
-  dailyDemand: number;
-  /** Alvo de cobertura em unidades: demanda diária × `targetCoverDays`. */
-  targetUnits: number;
   /** Falta até o alvo — o peso do rateio quando a base é `necessidade`. */
   needUnits: number;
+  /**
+   * O peso que DE FATO gerou `sharePct`: a falta, quando a base é a
+   * necessidade; o peso da reserva, quando não é.
+   *
+   * Existe porque na reserva as duas coisas divergem, e a tela mentia por
+   * omissão: `unitsSold` é a venda do PRÓPRIO SKU — zero num lançamento —
+   * enquanto o percentual vinha do peso da escada (grife/categoria/rede). As
+   * colunas que existem para EXPLICAR o número final apareciam todas em zero
+   * ao lado de "mandar 28". Coluna que não fala da mesma base que o percentual
+   * é pior que coluna nenhuma: convida a conferir uma conta que não fecha.
+   */
+  weightUnits: number;
   /** Participação da loja na base EFETIVAMENTE usada (%). */
   sharePct: number;
   suggestedQty: number;
@@ -1928,9 +1935,8 @@ export function splitByNeed(
         storeName: l.storeName,
         unitsSold: l.unitsSold,
         stockUnits: l.stockUnits,
-        dailyDemand: round2(l.demanda),
-        targetUnits: round1(l.alvo),
         needUnits: round1(l.falta),
+        weightUnits: round1(pesos[i]),
         sharePct: totalPeso > 0 ? round2((pesos[i] / totalPeso) * 100) : 0,
         suggestedQty: cotas[i],
       }))

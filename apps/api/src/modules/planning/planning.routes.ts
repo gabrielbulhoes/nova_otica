@@ -81,6 +81,10 @@ planningRouter.get(
  * `distribution` AUSENTE não é "dividir igual": é "não calculado". A tela
  * declara isso, em vez de mostrar uma tabela vazia que pareceria um rateio que
  * deu zero.
+ *
+ * O campo também some quando há `storeId` — e aí não é permissão, é aritmética:
+ * na visão de uma loja a quantidade JÁ é daquela loja, e não existe o que
+ * repartir. Ver `purchaseOrders` em planning.service.ts.
  */
 planningRouter.get(
   '/purchase-orders',

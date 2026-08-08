@@ -165,7 +165,7 @@ d('distribuição do recebimento (integração com Postgres)', () => {
     // Unidade que evapora no arredondamento é estoque que ninguém procura.
     const plano = await distributionPlan(orderId);
     const item = plano.items[0];
-    const soma = item.rows.reduce((a, r) => a + r.quantity, 0);
+    const soma = item.rows.reduce((a, r) => a + r.suggestedQty, 0);
     expect(soma + plano.unassigned).toBe(37);
   });
 
@@ -209,7 +209,29 @@ d('distribuição do recebimento (integração com Postgres)', () => {
     expect(['sku', 'marca', 'categoria', 'rede']).toContain(item.basis);
     expect(item.basisLabel).toBeTruthy();
     // Reserva ou não, a conta continua fechando.
-    expect(item.rows.reduce((a, r) => a + r.quantity, 0) + plano.unassigned).toBe(37);
+    expect(item.rows.reduce((a, r) => a + r.suggestedQty, 0) + plano.unassigned).toBe(37);
+  });
+
+  it('na reserva, a linha mostra o peso que valeu — não a venda zerada do SKU', async () => {
+    // A tela do recebimento rotula a coluna "Vendeu (12 m)" e o percentual ao
+    // lado vem do peso da escada. Numa peça NOVA as duas coisas divergem: a
+    // venda do próprio SKU é zero em toda loja, e as colunas que existem para
+    // EXPLICAR o número final apareciam todas em zero ao lado de "mandar 28".
+    const plano = await distributionPlan(pedidoPecaNovaId);
+    const item = plano.items[0];
+    expect(item.basis).not.toBe('necessidade');
+    expect(item.rows.length).toBeGreaterThan(1);
+
+    for (const r of item.rows) {
+      expect(r.unitsSold, `${r.storeName} não vendeu esta peça`).toBe(0);
+      expect(r.weightUnits, `${r.storeName} sem peso declarado`).toBeGreaterThan(0);
+    }
+    // Coerência: quem tem mais peso tem mais participação. É o que torna a
+    // coluna uma explicação do percentual, e não um número solto ao lado dele.
+    const ordenadas = [...item.rows].sort((a, b) => b.weightUnits - a.weightUnits);
+    for (let i = 1; i < ordenadas.length; i += 1) {
+      expect(ordenadas[i - 1].sharePct).toBeGreaterThanOrEqual(ordenadas[i].sharePct);
+    }
   });
 
   it('recusa distribuir antes do recebimento confirmado', async () => {
@@ -241,7 +263,7 @@ d('distribuição do recebimento (integração com Postgres)', () => {
     // ou está declarado em `unassigned`. Unidade que evapora entre os dois é
     // estoque que ninguém procura.
     const previsto = plano.items.reduce(
-      (a, i) => a + i.rows.reduce((s, linha) => s + linha.quantity, 0),
+      (a, i) => a + i.rows.reduce((s, linha) => s + linha.suggestedQty, 0),
       0,
     );
     expect(r.units).toBe(previsto);

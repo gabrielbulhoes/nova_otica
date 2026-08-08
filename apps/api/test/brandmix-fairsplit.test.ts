@@ -232,13 +232,62 @@ describe('splitByNeed (rateio por falta até a cobertura-alvo)', () => {
     expect(out.unassigned).toBe(37);
   });
 
-  it('a linha mostra a conta inteira: demanda, alvo, estoque e falta', () => {
+  it('a linha mostra a conta inteira: venda, estoque, falta e o peso do rateio', () => {
     // Sem isso a tela mostra um número e pede fé. Com isso, o gestor confere.
     const out = splitByNeed(lojas, 30, 90, cfg);
     const a = out.rows.find((r) => r.storeId === 'a')!;
-    expect(a.dailyDemand).toBe(1);
-    expect(a.targetUnits).toBe(60);
+    expect(a.unitsSold).toBe(90);
     expect(a.stockUnits).toBe(3);
     expect(a.needUnits).toBe(57);
+    // Quando a base é a necessidade, o peso do percentual É a falta.
+    expect(a.weightUnits).toBe(57);
+    expect(a.sharePct).toBe(74.03); // 57 de 77
+  });
+
+  it('na RESERVA, o peso da linha fala da mesma base que o percentual', () => {
+    // O caso normal de um pedido de compra: peça NOVA, ninguém vendeu ESTE
+    // modelo, falta zero em toda loja. Com a coluna presa à venda do próprio
+    // SKU, a tela mostrava "vendeu 0 · em estoque 12 · falta 0 · 75% · mandar
+    // 28" — as colunas que existem para EXPLICAR o número final todas zeradas
+    // ao lado dele. O peso que valeu foi o da grife, e é ele que precisa
+    // aparecer.
+    const novas: FairSplitInput[] = [
+      { storeId: 'midway', storeName: 'Midway', unitsSold: 0, stockUnits: 12 },
+      { storeId: 'guarabira', storeName: 'Guarabira', unitsSold: 0, stockUnits: 3 },
+    ];
+    const grife = new Map([
+      ['midway', 300],
+      ['guarabira', 100],
+    ]);
+    const out = splitByNeed(novas, 37, 365, cfg, (r) => grife.get(r.storeId) ?? 0);
+    expect(out.basis).toBe('participacao');
+
+    const byId = new Map(out.rows.map((r) => [r.storeId, r]));
+    expect(byId.get('midway')!.weightUnits).toBe(300);
+    expect(byId.get('midway')!.sharePct).toBe(75);
+    expect(byId.get('midway')!.suggestedQty).toBe(28);
+    expect(byId.get('guarabira')!.weightUnits).toBe(100);
+    expect(byId.get('guarabira')!.sharePct).toBe(25);
+    // A venda do próprio SKU continua sendo o que é — zero —, e é por isso que
+    // ela não pode ser a coluna que explica os 75%.
+    expect(byId.get('midway')!.unitsSold).toBe(0);
+  });
+
+  it('a linha não carrega campo que nenhuma tela lê', () => {
+    // `dailyDemand` e `targetUnits` trafegavam em ~163 linhas por resposta sem
+    // nenhum consumidor de produção: só teste os lia. Campo calculado e
+    // servido cria impressão de contrato, e o próximo a chegar assume que
+    // alguém o valida.
+    const out = splitByNeed(lojas, 30, 90, cfg);
+    expect(Object.keys(out.rows[0]).sort()).toEqual([
+      'needUnits',
+      'sharePct',
+      'stockUnits',
+      'storeId',
+      'storeName',
+      'suggestedQty',
+      'unitsSold',
+      'weightUnits',
+    ]);
   });
 });

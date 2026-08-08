@@ -333,12 +333,19 @@ async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<
  *
  * `comRateio` é falso para quem não é ADMIN — ver o comentário da rota
  * `GET /planning/purchase-orders` em planning.routes.ts, que explica a decisão.
+ *
+ * O default é FALSO, e é o inverso do que era. Fail-open aqui não protege
+ * ninguém: quem quer o rateio pede, e quem não pede não paga a conta. Com o
+ * default aberto, `publishPlanningAlert(90)` — que usa só os contadores do
+ * resumo — disparava a consulta de posições a cada sincronização do ERP e
+ * jogava o resultado fora. Custo invisível é o pior tipo: não erra a saída,
+ * então nada o denuncia.
  */
 export async function purchaseOrders(
   days: number,
   storeId?: string,
   group: ProductGroup = 'todos',
-  comRateio = true,
+  comRateio = false,
 ) {
   const [productPlans, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
   // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
@@ -351,15 +358,26 @@ export async function purchaseOrders(
   const resolve = catalog
     ? (p: ProductPlan) => supplierFor(analysisBrand(p.description, p.category, p.brand), catalog)
     : undefined;
+  // COM FILTRO DE LOJA NÃO HÁ RATEIO, e não é economia: é que não existe o que
+  // repartir. `plans` escopa venda E estoque à loja filtrada, então
+  // `suggestedQty` já é a compra DAQUELA loja. Ratear esse número entre a rede
+  // endereçava mercadoria a lojas cuja demanda nem entrou na conta — no dado
+  // real, 3 das 5 unidades pedidas por causa de uma loja iam para outras três.
+  //
+  // Escopar as posições também não serve: daria 100% para a loja filtrada, que
+  // é um número certo apresentado como se fosse uma decisão. A tela diz, em uma
+  // linha, que o rateio vive na visão da rede.
+  //
   // Só os SKUs que viram item de pedido entram na consulta de posições: o
   // recorte pode ter dezenas de milhares de peças, e a esmagadora maioria não
   // tem nada a distribuir.
-  const posicoes = comRateio
-    ? await posicoesPorLoja(
-        productPlans.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId),
-        days,
-      )
-    : undefined;
+  const posicoes =
+    comRateio && !storeId
+      ? await posicoesPorLoja(
+          productPlans.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId),
+          days,
+        )
+      : undefined;
   return buildPurchaseOrders(productPlans, days, resolve, posicoes);
 }
 
@@ -485,7 +503,12 @@ export async function commercialStrategy(
  * o aviso sem o lojista precisar abrir o Planejamento.
  */
 export async function publishPlanningAlert(days = 90): Promise<void> {
-  const po = await purchaseOrders(days);
+  // Sem rateio, EXPLÍCITO: o evento leva só contadores do resumo, e o rateio
+  // custa um agregado com um bind param por SKU de compra mais um findMany de
+  // estoque — a cada sincronização, para ser descartado. Escrito à mão mesmo
+  // com o default já sendo falso, porque quem lê esta linha precisa ver que a
+  // ausência é decisão e não esquecimento.
+  const po = await purchaseOrders(days, undefined, 'todos', false);
   if (po.summary.items > 0) {
     publish({
       type: 'planning.urgent',

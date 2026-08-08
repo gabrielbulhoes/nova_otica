@@ -191,6 +191,17 @@ describe('demo: Onda 3 (mix por bandeira + Modo Feira)', () => {
     }
   });
 
+  it('com filtro de loja a compra vem SEM rateio (paridade com a API)', () => {
+    // Na visão de uma loja, `planningPlans` escopa venda e estoque a ela: a
+    // quantidade JÁ é daquela loja e não há o que repartir. Ratear isso pela
+    // rede endereçava mercadoria a lojas cuja demanda nem entrou na conta.
+    const loja = (get('/stores').rows as { id: string }[])[0].id;
+    const orders = get('/planning/purchase-orders', { group: 'todos', storeId: loja }).orders as any[];
+    const itens = orders.flatMap((o) => o.items);
+    expect(itens.length).toBeGreaterThan(0);
+    expect(itens.every((it) => it.distribution === undefined)).toBe(true);
+  });
+
   it('o rateio da compra não manda peça para loja que já está no alvo', () => {
     // É a diferença entre o que o cliente pediu ("melhor chance de venda E
     // otimização do estoque") e o rateio por participação, que mandava mais

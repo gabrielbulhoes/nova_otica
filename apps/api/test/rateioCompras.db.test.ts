@@ -84,8 +84,38 @@ d('rateio por loja na aba de compras (integração com Postgres)', () => {
     for (const r of rateio.rows) {
       expect(r.needUnits).toBeGreaterThan(0);
       expect(r.stockUnits).toBe(0);
-      expect(r.targetUnits).toBeGreaterThanOrEqual(r.needUnits);
+      // O peso que gerou o percentual é o mesmo que a linha mostra.
+      expect(r.weightUnits).toBe(r.needUnits);
     }
+  });
+
+  it('com filtro de loja NÃO há rateio — a quantidade já é daquela loja', async () => {
+    // O defeito que este teste mata: `plans` escopa venda E estoque à loja
+    // filtrada, mas as posições do rateio vinham da rede inteira. O pedido de
+    // 5 un. que existia POR CAUSA de Campinas saía endereçado 3 para Campinas
+    // e 2 para o Rio — duas unidades para uma loja cuja demanda nem entrou na
+    // conta da compra.
+    //
+    // Escopar as posições não resolveria: daria um rateio de 100% para uma
+    // loja só, que é um número certo apresentado como se fosse uma decisão.
+    // Na visão de uma loja não existe o que repartir.
+    const loja = await prisma.store.findFirst({ where: PLANNED_STORE_WHERE, select: { id: true } });
+    const po = await purchaseOrders(JANELA, loja!.id, 'todos', true);
+    const itens = po.orders.flatMap((o) => o.items);
+    expect(itens.length).toBeGreaterThan(0);
+    expect(itens.every((i) => i.distribution === undefined)).toBe(true);
+  });
+
+  it('sem pedir rateio explicitamente, o pedido não paga a conta do banco', async () => {
+    // `publishPlanningAlert` chama `purchaseOrders(days)` a cada sincronização
+    // do ERP e usa só os contadores do resumo. Com o default fail-open, o
+    // rateio inteiro era calculado — um agregado com um bind param por SKU de
+    // compra mais um findMany de estoque — e jogado fora. Nenhuma saída errada;
+    // trabalho de banco por sincronização a serviço de nada.
+    const po = await purchaseOrders(JANELA);
+    const itens = po.orders.flatMap((o) => o.items);
+    expect(itens.length).toBeGreaterThan(0);
+    expect(itens.every((i) => i.distribution === undefined)).toBe(true);
   });
 
   it('quem não é ADMIN recebe o pedido SEM o rateio, não um rateio vazio', async () => {

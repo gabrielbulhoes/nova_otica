@@ -3,7 +3,12 @@ import { prisma } from '../../lib/prisma.js';
 import { badRequest } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql } from '../stores/store.scope.js';
 import { loadBrandCatalog } from './brandCatalog.js';
-import { analysisBrand, splitByNeed, storeCarriesBrand } from './planning.math.js';
+import {
+  analysisBrand,
+  splitByNeed,
+  storeCarriesBrand,
+  type NeedSplitRow,
+} from './planning.math.js';
 import { createMovement, type Actor } from '../movements/movements.service.js';
 
 /**
@@ -56,20 +61,18 @@ export type DistributionBasis = 'necessidade' | 'sku' | 'marca' | 'categoria' | 
 /** Janela do histórico consultado — 12 meses, em dias, para a demanda diária. */
 const JANELA_DIAS = 365;
 
-export interface DistributionRow {
-  storeId: string;
-  storeName: string;
-  /** Unidades a mandar para esta loja. A soma bate exatamente com a compra. */
-  quantity: number;
-  /** Participação da loja na base usada (%). */
-  sharePct: number;
-  /** Unidades que a loja vendeu DESTA peça nos últimos 12 meses. */
-  unitsSold: number;
-  /** Estoque atual da loja nesta peça — a outra metade da necessidade. */
-  stockUnits: number;
-  /** Falta até a cobertura-alvo (un.): o peso do rateio por necessidade. */
-  needUnits: number;
-}
+/**
+ * Uma linha de rateio por loja. É o MESMO formato do rateio da aba de compras,
+ * e com os MESMOS nomes de campo, de propósito: as duas telas respondem a
+ * mesma pergunta — quanto vai para cada loja e por quê — e usam uma tabela só.
+ *
+ * O nome do campo de quantidade é `suggestedQty` porque é assim que o domínio
+ * já chama a sugestão em `ProductPlan` e em `NeedSplitRow`. Enquanto esta rota
+ * traduzia para `quantity` e a de compras não traduzia, a tela lia um campo
+ * que metade das respostas não tinha — e o typecheck passava, porque o web
+ * declarava o tipo à mão.
+ */
+export type DistributionRow = NeedSplitRow;
 
 export interface DistributionItem {
   productId: string;
@@ -271,17 +274,10 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
       basis,
       basisLabel: BASIS_LABEL[basis],
       totalNeed: rateio.totalNeed,
-      rows: rateio.rows
-        .filter((r) => r.suggestedQty > 0)
-        .map((r) => ({
-          storeId: r.storeId,
-          storeName: r.storeName,
-          quantity: r.suggestedQty,
-          sharePct: r.sharePct,
-          unitsSold: r.unitsSold,
-          stockUnits: r.stockUnits,
-          needUnits: r.needUnits,
-        })),
+      // Sem tradução de campo no meio: a linha do rateio VAI como está. A
+      // tradução que existia aqui (`quantity: r.suggestedQty`) era exatamente
+      // o degrau onde as duas telas passaram a falar nomes diferentes.
+      rows: rateio.rows.filter((r) => r.suggestedQty > 0),
       ...(excluidas.length > 0 ? { excludedByMix: excluidas } : {}),
     });
 
@@ -347,18 +343,18 @@ export async function createDistributionMovements(
 
   const dados = plano.items.flatMap((item) =>
     item.rows
-      .filter((r) => r.storeId !== fromStoreId && r.quantity > 0)
+      .filter((r) => r.storeId !== fromStoreId && r.suggestedQty > 0)
       .map((r) => ({
         type: 'TRANSFER' as const,
         productId: item.productId,
         fromStoreId,
         toStoreId: r.storeId,
-        quantity: r.quantity,
+        quantity: r.suggestedQty,
         // Fica em PENDING (reserva o saldo), não CONFIRMED: a mercadoria ainda
         // vai fisicamente sair da retaguarda, e quem confirma é quem despacha.
         confirm: false,
         reason:
-          `Distribuição do pedido ${plano.supplier}: ${r.quantity} un. para ${r.storeName} ` +
+          `Distribuição do pedido ${plano.supplier}: ${r.suggestedQty} un. para ${r.storeName} ` +
           `(${r.sharePct}% da ${MOTIVO_DA_BASE[item.basis]}).`,
       })),
   );
