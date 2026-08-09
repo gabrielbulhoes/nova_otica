@@ -51,6 +51,42 @@ export function buildSyncStalePayload(input: { ultimoSucesso: Date | null; horas
 }
 
 /**
+ * Batimento: a base está em dia.
+ *
+ * Existe porque um canal que só fala quando há problema não distingue "tudo
+ * bem" de "eu morri". O vigia roda dentro do MESMO processo que ele vigia: se o
+ * contêiner cai, o vigia cai junto, e a ausência de alerta fica idêntica à
+ * saúde. Foi exatamente essa a dúvida do dia 8 — silêncio desde o dia 6, e sem
+ * como saber pelo Telegram se o sync tinha voltado ou se o vigia tinha parado.
+ *
+ * Com o batimento diário, o SILÊNCIO passa a ser o alarme.
+ *
+ * O texto carrega o último sucesso e as horas decorridas de propósito: um
+ * batimento que só diz "ok" vira ruído que ninguém lê. Dizendo "há 3h" todo
+ * dia, um "há 25h" salta aos olhos antes de virar incidente — o limite é 26h.
+ */
+export function buildSyncHeartbeatPayload(input: {
+  ultimoSucesso: Date | null;
+  horas: number | null;
+  limiteHoras: number;
+}) {
+  const quando = input.ultimoSucesso
+    ? `${input.ultimoSucesso.toISOString()} (há ${Math.round(input.horas ?? 0)}h)`
+    : 'NUNCA';
+  return {
+    source: 'nova-otica',
+    event: 'sync.ok' as const,
+    severity: 'info' as const,
+    ultimoSucesso: input.ultimoSucesso?.toISOString() ?? null,
+    horas: input.horas,
+    limiteHoras: input.limiteHoras,
+    text:
+      `✅ Base em dia: último sync ${quando}, dentro do limite de ${input.limiteHoras}h.\n` +
+      `Se esta mensagem não chegar amanhã, o vigia parou — e aí o silêncio é o alarme.`,
+  };
+}
+
+/**
  * Envia o alerta pelos canais configurados. Best-effort: erro no envio é
  * logado e nunca derruba o sync.
  *
@@ -59,8 +95,18 @@ export function buildSyncStalePayload(input: { ultimoSucesso: Date | null; horas
  * inteiro. Um `return` silencioso transforma a ausência de configuração na
  * ausência do próprio incidente, e é o tipo de coisa que só se descobre no dia
  * em que ele acontece.
+ *
+ * O batimento é a exceção, e por isso a severidade entra no payload: canal
+ * ausente é incidente para um ALERTA e não é para um batimento. Sem essa
+ * distinção, uma instalação sem Telegram configurado passaria a escrever uma
+ * linha de `error` por dia dizendo que está tudo bem — e log de erro que grita
+ * rotina é log que ninguém lê no dia do incidente de verdade.
  */
-async function despachar(payload: { text: string; event: string }): Promise<void> {
+async function despachar(payload: {
+  text: string;
+  event: string;
+  severity?: 'error' | 'info';
+}): Promise<void> {
   const destinos: Promise<void>[] = [];
 
   if (env.ALERT_WEBHOOK_URL) {
@@ -93,7 +139,11 @@ async function despachar(payload: { text: string; event: string }): Promise<void
   }
 
   if (destinos.length === 0) {
-    log.error('ALERTA SEM CANAL CONFIGURADO — configure ALERT_WEBHOOK_URL ou ALERT_TELEGRAM_*', payload);
+    if (payload.severity === 'info') {
+      log.info('Batimento sem canal configurado (nada a enviar)', { evento: payload.event });
+    } else {
+      log.error('ALERTA SEM CANAL CONFIGURADO — configure ALERT_WEBHOOK_URL ou ALERT_TELEGRAM_*', payload);
+    }
     return;
   }
 
@@ -117,4 +167,13 @@ export async function notifySyncStale(input: {
   limiteHoras: number;
 }): Promise<void> {
   await despachar(buildSyncStalePayload(input));
+}
+
+/** Batimento diário do vigia: a base está em dia, e o vigia está vivo. */
+export async function notifySyncHeartbeat(input: {
+  ultimoSucesso: Date | null;
+  horas: number | null;
+  limiteHoras: number;
+}): Promise<void> {
+  await despachar(buildSyncHeartbeatPayload(input));
 }

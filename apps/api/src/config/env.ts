@@ -110,6 +110,20 @@ const schema = z.object({
   // das 06h, tempo suficiente para ele ter terminado e cedo o bastante para
   // alguém agir antes de a rede abrir por completo.
   SYNC_WATCHDOG_CRON: z.string().default('0 9 * * *'),
+  // Batimento: o vigia avisa também quando a base está EM DIA, uma vez por
+  // rodada. Ligado por padrão, e o padrão é a parte que importa.
+  //
+  // O vigia roda dentro do mesmo processo que ele vigia. Contêiner parado
+  // derruba os dois de uma vez, e aí a ausência de alerta é indistinguível de
+  // saúde — que é o modo de falha que o próprio vigia existe para cobrir. Sem
+  // o batimento, o canal só sabe dizer "há um problema"; nunca "estou vivo".
+  //
+  // Custa uma mensagem por dia. Desligue (`false`) só se o canal for
+  // compartilhado com quem não tem nada a ver com a operação.
+  SYNC_HEARTBEAT: z
+    .string()
+    .default('true')
+    .transform((v) => v !== 'false' && v !== '0'),
 
   PAYMENT_PROVIDER: z.enum(['mock', 'mercadopago']).default('mock'),
 

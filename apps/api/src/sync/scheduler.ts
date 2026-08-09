@@ -3,7 +3,7 @@ import { env } from '../config/env.js';
 import { logger } from '../lib/logger.js';
 import { runFullSync, SyncInProgressError } from './syncService.js';
 import { getFrescor } from './syncHealth.js';
-import { notifySyncStale } from '../lib/opsAlert.js';
+import { notifySyncHeartbeat, notifySyncStale } from '../lib/opsAlert.js';
 
 const log = logger.child({ mod: 'scheduler' });
 
@@ -36,12 +36,29 @@ async function safeRun(trigger: 'schedule' | 'boot'): Promise<void> {
  * sequer é criado, e o console segue servindo os números da véspera com toda a
  * confiança do mundo. É o pior modo de falha de um sistema de tempo real,
  * porque se parece exatamente com o funcionamento normal.
+ *
+ * EXPORTADA para o teste poder chamá-la. A alternativa — testar
+ * `notifySyncHeartbeat` direto — provaria a função e não a FIAÇÃO, que é
+ * exatamente onde esta plataforma já se queimou: `stuckDaysByProduct` foi
+ * escrita, testada e nunca chamada em produção. Um batimento que não é
+ * disparado é pior que batimento nenhum, porque a ausência dele passa a
+ * significar duas coisas em vez de uma.
  */
-async function conferirFrescor(): Promise<void> {
+export async function conferirFrescor(): Promise<void> {
   try {
     const f = await getFrescor();
     if (!f.vencido) {
       log.info('Vigia: base em dia', { horas: f.horas === null ? null : Math.round(f.horas) });
+      // BATIMENTO. Um canal que só fala quando há problema não distingue "tudo
+      // bem" de "eu morri" — e este vigia roda DENTRO do processo que ele
+      // vigia, então contêiner parado derruba os dois de uma vez e a ausência
+      // de alerta fica idêntica à saúde.
+      //
+      // Foi exatamente a dúvida que a operação levantou: silêncio de dois dias
+      // depois de um alerta de base vencida, sem como saber pelo Telegram se o
+      // sync tinha voltado ou se o vigia tinha parado. Com o batimento, o
+      // silêncio passa a ser o alarme.
+      if (env.SYNC_HEARTBEAT) await notifySyncHeartbeat(f);
       return;
     }
     log.error('Vigia: BASE VENCIDA', {
@@ -81,6 +98,7 @@ export function startScheduler(): void {
     log.info('Vigia do frescor ativo', {
       cron: env.SYNC_WATCHDOG_CRON,
       limiteHoras: env.SYNC_STALE_HOURS,
+      batimento: env.SYNC_HEARTBEAT,
     });
   } else {
     log.error('SYNC_WATCHDOG_CRON inválido; vigia não iniciado', { cron: env.SYNC_WATCHDOG_CRON });
