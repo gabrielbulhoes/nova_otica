@@ -18,7 +18,14 @@ services:
       retries: 10
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # Carimba a versão na imagem. O `deploy.sh` exporta esta variável a
+        # partir do commit que acabou de fazer checkout; quem constrói à mão
+        # sem exportá-la recebe imagem sem versão, e o /health diz `null` em
+        # vez de mentir um número.
+        GIT_SHA: ${GIT_SHA:-}
     image: nova-otica-app:${TAG:-latest}
     restart: unless-stopped
     depends_on:

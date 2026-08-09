@@ -110,6 +110,10 @@ const schema = z.object({
   // das 06h, tempo suficiente para ele ter terminado e cedo o bastante para
   // alguém agir antes de a rede abrir por completo.
   SYNC_WATCHDOG_CRON: z.string().default('0 9 * * *'),
+  // Versão publicada, carimbada na imagem pelo `deploy.sh` via build arg. Vazia
+  // fora do Docker (desenvolvimento) e em imagem construída à mão — o /health
+  // devolve `null` nesses casos, em vez de inventar um número.
+  GIT_SHA: z.string().optional().default(''),
   // Batimento: o vigia avisa também quando a base está EM DIA, uma vez por
   // rodada. Ligado por padrão, e o padrão é a parte que importa.
   //

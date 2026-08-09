@@ -29,6 +29,16 @@ import { arRouter } from './modules/ar/ar.routes.js';
 import { fiscalRouter } from './modules/fiscal/fiscal.routes.js';
 import { syncRouter } from './modules/sync/sync.routes.js';
 
+/**
+ * Quando ESTE processo subiu — carimbado na importação do módulo, não a cada
+ * requisição.
+ *
+ * Fora de `createApp` de propósito: dentro dela, cada `createApp()` de teste
+ * criaria um instante novo, e o valor deixaria de significar "desde quando a
+ * API está de pé".
+ */
+const INICIADO_EM = new Date().toISOString();
+
 export function createApp() {
   const app = express();
 
@@ -74,6 +84,23 @@ export function createApp() {
     res.json({
       status: 'ok',
       service: 'nova-otica-api',
+      // A VERSÃO QUE ESTÁ NO AR, e desde quando este processo subiu.
+      //
+      // Existe por causa de um erro concreto: em 8/8/2026 um parecer afirmou
+      // ao cliente que dois consertos estavam publicados — e a esteira de
+      // deploy estava quebrada havia dois dias. O código estava mesclado, a CI
+      // verde, e ninguém percebeu, porque "mesclado" e "no ar" não tinham como
+      // ser distinguidos de fora. Um `curl` agora responde a pergunta.
+      //
+      // `iniciadoEm` acompanha porque as duas falham separado: a imagem pode
+      // estar construída na versão nova e o contêiner ainda rodando a antiga.
+      // Versão sem hora de início não distingue "publicado" de "publicado e
+      // reiniciado".
+      //
+      // `null` quando a imagem foi construída sem o carimbo — é honesto, e
+      // quem lê sabe que precisa perguntar em vez de confiar.
+      versao: env.GIT_SHA || null,
+      iniciadoEm: INICIADO_EM,
       mode: env.SELLBIE_MODE,
       db: 'up',
       sync: sync
