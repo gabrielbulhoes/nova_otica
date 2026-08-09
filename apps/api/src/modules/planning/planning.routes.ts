@@ -1,7 +1,18 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, parseDays } from '../../http/helpers.js';
-import { PRODUCT_GROUPS, type ProductGroup } from './planning.math.js';
+import {
+  CARDS_POR_PAGINA,
+  DECISION_PRIORITIES,
+  DECISION_TYPES,
+  LINHAS_POR_PAGINA,
+  PRODUCT_GROUPS,
+  RECOMENDACOES,
+  TETO_DE_CARDS,
+  TETO_DE_LINHAS,
+  recortePedido,
+  type ProductGroup,
+} from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
 import { publish } from '../../lib/eventBus.js';
 import {
@@ -20,6 +31,7 @@ import {
   commercialStrategy,
   decisionBoard,
   fairSplit,
+  listBrandMix,
   listSupplierSettings,
   planningOverview,
   purchaseOrderHistory,
@@ -27,6 +39,7 @@ import {
   purchaseSuggestions,
   rebalancePlan,
   registerPurchaseOrder,
+  setBrandMix,
   setSupplierSetting,
   settlePurchaseOrder,
 } from './planning.service.js';
@@ -42,6 +55,21 @@ const days = (v: unknown) => parseDays(v, 90);
 const group = (v: unknown): ProductGroup =>
   PRODUCT_GROUPS.includes(v as ProductGroup) ? (v as ProductGroup) : 'principal';
 
+/** Valor de query só é aceito quando está no conjunto conhecido. */
+const umDe = <T extends string>(v: unknown, aceitos: readonly T[]): T | undefined =>
+  aceitos.includes(v as T) ? (v as T) : undefined;
+
+/**
+ * Texto livre de filtro (id de loja, nome de grife). Vazio e valor absurdo
+ * viram `undefined` — "sem filtro" —, nunca um filtro que não casa com nada:
+ * a tela ficaria vazia sem que ninguém soubesse por quê. O teto de 200 é só
+ * para a comparação não receber uma cadeia de tamanho arbitrário.
+ */
+const texto = (v: unknown): string | undefined => {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s.length > 0 && s.length <= 200 ? s : undefined;
+};
+
 /** GET /api/planning/overview — capital imobilizado + Pareto + giro. */
 planningRouter.get(
   '/overview',
@@ -51,24 +79,62 @@ planningRouter.get(
   }),
 );
 
-/** GET /api/planning/purchase-suggestions — o que comprar e o que não comprar. */
+/**
+ * GET /api/planning/purchase-suggestions — o que comprar e o que não comprar.
+ *
+ * `page`/`pageSize` cortam as LINHAS; `recomendacao` é filtro de vista. O
+ * `summary` (inclusive `emRisco`) é sempre do conjunto analisado — é ele que a
+ * tela lê nos cartões, e ele não pode encolher junto com a página.
+ */
 planningRouter.get(
   '/purchase-suggestions',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await purchaseSuggestions(days(req.query.days), storeId, group(req.query.group)));
+    res.json(
+      await purchaseSuggestions(days(req.query.days), storeId, group(req.query.group), {
+        ...recortePedido(req.query, LINHAS_POR_PAGINA, TETO_DE_LINHAS),
+        recomendacao: umDe(req.query.recomendacao, RECOMENDACOES),
+      }),
+    );
   }),
 );
 
 /**
  * GET /api/planning/purchase-orders — rascunhos de ordem de compra por
  * fornecedor (marca), com total e data-limite do pedido.
+ *
+ * DECISÃO (rateio por loja × permissão): esta rota NÃO ganhou
+ * `requireRole('ADMIN')`, ao contrário de `/rebalance`. O rateio por loja é sim
+ * dado de rede — a mesma razão que fechou o remanejamento —, mas fechar a rota
+ * inteira tiraria de um gerente de loja algo que ele já tinha e que é
+ * legítimo: a sugestão de compra da PRÓPRIA loja, que `scopedStoreId` já
+ * recorta para ele linha a linha.
+ *
+ * Então o corte é no dado novo, não na rota: quem não é ADMIN recebe o pedido
+ * sem o campo `distribution`. Um gerente de loja continua vendo o que precisa
+ * comprar; a divisão entre as 16 lojas — quanto cada uma vende e quanto cada
+ * uma tem em estoque — continua sendo visão de rede, para quem enxerga a rede.
+ *
+ * `distribution` AUSENTE não é "dividir igual": é "não calculado". A tela
+ * declara isso, em vez de mostrar uma tabela vazia que pareceria um rateio que
+ * deu zero.
+ *
+ * O campo também some quando há `storeId` — e aí não é permissão, é aritmética:
+ * na visão de uma loja a quantidade JÁ é daquela loja, e não existe o que
+ * repartir. Ver `purchaseOrders` em planning.service.ts.
  */
 planningRouter.get(
   '/purchase-orders',
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await purchaseOrders(days(req.query.days), storeId, group(req.query.group)));
+    res.json(
+      await purchaseOrders(
+        days(req.query.days),
+        storeId,
+        group(req.query.group),
+        req.user?.role === 'ADMIN',
+      ),
+    );
   }),
 );
 
@@ -89,13 +155,32 @@ planningRouter.get(
  * GET /api/planning/decisions — portal de cards de decisão (compra +
  * remanejamento + liquidação) com tipo, prioridade e impacto. ADMIN: inclui o
  * remanejamento, que é de rede.
+ *
+ * `page`/`pageSize` cortam os CARDS; `tipo`, `prioridade`, `grife` e `loja` são
+ * filtros de VISTA. O `summary`, a contagem de novos/atrasados e a lista de
+ * `grifes` continuam sendo do quadro inteiro.
+ *
+ * `loja` NÃO é `storeId`. `storeId` passa por `scopedStoreId` e muda o ESCOPO DO
+ * CÁLCULO — a compra deixa de ser de rede, e a resposta passa a ser de outra
+ * pergunta. `loja` só recorta quais cards aparecem. São duas coisas com nomes
+ * diferentes exatamente para nunca serem trocadas por engano.
  */
 planningRouter.get(
   '/decisions',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
-    res.json(await decisionBoard(days(req.query.days), storeId, group(req.query.group)));
+    res.json(
+      await decisionBoard(days(req.query.days), storeId, group(req.query.group), {
+        ...recortePedido(req.query, CARDS_POR_PAGINA, TETO_DE_CARDS),
+        vista: {
+          tipo: umDe(req.query.tipo, DECISION_TYPES),
+          prioridade: umDe(req.query.prioridade, DECISION_PRIORITIES),
+          loja: texto(req.query.loja),
+          grife: texto(req.query.grife),
+        },
+      }),
+    );
   }),
 );
 
@@ -230,21 +315,53 @@ planningRouter.get(
 const supplierSchema = z.object({
   brand: z.string().min(1).max(120),
   leadTimeDays: z.number().int().min(1).max(365).nullable(),
-  /** Grife fora do mix atual da rede — corta a sugestão de compra. */
-  discontinued: z.boolean().optional(),
 });
 
-/**
- * PUT /api/planning/suppliers — prazo do fornecedor e/ou marcação de mix
- * (ADMIN). Marcar `discontinued` é decisão comercial: nenhum dado do ERP diz
- * que a rede parou de trabalhar uma grife, então ela precisa ser declarada.
- */
+/** PUT /api/planning/suppliers — prazo de entrega do fornecedor (ADMIN). */
 planningRouter.put(
   '/suppliers',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     const input = supplierSchema.parse(req.body);
-    res.json(await setSupplierSetting(input.brand, input.leadTimeDays, input.discontinued));
+    res.json(await setSupplierSetting(input.brand, input.leadTimeDays));
+  }),
+);
+
+/**
+ * GET /api/planning/brand-mix — as grifes que o motor conhece, com a marcação
+ * de "fora do mix". Lista separada da de fornecedores porque são chaves
+ * diferentes: prazo é do fornecedor, mix é da grife.
+ *
+ * ADMIN, como o PUT logo abaixo. A rota estava aberta a qualquer sessão e a
+ * contagem varre o catálogo inteiro — 61 mil produtos, com extração de grife
+ * por linha —, então um F5 repetido de qualquer usuário custava o catálogo
+ * inteiro num processo limitado a 768 MB. E a assimetria não fazia sentido
+ * sozinha: quem não pode marcar não tem decisão a tomar com esta lista.
+ */
+planningRouter.get(
+  '/brand-mix',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    res.json(await listBrandMix());
+  }),
+);
+
+const brandMixSchema = z.object({
+  brand: z.string().min(1).max(120),
+  discontinued: z.boolean(),
+});
+
+/**
+ * PUT /api/planning/brand-mix — marca ou desmarca uma grife como fora do mix
+ * (ADMIN). É decisão comercial: nenhum dado do ERP diz que a rede parou de
+ * trabalhar uma grife, então ela precisa ser declarada.
+ */
+planningRouter.put(
+  '/brand-mix',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const input = brandMixSchema.parse(req.body);
+    res.json(await setBrandMix(input.brand, input.discontinued));
   }),
 );
 

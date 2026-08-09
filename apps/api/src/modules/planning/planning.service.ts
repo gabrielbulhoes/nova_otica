@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stores/store.scope.js';
+import { computeLiveStock, liveDeltas, saldosAoVivo } from '../stock/stock.service.js';
 import { loadBrandCatalog } from './brandCatalog.js';
 import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
@@ -17,18 +18,26 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
-  extractBrand,
+  contarIdades,
+  filtrarVista,
+  finalizarBoard,
+  grifesDoQuadro,
+  paginar,
   supplierFor,
   storeCarriesBrand,
+  CARDS_POR_PAGINA,
   DEFAULT_PLANNING_CONFIG,
+  LINHAS_POR_PAGINA,
   matchesProductGroup,
   normBrandKey,
   type FairSplitInput,
+  type FiltroDeVista,
   type PlanningConfig,
   type DemandHistory,
   type ProductGroup,
   type ProductMetricsInput,
   type ProductPlan,
+  type Recommendation,
   type StoreProductInput,
 } from './planning.math.js';
 
@@ -64,7 +73,7 @@ async function supplierConfigResolver(): Promise<(brand: string | null) => Plann
  * acento) para "Dolce & Gabbana" casar com "DOLCE E GABBANA".
  */
 export async function discontinuedBrandResolver(): Promise<(brand: string | null) => boolean> {
-  const rows = await prisma.supplierSetting.findMany({
+  const rows = await prisma.brandMix.findMany({
     where: { discontinued: true },
     select: { brand: true },
   });
@@ -94,14 +103,58 @@ export async function planningInputs(
   });
   const soldBy = new Map(sold.map((s) => [s.productId as string, s._sum.quantity ?? 0]));
 
+  // Estoque AO VIVO, não o `quantity` cru da última sincronização.
+  //
+  // `rebalancePlan` já compunha o saldo com os deltas confirmados-e-não-
+  // reconciliados; `planningInputs` — que alimenta compra, sugestões, pedidos e
+  // panorama — continuava somando o número cru. As duas abas do MESMO
+  // Planejamento discordavam sobre a mesma posição na janela entre confirmar
+  // uma transferência e a sincronização seguinte fechá-la.
+  //
+  // Medido: com 4 unidades confirmadas saindo do Rio, a aba de remanejamento
+  // dizia 8, a tela de Estoque dizia 8 e a aba de compras dizia 12 — e o motor
+  // de compra planejava sobre 4 unidades que já tinham saído da loja,
+  // comprando de menos até a próxima sync.
+  //
+  // Uma conta só, na mesma função que a tela de Estoque e o `availableAt`
+  // usam. Duas contas de saldo ao vivo que precisam concordar por disciplina
+  // são a próxima divergência silenciosa.
+  //
+  // SOMADO NO BANCO, e não linha a linha em memória. A primeira versão desta
+  // correção trazia TODA posição do escopo (`findMany` sobre 61 mil peças × 16
+  // lojas) e depois pedia `liveDeltas` com um `IN` de vinte mil parâmetros — na
+  // rota mais quente da plataforma, e logo depois de uma frente inteira gasta
+  // tirando memória de cima deste processo. Trocar um `groupBy` por um
+  // `findMany` para corrigir o saldo foi consertar o número certo pelo caminho
+  // errado.
+  //
+  // O que salva a soma é que `onHand` NÃO usa `reserved` — é `quantity +
+  // delta`. Somando por peça sobre as lojas do escopo, isso é
+  // `Σ quantity + Σ entradas − Σ saídas`, e as três parcelas são agregados que
+  // o Postgres faz sozinho. Nenhuma linha de posição atravessa a rede.
   const stockWhere: Prisma.StockItemWhereInput = { ...stockPlannedWhere };
   if (storeId) stockWhere.storeId = storeId;
-  const stock = await prisma.stockItem.groupBy({
-    by: ['productId'],
-    where: stockWhere,
-    _sum: { quantity: true },
-  });
-  const stockBy = new Map(stock.map((s) => [s.productId, s._sum.quantity ?? 0]));
+  // O mesmo recorte de loja, do lado das movimentações: sem ele, uma
+  // transferência confirmada de/para a retaguarda entraria numa conta que
+  // declara ser só das lojas planejáveis.
+  const lojaDaMovimentacao = storeId ? { id: storeId } : PLANNED_STORE_WHERE;
+  const [sincronizado, entradas, saidas] = await Promise.all([
+    prisma.stockItem.groupBy({ by: ['productId'], where: stockWhere, _sum: { quantity: true } }),
+    prisma.inventoryMovement.groupBy({
+      by: ['productId'],
+      where: { status: 'CONFIRMED', toStore: lojaDaMovimentacao },
+      _sum: { quantity: true },
+    }),
+    prisma.inventoryMovement.groupBy({
+      by: ['productId'],
+      where: { status: 'CONFIRMED', fromStore: lojaDaMovimentacao },
+      _sum: { quantity: true },
+    }),
+  ]);
+  const stockBy = new Map<string, number>();
+  for (const r of sincronizado) stockBy.set(r.productId, r._sum.quantity ?? 0);
+  for (const r of entradas) stockBy.set(r.productId, (stockBy.get(r.productId) ?? 0) + (r._sum.quantity ?? 0));
+  for (const r of saidas) stockBy.set(r.productId, (stockBy.get(r.productId) ?? 0) - (r._sum.quantity ?? 0));
 
   // Janela recente (até 30 dias) para a suavização com peso recente.
   const recentDays = Math.min(30, days);
@@ -277,28 +330,165 @@ export async function planningOverview(days: number, storeId?: string, group: Pr
   return buildOverview(await plans(days, storeId, group), days);
 }
 
-/** Recomendações de compra (comprar / manter / não comprar / liquidar). */
-export async function purchaseSuggestions(days: number, storeId?: string, group: ProductGroup = 'todos') {
-  return buildSuggestions(await plans(days, storeId, group), days);
+/** Recorte de vista da lista de sugestões (não muda nenhum número do resumo). */
+export interface OpcoesDeSugestoes {
+  page?: number;
+  pageSize?: number;
+  /** Chave do último item que o cliente já tem — ver `paginar`. */
+  apos?: string;
+  recomendacao?: Recommendation;
 }
 
-/** Rascunhos de ordem de compra agrupados pelo fornecedor canônico (catálogo). */
-export async function purchaseOrders(days: number, storeId?: string, group: ProductGroup = 'todos') {
+/**
+ * Recomendações de compra (comprar / manter / não comprar / liquidar).
+ *
+ * O resumo é sempre do CONJUNTO analisado; `rows` é a página. A tela mostrava
+ * as 13 mil linhas de uma vez — 11 MB por requisição para uma tabela que
+ * ninguém rola até o fim.
+ */
+export async function purchaseSuggestions(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'todos',
+  opcoes: OpcoesDeSugestoes = {},
+) {
+  const r = buildSuggestions(await plans(days, storeId, group), days);
+  const vista = opcoes.recomendacao
+    ? r.rows.filter((x) => x.recommendation === opcoes.recomendacao)
+    : r.rows;
+  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? LINHAS_POR_PAGINA, {
+    chave: opcoes.apos,
+    de: (r) => r.productId,
+  });
+  return { ...r, rows: itens, pagina };
+}
+
+/**
+ * Posições por loja (venda no período + estoque atual) das peças informadas —
+ * o insumo do rateio por necessidade na aba de compras.
+ *
+ * Uma consulta agregada por `productId IN (...)`, de propósito: o
+ * `findMany` de `rebalancePlan` traz uma linha de SaleItem por VENDA, o que na
+ * base real são centenas de milhares de linhas para depois somar em memória.
+ * Aqui o recorte é fechado (só os SKUs com recomendação de COMPRA) e a soma é
+ * do banco, então o que trafega é da ordem de itens × lojas.
+ */
+async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<string, FairSplitInput[]>> {
+  const posicoes = new Map<string, FairSplitInput[]>();
+  if (productIds.length === 0) return posicoes;
+
+  const [lojas, vendas, saldos] = await Promise.all([
+    prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
+    prisma.$queryRaw<{ storeId: string; productId: string; units: number }[]>(Prisma.sql`
+      SELECT s."storeId" AS "storeId", si."productId" AS "productId", SUM(si.quantity)::int AS units
+      FROM "SaleItem" si
+      JOIN "Sale" s ON s.id = si."saleId"
+      JOIN "Store" lo ON lo.id = s."storeId" AND ${plannedStoreSql('lo')}
+      WHERE si."productId" IN (${Prisma.join(productIds)}) AND s."saleDate" >= ${periodStart(days)}
+      GROUP BY s."storeId", si."productId"
+    `),
+    // Saldo AO VIVO, não `StockItem.quantity`. Ler a coluna crua aqui era o que
+    // fazia a aba de compras anunciar 12 na loja onde a aba de Estoque mostrava
+    // 8: mesma peça, mesma loja, mesma tela, dois números.
+    saldosAoVivo(productIds, PLANNED_STORE_WHERE),
+  ]);
+
+  const vendaPor = new Map(vendas.map((v) => [`${v.productId}:${v.storeId}`, Math.max(0, v.units)]));
+  for (const id of productIds) {
+    posicoes.set(
+      id,
+      lojas.map((l) => ({
+        storeId: l.id,
+        storeName: l.name,
+        unitsSold: vendaPor.get(`${id}:${l.id}`) ?? 0,
+        // VENDÁVEL, não físico: a unidade já prometida a outra loja vai embora e
+        // não cobre a demanda daqui. Contá-la faz o rateio pular a loja que
+        // mais precisa.
+        stockUnits: saldos.get(`${l.id}:${id}`)?.disponivel ?? 0,
+      })),
+    );
+  }
+  return posicoes;
+}
+
+/**
+ * Rascunhos de ordem de compra agrupados pelo fornecedor canônico (catálogo),
+ * cada item já rateado entre as lojas quando `comRateio` é verdadeiro.
+ *
+ * `comRateio` é falso para quem não é ADMIN — ver o comentário da rota
+ * `GET /planning/purchase-orders` em planning.routes.ts, que explica a decisão.
+ *
+ * O default é FALSO, e é o inverso do que era. Fail-open aqui não protege
+ * ninguém: quem quer o rateio pede, e quem não pede não paga a conta. Com o
+ * default aberto, `publishPlanningAlert(90)` — que usa só os contadores do
+ * resumo — disparava a consulta de posições a cada sincronização do ERP e
+ * jogava o resultado fora. Custo invisível é o pior tipo: não erra a saída,
+ * então nada o denuncia.
+ */
+export async function purchaseOrders(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'todos',
+  comRateio = false,
+) {
   const [productPlans, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
   // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
   // sem ele, cai no campo "marca" do ERP (comportamento anterior).
+  // `analysisBrand` e não `extractBrand(...) ?? p.brand`: é a mesma regra,
+  // escrita uma vez só, e leva junto as duas correções que a forma à mão não
+  // tinha — a CATEGORIA (uma lente parava de ser lida como grife) e o
+  // descarte do "—", que o CDS usa como fornecedor vazio e que ia parar no
+  // catálogo como se fosse um nome.
   const resolve = catalog
-    ? (p: ProductPlan) => supplierFor(extractBrand(p.description) ?? p.brand, catalog)
+    ? (p: ProductPlan) => supplierFor(analysisBrand(p.description, p.category, p.brand), catalog)
     : undefined;
-  return buildPurchaseOrders(productPlans, days, resolve);
+  // COM FILTRO DE LOJA NÃO HÁ RATEIO, e não é economia: é que não existe o que
+  // repartir. `plans` escopa venda E estoque à loja filtrada, então
+  // `suggestedQty` já é a compra DAQUELA loja. Ratear esse número entre a rede
+  // endereçava mercadoria a lojas cuja demanda nem entrou na conta — no dado
+  // real, 3 das 5 unidades pedidas por causa de uma loja iam para outras três.
+  //
+  // Escopar as posições também não serve: daria 100% para a loja filtrada, que
+  // é um número certo apresentado como se fosse uma decisão. A tela diz, em uma
+  // linha, que o rateio vive na visão da rede.
+  //
+  // Só os SKUs que viram item de pedido entram na consulta de posições: o
+  // recorte pode ter dezenas de milhares de peças, e a esmagadora maioria não
+  // tem nada a distribuir.
+  const posicoes =
+    comRateio && !storeId
+      ? await posicoesPorLoja(
+          productPlans.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId),
+          days,
+        )
+      : undefined;
+  return buildPurchaseOrders(productPlans, days, resolve, posicoes);
+}
+
+/** Recorte da resposta do quadro: página + filtros de vista. */
+export interface OpcoesDoQuadro {
+  page?: number;
+  pageSize?: number;
+  /** Chave do último card que o cliente já tem — ver `paginar`. */
+  apos?: string;
+  vista?: FiltroDeVista;
 }
 
 /**
  * Feed unificado de cards de decisão (compra + remanejamento + liquidação),
  * com tipo, prioridade e impacto — a visualização de "portal de decisões".
  * Compra/liquidação respeitam o recorte de loja; o remanejamento é de rede.
+ *
+ * A resposta vem PAGINADA e o resumo vem do quadro INTEIRO. Era a origem do
+ * 503 que o cliente fotografou: 18,5 mil cards viravam 16,5 MB de JSON por
+ * requisição, e três requisições concorrentes levavam o processo a 856 MB.
  */
-export async function decisionBoard(days: number, storeId?: string, group: ProductGroup = 'principal') {
+export async function decisionBoard(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'principal',
+  opcoes: OpcoesDoQuadro = {},
+) {
   const generated = await generateCards(days, storeId, group);
   const ids = generated.cards.map((c) => c.id);
 
@@ -311,14 +501,38 @@ export async function decisionBoard(days: number, storeId?: string, group: Produ
     latestBatch(),
   ]);
 
-  const open = buildDecisionCards(
-    generated.plans,
-    generated.rebalance,
-    new Set(decided.keys()),
-    generated.positions,
-    generated.brandPositions,
+  // `finalizarBoard` sobre os cards que JÁ existem. Antes daqui saía um
+  // `buildDecisionCards` novo, que refazia do zero os mesmos cards que
+  // `generateCards` acabara de montar. Numa base de 20 mil SKUs e 12.737 cards,
+  // parar de construir duas vezes tirou 15% do tempo da rota (mediana de 10
+  // execuções: 1,890 s → 1,598 s) — menos do que parece porque quem manda no
+  // relógio são as consultas e o `analyzeProduct`, não a montagem dos cards.
+  const quadro = finalizarBoard(generated.cards, new Set(decided.keys()));
+
+  // As três coisas que TÊM de sair do conjunto inteiro: o resumo (já vem de
+  // `finalizarBoard`), a contagem de novos/atrasados e a lista de grifes do
+  // seletor. Derivar qualquer uma delas da página daria um número plausível e
+  // errado, com a tela idêntica.
+  // Um `agora` só para a contagem e para a anotação: com dois relógios, um card
+  // podia ser contado como atrasado e chegar à tela com a idade do dia anterior.
+  const agora = new Date();
+  const contagem = contarIdades(quadro.cards, history, DECISION_SLA_DAYS, agora);
+  const grifes = grifesDoQuadro(quadro.cards);
+
+  const vista = filtrarVista(quadro.cards, opcoes.vista ?? {});
+  const { itens, pagina } = paginar(vista, opcoes.page ?? 1, opcoes.pageSize ?? CARDS_POR_PAGINA, {
+    chave: opcoes.apos,
+    de: (c) => c.id,
+  });
+
+  return annotateCardAges(
+    { summary: quadro.summary, cards: itens, grifes, pagina },
+    history,
+    batch,
+    DECISION_SLA_DAYS,
+    agora,
+    contagem,
   );
-  return annotateCardAges(open, history, batch, DECISION_SLA_DAYS);
 }
 
 /**
@@ -415,7 +629,12 @@ export async function commercialStrategy(
  * o aviso sem o lojista precisar abrir o Planejamento.
  */
 export async function publishPlanningAlert(days = 90): Promise<void> {
-  const po = await purchaseOrders(days);
+  // Sem rateio, EXPLÍCITO: o evento leva só contadores do resumo, e o rateio
+  // custa um agregado com um bind param por SKU de compra mais um findMany de
+  // estoque — a cada sincronização, para ser descartado. Escrito à mão mesmo
+  // com o default já sendo falso, porque quem lê esta linha precisa ver que a
+  // ausência é decisão e não esquecimento.
+  const po = await purchaseOrders(days, undefined, 'todos', false);
   if (po.summary.items > 0) {
     publish({
       type: 'planning.urgent',
@@ -439,7 +658,12 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
       },
       select: { productId: true, quantity: true, sale: { select: { storeId: true } } },
     }),
-    prisma.stockItem.findMany({ where: stockPlannedWhere, select: { storeId: true, productId: true, quantity: true } }),
+    // `reserved` e `createdAt` entram aqui, e não numa consulta à parte, porque
+    // são colunas da MESMA linha que já vem: custo zero de ida ao banco.
+    prisma.stockItem.findMany({
+      where: stockPlannedWhere,
+      select: { storeId: true, productId: true, quantity: true, reserved: true, createdAt: true },
+    }),
     prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
     supplierConfigResolver(),
   ]);
@@ -447,30 +671,125 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
   const storeName = new Map(stores.map((s) => [s.id, s.name]));
   const key = (storeId: string, productId: string) => `${storeId}:${productId}`;
 
-  const positions = new Map<string, { storeId: string; productId: string; stock: number; sold: number }>();
+  const positions = new Map<
+    string,
+    {
+      storeId: string;
+      productId: string;
+      stock: number;
+      sold: number;
+      reserved: number;
+      /** Criação da POSIÇÃO nesta loja; `null` quando ela nem existe. */
+      posicaoDesde: Date | null;
+    }
+  >();
   for (const s of stock) {
     positions.set(key(s.storeId, s.productId), {
       storeId: s.storeId,
       productId: s.productId,
       stock: s.quantity,
       sold: 0,
+      reserved: s.reserved,
+      posicaoDesde: s.createdAt,
     });
   }
   for (const it of sold) {
     const sid = it.sale.storeId;
     if (!sid || !it.productId) continue;
     const k = key(sid, it.productId);
-    const cur = positions.get(k) ?? { storeId: sid, productId: it.productId, stock: 0, sold: 0 };
+    const cur = positions.get(k) ?? {
+      storeId: sid,
+      productId: it.productId,
+      stock: 0,
+      sold: 0,
+      reserved: 0,
+      posicaoDesde: null,
+    };
     cur.sold += it.quantity;
     positions.set(k, cur);
   }
 
   const productIds = Array.from(new Set(Array.from(positions.values()).map((p) => p.productId)));
-  const products = await prisma.product.findMany({
-    where: { id: { in: productIds } },
-    select: { id: true, description: true, brand: true, category: true },
-  });
+  const [products, emAberto, deltasAoVivo] = await Promise.all([
+    prisma.product.findMany({
+      where: { id: { in: productIds } },
+      // `includedAt` (data_cadastro do ERP) é a segunda metade da idade por
+      // loja — ver `idadeNaLoja` logo abaixo.
+      select: { id: true, description: true, brand: true, category: true, includedAt: true },
+    }),
+    // Transferências ainda NÃO efetivadas: a peça continua fisicamente na
+    // origem e ainda não chegou no destino. A consulta é por `productId` e
+    // `status`, as duas colunas com índice em InventoryMovement; as lojas
+    // ficam só na agregação em memória. O conjunto é pequeno por natureza (é
+    // fila de operação, não histórico).
+    //
+    // REQUESTED entra junto de PENDING porque toda transferência criada por
+    // gestor de loja nasce REQUESTED e só vira PENDING quando o ADMIN aprova
+    // (`decideInitialStatus`). O plano é tela de ADMIN: sem contar esse
+    // intervalo, ele reemitia a sugestão idêntica à que a loja acabou de
+    // pedir, e a rede passava a ter duas ordens para as mesmas unidades.
+    prisma.inventoryMovement.findMany({
+      where: {
+        status: { in: ['REQUESTED', 'PENDING'] },
+        type: 'TRANSFER',
+        productId: { in: productIds },
+      },
+      select: { productId: true, fromStoreId: true, toStoreId: true, quantity: true, status: true },
+    }),
+    // Transferências já efetivadas e ainda não reconciliadas pela sync: a peça
+    // JÁ saiu da origem e JÁ chegou no destino, mesmo que o `StockItem` da
+    // última sincronização não saiba disso (`reconcileMovements` só fecha o
+    // que tem `confirmedAt` antes do corte, no run seguinte).
+    //
+    // É o mesmo saldo que a tela de Estoque mostra e que `availableAt` usa
+    // para aceitar ou recusar o clique — daí vir da mesma função, e não de uma
+    // segunda conta escrita aqui.
+    liveDeltas(productIds),
+  ]);
   const productBy = new Map(products.map((p) => [p.id, p]));
+  const inboundBy = new Map<string, number>();
+  const solicitadoBy = new Map<string, number>();
+  for (const m of emAberto) {
+    if (m.toStoreId) {
+      const k = key(m.toStoreId, m.productId);
+      inboundBy.set(k, (inboundBy.get(k) ?? 0) + m.quantity);
+    }
+    // `StockItem.reserved` já soma as saídas PENDING (`recomputeReserved`),
+    // então só a parcela REQUESTED precisa ser somada aqui — contar as duas
+    // seria reservar a mesma unidade duas vezes.
+    if (m.fromStoreId && m.status === 'REQUESTED') {
+      const k = key(m.fromStoreId, m.productId);
+      solicitadoBy.set(k, (solicitadoBy.get(k) ?? 0) + m.quantity);
+    }
+  }
+
+  const agora = Date.now();
+  /**
+   * Idade ESTIMADA da peça naquela loja, em dias — a mais antiga entre a
+   * criação da posição de estoque e o cadastro do produto no ERP.
+   *
+   * É estimativa, e mente para MENOS em três situações conhecidas:
+   *  1. o sync apaga toda posição zerada, então peça de três anos que zerou e
+   *     voltou à prateleira ganha `createdAt` novo;
+   *  2. o recálculo de reservas faz `upsert` com `create`: uma transferência
+   *     pendente CRIA a linha de StockItem na loja de ORIGEM com `createdAt`
+   *     de agora — a própria sugestão envelhece o carimbo que a rodada
+   *     seguinte vai ler;
+   *  3. `includedAt` é da REDE, não da loja: peça antiga no catálogo que
+   *     acabou de chegar nesta loja parece antiga aqui também.
+   *
+   * Todas as três erram para o lado de deixar a peça DOAR. É de propósito:
+   * `Product.createdAt` local, que erraria para o outro lado, já é recusado
+   * pelo planejamento (a primeira carga carimbou o catálogo inteiro no mesmo
+   * instante). Preferimos uma sugestão a mais, que o lojista recusa, a uma
+   * sugestão a menos, que ele nunca vê. A tela diz que é estimativa.
+   */
+  const idadeNaLoja = (posicaoDesde: Date | null, includedAt: Date | null): number | null => {
+    const marcos = [posicaoDesde, includedAt].filter((d): d is Date => d != null);
+    if (marcos.length === 0) return null;
+    const maisAntigo = Math.min(...marcos.map((d) => d.getTime()));
+    return Math.max(0, Math.floor((agora - maisAntigo) / 86_400_000));
+  };
 
   const inputs: StoreProductInput[] = [];
   for (const pos of positions.values()) {
@@ -480,6 +799,9 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
     // Regra absoluta da rede: lentes não se transferem entre lojas — só óculos
     // de grau/sol e relógio. Vale mesmo no consolidado ('todos').
     if (matchesProductGroup(product.category, 'lentes')) continue;
+    const k = key(pos.storeId, pos.productId);
+    const reservado = pos.reserved + (solicitadoBy.get(k) ?? 0);
+    const { onHand } = computeLiveStock(pos.stock, reservado, deltasAoVivo.get(k) ?? 0);
     inputs.push({
       storeId: pos.storeId,
       storeName: storeName.get(pos.storeId) ?? '—',
@@ -488,7 +810,15 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
       brand: product.brand,
       category: product.category,
       unitsSold: pos.sold,
-      currentStock: pos.stock,
+      // Saldo AO VIVO, não a quantidade da última sync. Saldo negativo é
+      // possível quando a sync já baixou a origem e a movimentação ainda não
+      // foi reconciliada; para o planejamento isso é zero, e não uma loja
+      // devendo peça — cobertura negativa faria a origem parecer a mais
+      // urgente da fila.
+      currentStock: Math.max(0, onHand),
+      reserved: reservado,
+      inboundUnits: inboundBy.get(k) ?? 0,
+      ageDays: idadeNaLoja(pos.posicaoDesde, product.includedAt),
     });
   }
 
@@ -498,8 +828,10 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
   // trabalha (catálogo). Marcas correntes (fora do catálogo) valem para todas.
   const catalog = loadBrandCatalog();
   if (catalog) {
+    // `analysisBrand` com a categoria, como no resto do motor. O campo
+    // `category` existe em `RebalanceSuggestion` exatamente para isto.
     plan.rows = plan.rows.filter((r) =>
-      storeCarriesBrand(extractBrand(r.description) ?? r.brand, r.toStoreName, catalog),
+      storeCarriesBrand(analysisBrand(r.description, r.category, r.brand), r.toStoreName, catalog),
     );
     const involved = new Set<string>();
     for (const r of plan.rows) {
@@ -518,7 +850,7 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
   return { ...plan, inputs };
 }
 
-/** Fornecedores (marcas) com seus prazos: cadastrados ou padrão da rede. */
+/** Fornecedores com seus prazos de entrega: cadastrados ou padrão da rede. */
 export async function listSupplierSettings() {
   const [brands, settings] = await Promise.all([
     prisma.product.groupBy({ by: ['brand'], where: { brand: { not: null } }, _count: true }),
@@ -528,28 +860,151 @@ export async function listSupplierSettings() {
   const doCatalogo = brands.map((b) => ({
     brand: b.brand as string,
     leadTimeDays: cadastrada.get(b.brand as string)?.leadTimeDays ?? null,
-    discontinued: cadastrada.get(b.brand as string)?.discontinued ?? false,
     products: b._count,
     isDefault: !cadastrada.has(b.brand as string),
   }));
 
-  // Uma grife marcada como fora do mix pode não existir no campo `brand` do
-  // ERP — que é o FORNECEDOR e vem vazio na maior parte do catálogo. Sem esta
-  // união, o operador marcaria "MIU MIU" como descontinuada e a linha sumiria
-  // da tela no recarregamento, como se nada tivesse sido salvo.
+  // Um prazo cadastrado para um fornecedor que sumiu do catálogo continua
+  // aparecendo: senão o operador salvaria e a linha desapareceria no
+  // recarregamento, como se nada tivesse sido gravado.
   const noCatalogo = new Set(doCatalogo.map((r) => r.brand));
   const soltas = settings
     .filter((s) => !noCatalogo.has(s.brand))
-    .map((s) => ({
-      brand: s.brand,
-      leadTimeDays: s.leadTimeDays,
-      discontinued: s.discontinued,
-      products: 0,
-      isDefault: false,
-    }));
+    .map((s) => ({ brand: s.brand, leadTimeDays: s.leadTimeDays, products: 0, isDefault: false }));
 
   const rows = [...doCatalogo, ...soltas].sort((a, b) => a.brand.localeCompare(b.brand, 'pt-BR'));
   return { defaultLeadTimeDays: DEFAULT_PLANNING_CONFIG.leadTimeDays, rows };
+}
+
+/**
+ * Mix de grifes: a lista que a operação usa para declarar o que a rede parou
+ * de trabalhar (feedback 6.0 · item 03).
+ *
+ * As linhas são as GRIFES que o motor de fato usa — `analysisBrand`, a mesma
+ * função que decide a marca de um card, de um pedido e de um remanejamento —
+ * e NÃO o campo `brand` do CDS, que é o fornecedor. Enquanto a tela ofereceu
+ * fornecedores, marcar "fora do mix" numa grife de moda era impossível: RAY
+ * BAN, OAKLEY e ARNETTE não estavam na lista, e "LUXOTTICA BRASIL PRODUTOS
+ * OTICOS E ESPORTIVOS LTDA", que estava, nunca era consultado pelo motor.
+ *
+ * A agregação é em memória porque `analysisBrand` é derivada da descrição —
+ * não existe coluna para agrupar em SQL.
+ *
+ * "Consultada raramente" era o que o comentário anterior dizia, e era uma
+ * suposição sobre o comportamento da tela, não um fato do código: a rota não
+ * exigia papel nenhum, e a contagem varria o catálogo inteiro — 61 mil linhas,
+ * três campos, mais uma extração de grife por linha — a CADA requisição. Um F5
+ * repetido custava o catálogo inteiro, num processo que a frente do 503 acabou
+ * de limitar a 768 MB. Duas mudanças fecham isso: a rota passou a exigir ADMIN
+ * (a decisão é comercial, e o PUT já exigia) e a contagem é memorizada.
+ *
+ * A memória é do PROCESSO e curta de propósito. Não vale a pena invalidar por
+ * evento aqui: o que a torna obsoleta é a sincronização do ERP mexendo no
+ * catálogo, e um minuto de atraso numa contagem de produtos por grife não muda
+ * decisão nenhuma. A marcação, essa sim, é imediata — `setBrandMix` derruba a
+ * memória, porque ver o próprio clique refletido é o mínimo que a tela deve.
+ */
+const MEMORIA_DO_MIX_MS = 60_000;
+let memoriaDoMix: { em: number; contagem: Map<string, { brand: string; products: number }> } | null = null;
+
+/** Derruba a contagem memorizada de grifes (chamada por quem escreve o mix). */
+export function esquecerContagemDeGrifes() {
+  memoriaDoMix = null;
+}
+
+async function contagemDeGrifes(agora: number) {
+  if (memoriaDoMix && agora - memoriaDoMix.em < MEMORIA_DO_MIX_MS) return memoriaDoMix.contagem;
+
+  const produtos = await prisma.product.findMany({
+    select: { description: true, category: true, brand: true },
+  });
+  const contagem = new Map<string, { brand: string; products: number }>();
+  for (const p of produtos) {
+    const grife = analysisBrand(p.description, p.category, p.brand);
+    if (!grife) continue;
+    const k = normBrandKey(grife);
+    const atual = contagem.get(k);
+    if (atual) atual.products += 1;
+    else contagem.set(k, { brand: grife, products: 1 });
+  }
+  memoriaDoMix = { em: agora, contagem };
+  return contagem;
+}
+
+export async function listBrandMix() {
+  // A contagem pode vir da memória; a MARCAÇÃO nunca — é o dado que a tela
+  // acabou de escrever, e lê-la de um instantâneo faria o clique parecer
+  // perdido.
+  const [contagem, marcados] = await Promise.all([
+    contagemDeGrifes(Date.now()),
+    prisma.brandMix.findMany(),
+  ]);
+
+  const fora = new Map(marcados.map((m) => [normBrandKey(m.brand), m]));
+  const rows = [...contagem.values()].map((c) => ({
+    brand: c.brand,
+    products: c.products,
+    discontinued: fora.get(normBrandKey(c.brand))?.discontinued ?? false,
+  }));
+
+  // Uma grife marcada que não casa com produto nenhum continua visível, com
+  // `products: 0`. É o aviso de que aquela marcação está inerte — pode ter
+  // sido digitada errada, ou a grife pode ter saído do catálogo. Esconder a
+  // linha faria a marcação sumir da tela e continuar valendo no banco.
+  const conhecidas = new Set(rows.map((r) => normBrandKey(r.brand)));
+  for (const m of marcados) {
+    if (!conhecidas.has(normBrandKey(m.brand))) {
+      rows.push({ brand: m.brand, products: 0, discontinued: m.discontinued });
+    }
+  }
+
+  rows.sort((a, b) => b.products - a.products || a.brand.localeCompare(b.brand, 'pt-BR'));
+  return { rows };
+}
+
+/**
+ * Marca (ou desmarca) uma grife como fora do mix. Decisão comercial: nenhum
+ * dado do ERP diz que a rede parou de trabalhar uma grife.
+ */
+export async function setBrandMix(brand: string, discontinued: boolean) {
+  const clean = brand.trim();
+  if (!clean) throw badRequest('Informe a grife.');
+
+  /*
+   * GRAVA NA CHAVE NORMALIZADA — a mesma que a leitura usa.
+   *
+   * `listBrandMix` e `discontinuedBrandResolver` comparam por `normBrandKey`
+   * (maiúscula, sem acento, espaços colapsados); a escrita usava a string
+   * literal que veio da tela. As duas pontas concordavam por acaso, enquanto a
+   * tela mandasse exatamente o texto que ela mesma tinha renderizado — e
+   * desmontavam nos dois casos que a operação produz sozinha:
+   *
+   *  · DESMARCAR com outra forma da mesma grife ("Dolce & Gabbana" contra
+   *    "DOLCE & GABBANA" gravado) apagava zero linhas. A tela dizia que
+   *    desmarcou, a linha continuava no banco, e o motor continuava cortando a
+   *    grife da compra. Silêncio dos dois lados: `deleteMany` que não encontra
+   *    nada não é erro.
+   *  · MARCAR com duas formas criava DUAS linhas — `brand` é único sobre a
+   *    string literal — e desmarcar uma delas deixava a outra valendo.
+   */
+  const chave = normBrandKey(clean);
+
+  if (!discontinued) {
+    // Desmarcar apaga a linha em vez de guardar `false`: a tabela existe para
+    // registrar exceções, e uma lista de exceções cheia de não-exceções é uma
+    // lista que ninguém consegue ler.
+    await prisma.brandMix.deleteMany({ where: { brand: chave } });
+    esquecerContagemDeGrifes();
+    return { brand: chave, discontinued: false };
+  }
+
+  const row = await prisma.brandMix.upsert({
+    where: { brand: chave },
+    create: { brand: chave, discontinued: true },
+    update: { discontinued: true },
+  });
+  esquecerContagemDeGrifes();
+  return { brand: row.brand, discontinued: row.discontinued };
 }
 
 // ─── Ciclo do pedido: enviado → recebido (com histórico) ─────────────────────
@@ -618,41 +1073,26 @@ export async function purchaseOrderHistory(limit = 50) {
  * não há nada a dizer sobre o mix — senão marcar uma grife como fora do mix
  * sem informar prazo apagaria o próprio registro que acabou de ser criado.
  */
-export async function setSupplierSetting(
-  brand: string,
-  leadTimeDays: number | null,
-  discontinued?: boolean,
-) {
+export async function setSupplierSetting(brand: string, leadTimeDays: number | null) {
   const clean = brand.trim();
   if (!clean) throw badRequest('Informe a marca/fornecedor.');
   if (leadTimeDays !== null && (!Number.isInteger(leadTimeDays) || leadTimeDays < 1 || leadTimeDays > 365)) {
     throw badRequest('Prazo do fornecedor deve ser um número inteiro entre 1 e 365 dias.');
   }
 
-  const atual = await prisma.supplierSetting.findUnique({ where: { brand: clean } });
-  const foraDoMix = discontinued ?? atual?.discontinued ?? false;
-
-  if (leadTimeDays === null && !foraDoMix) {
+  // Sem prazo próprio, o fornecedor volta ao padrão da rede — e a linha deixa
+  // de existir. É o que "voltar ao padrão" significa.
+  if (leadTimeDays === null) {
     await prisma.supplierSetting.deleteMany({ where: { brand: clean } });
-    return { brand: clean, leadTimeDays: null, discontinued: false };
+    return { brand: clean, leadTimeDays: null };
   }
 
   const row = await prisma.supplierSetting.upsert({
     where: { brand: clean },
-    // Sem prazo próprio a marca fica no padrão da rede — guardamos o padrão
-    // como valor, porque a coluna é obrigatória e o registro precisa existir
-    // para carregar a marcação de mix.
-    create: {
-      brand: clean,
-      leadTimeDays: leadTimeDays ?? DEFAULT_PLANNING_CONFIG.leadTimeDays,
-      discontinued: foraDoMix,
-    },
-    update: {
-      ...(leadTimeDays !== null ? { leadTimeDays } : {}),
-      discontinued: foraDoMix,
-    },
+    create: { brand: clean, leadTimeDays },
+    update: { leadTimeDays },
   });
-  return { brand: row.brand, leadTimeDays: row.leadTimeDays, discontinued: row.discontinued };
+  return { brand: row.brand, leadTimeDays: row.leadTimeDays };
 }
 
 // ─── Modo Feira: rateio de compra por loja (feedback 08, MVP) ────────────────

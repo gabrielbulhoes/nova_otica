@@ -62,6 +62,22 @@ export interface PlanningConfig {
    * `posição <= ponto de reposição` e vira card de compra de 1 unidade.
    */
   buyMinAnnualUnits: number;
+  /**
+   * Piso de vitrine da loja que DOA num remanejamento: unidades que ela nunca
+   * entrega, mesmo estando parada.
+   *
+   * Feedback do Galbe (WhatsApp) — "o sistema esvazia a loja de origem". A
+   * regra antiga era literal: `dailyDemand === 0 ? s.stock : …`, com um
+   * comentário dizendo "parado: pode doar tudo". Doar tudo zera a vitrine, e
+   * peça que ninguém vê não vende — o motor fabricava a evidência de que
+   * aquela loja não vendia aquilo, e na rodada seguinte tinha razão.
+   *
+   * É MÍNIMO ABSOLUTO, não parcela somada ao alvo de cobertura: quem tem giro
+   * já é protegido por `targetCoverDays`, que reserva dias de venda antes de
+   * qualquer doação. O piso existe justamente para quem NÃO tem giro e por
+   * isso não é protegido por nada.
+   */
+  donorFloorUnits: number;
 }
 
 export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
@@ -84,6 +100,11 @@ export const DEFAULT_PLANNING_CONFIG: PlanningConfig = {
   // 3 un./ano. Abaixo disso o ressuprimento automático não se paga: são as
   // grifes de ponta de cauda que o feedback chama de "vendemos pouquíssimo".
   buyMinAnnualUnits: 3,
+  // 1 unidade: o mostruário. Não é estoque de venda, é a peça que o cliente
+  // experimenta — sem ela a loja não vende nem sob encomenda. Subir esse
+  // número trava remanejamento de cauda longa (a maior parte do catálogo tem
+  // 1 ou 2 un. por loja), então o piso fica no mínimo que resolve a queixa.
+  donorFloorUnits: 1,
 };
 
 /**
@@ -328,6 +349,8 @@ export function buildPriceBands(prices: number[]): PriceBand[] {
  */
 export type MovementClass = 'NEW' | 'DEAD' | 'SLOW' | 'HEALTHY' | 'FAST';
 export type Recommendation = 'BUY' | 'HOLD' | 'DONT_BUY' | 'LIQUIDATE';
+/** Conjunto fechado, para a rota validar o que vem em `?recomendacao=`. */
+export const RECOMENDACOES: readonly Recommendation[] = ['BUY', 'HOLD', 'DONT_BUY', 'LIQUIDATE'];
 
 // ─── Grupos de cobertura (recorte por categoria) ─────────────────────────────
 
@@ -412,11 +435,25 @@ export function grupoDaCategoria(category: string | null | undefined): ProductGr
  * dígito) ou tamanho, devolvendo 1–2 tokens como marca. Heurística — deve ser
  * validada e afinada com as descrições reais quando a sonda CDS rodar.
  */
-const CATEGORY_WORDS = new Set([
+/**
+ * Palavras de TIPO — o que o produto é. Só elas servem de âncora: aparecem uma
+ * vez, na posição fixa do padrão do CDS, e o que vem depois delas é nome.
+ */
+const TIPO_WORDS = new Set([
   'armacao', 'armacoes', 'oculos', 'oculo', 'lente', 'lentes', 'relogio', 'relogios',
   'estojo', 'estojos', 'acessorio', 'acessorios', 'sol', 'solar', 'grau', 'receituario',
-  'contato', 'infantil', 'de', 'do', 'da', 'para', 'com',
+  'contato', 'infantil',
 ]);
+
+/**
+ * Preposições — descartáveis como as de tipo enquanto a marca não começou, e
+ * encerram a marca depois que ela começou, mas NÃO servem de âncora: elas
+ * reaparecem no meio e no fim da descrição ("… OCULOS ARNETTE DE ACETATO",
+ * "… COM ESTOJO"). Ancorar nelas jogava a varredura para depois da grife.
+ */
+const PREPOSICOES = new Set(['de', 'do', 'da', 'para', 'com']);
+
+const CATEGORY_WORDS = new Set([...TIPO_WORDS, ...PREPOSICOES]);
 const COLOR_WORDS = new Set([
   'preto', 'preta', 'branco', 'branca', 'dourado', 'dourada', 'prata', 'prateado', 'azul',
   'tartaruga', 'marrom', 'vermelho', 'vermelha', 'verde', 'rosa', 'cinza', 'nude',
@@ -434,25 +471,12 @@ const CONNECTOR_WORDS = new Set(['e', '&']);
 const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-export function extractBrand(
-  description: string | null | undefined,
-  category?: string | null,
-): string | null {
-  // Grife só existe em produto de moda (óculos, armação, relógio). Em lente,
-  // tratamento e serviço a descrição é a LINHA do produto — "MULTIGRESSIV
-  // MONOFOCAIS…", "ZEISS ANTIRREFLEXO", "HILUX LENTES PRONTAS…" — e extrair
-  // dali fragmenta um mesmo fabricante em dezenas de pseudo-marcas (a ZEISS
-  // virava dezesseis). Nesses casos devolvemos null para o chamador cair no
-  // fornecedor (p.brand), que é o dado confiável ali.
-  // Sem categoria informada, mantém o comportamento antigo (extrai sempre).
-  if (category != null && !ehProdutoDeModa(category)) return null;
-  const raw = (description ?? '').trim();
-  if (!raw) return null;
-  const tokens = raw.split(/\s+/);
+/** Varre os tokens a partir de `from` e devolve 1–2 palavras de marca. */
+function varrerMarca(tokens: string[], from: number): string | null {
   const picked: string[] = [];
   let started = false;
-  for (const tok of tokens) {
-    const n = norm(tok).replace(/[.,;:]+$/, '');
+  for (let i = from; i < tokens.length; i++) {
+    const n = norm(tokens[i]).replace(/[.,;:]+$/, '');
     if (!n) continue;
     // Antes de começar a marca, pula categoria/tipo. Depois de começar,
     // categoria encerra a marca.
@@ -469,11 +493,83 @@ export function extractBrand(
       if (started) break;
       continue;
     }
-    picked.push(tok);
+    picked.push(tokens[i]);
     started = true;
     if (picked.length >= 2) break; // marcas têm 1–2 palavras (ex.: Ray-Ban, Chilli Beans)
   }
   return picked.length > 0 ? picked.join(' ') : null;
+}
+
+export function extractBrand(
+  description: string | null | undefined,
+  category?: string | null,
+): string | null {
+  // Grife só existe em produto de moda (óculos, armação, relógio). Em lente,
+  // tratamento e serviço a descrição é a LINHA do produto — "MULTIGRESSIV
+  // MONOFOCAIS…", "ZEISS ANTIRREFLEXO", "HILUX LENTES PRONTAS…" — e extrair
+  // dali fragmenta um mesmo fabricante em dezenas de pseudo-marcas (a ZEISS
+  // virava dezesseis). Nesses casos devolvemos null para o chamador cair no
+  // fornecedor (p.brand), que é o dado confiável ali.
+  // Sem categoria informada, mantém o comportamento antigo (extrai sempre).
+  if (category != null && !ehProdutoDeModa(category)) return null;
+  const raw = (description ?? '').trim();
+  if (!raw) return null;
+  const tokens = raw.split(/\s+/);
+
+  /*
+   * A varredura começa DEPOIS da PRIMEIRA palavra de tipo, não do começo da
+   * descrição.
+   *
+   * Motivo, com o dado real na mão: o CDS escreve a maioria das armações no
+   * formato `<modelo> <código de cor> <calibre> <TIPO> <GRIFE>` —
+   *
+   *     AN4290  ABAG    55  OCULOS  ARNETTE
+   *     VO5573  ABLK    52  ARMACAO VOGUE
+   *     MK1088  AGLD    54  ARMACAO MICHAEL KORS
+   *
+   * Varrendo do começo, `AN4290` é descartado por ter dígito, e o primeiro
+   * token "limpo" que aparece é o **código de cor do fabricante** — `ABAG`,
+   * `ABLK`, `AGLD`. Ele não tem dígito, não é cor em português e não é
+   * categoria, então passa por todas as guardas e é promovido a marca. Daí a
+   * reclamação do cliente: a lista de grifes vinha salpicada de siglas de
+   * quatro letras que ninguém reconhece, ao lado das grifes de verdade — e a
+   * ARNETTE, que estava ali na mesma linha, não aparecia.
+   *
+   * A palavra de tipo é o divisor confiável: o que vem depois dela é nome,
+   * o que vem antes é código. Quando não há palavra de tipo, ou quando ela é
+   * o último token (`RB3548NL 001 54 OCULOS` sem grife), cai no comportamento
+   * antigo — varrer tudo. O mesmo vale se a varredura a partir do tipo não
+   * achar nada: `ARNETTE OCULOS PRETO` só tem marca ANTES do tipo.
+   *
+   * A âncora é a PRIMEIRA palavra de tipo, e só de tipo. Ancorar na ÚLTIMA
+   * palavra de `CATEGORY_WORDS` — que inclui as preposições — quebrava nos
+   * dois sufixos mais comuns do catálogo real:
+   *
+   *     AN4290 ABAG 55 OCULOS ARNETTE DE ACETATO   →  "ACETATO"
+   *     AN4290 ABAG 55 OCULOS ARNETTE COM ESTOJO   →  "ABAG"
+   *
+   * O `DE`/`COM` no fim empurrava a âncora para depois da grife. A primeira
+   * palavra de tipo cai exatamente no divisor que o padrão do CDS descreve, e
+   * as preposições continuam encerrando a marca dentro de `varrerMarca` — que
+   * é o papel delas.
+   *
+   * Isto é heurística sobre texto livre, e vai continuar errando em algum
+   * padrão que ainda não vimos. O conserto definitivo é a Sellbie expor o
+   * campo Marca na rota `produtos` — ele existe no admin do ERP e não vem na
+   * API. Enquanto não vier, esta é a melhor régua disponível.
+   */
+  let primeiroTipo = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    if (TIPO_WORDS.has(norm(tokens[i]).replace(/[.,;:]+$/, ''))) {
+      primeiroTipo = i;
+      break;
+    }
+  }
+  if (primeiroTipo >= 0 && primeiroTipo < tokens.length - 1) {
+    const depoisDoTipo = varrerMarca(tokens, primeiroTipo + 1);
+    if (depoisDoTipo) return depoisDoTipo;
+  }
+  return varrerMarca(tokens, 0);
 }
 
 // ─── Lentes por encomenda (sem posição de estoque) ──────────────────────────
@@ -1065,6 +1161,15 @@ export interface PurchaseSuggestions {
     /** Quantos SKUs o motor analisou — o denominador de `buy`. */
     analisados: number;
     /**
+     * Itens com risco de ruptura (`stockoutInDays !== null`) — o cartão "Risco
+     * de faltar" da tela de Planejamento.
+     *
+     * Nasce no resumo porque a tela o calculava percorrendo TODAS as linhas no
+     * navegador. Para exibir um inteiro, o cliente era obrigado a baixar as 13
+     * mil linhas inteiras. O contador é do CONJUNTO, não da página.
+     */
+    emRisco: number;
+    /**
      * Quantos SKUs o recorte tem de fato, quando a base carregada é uma
      * amostra. Feedbacks 6.0, item 02 ("o número de sugestão de pedidos está
      * baixo"): sem esses dois números ao lado, 126 sugestões parecem pouco
@@ -1073,6 +1178,8 @@ export interface PurchaseSuggestions {
     universo?: number;
   };
   rows: ProductPlan[];
+  /** Recorte desta resposta. Ausente quando as linhas vêm inteiras. */
+  pagina?: PaginaDaResposta;
 }
 
 const recRank: Record<Recommendation, number> = { BUY: 0, LIQUIDATE: 1, DONT_BUY: 2, HOLD: 3 };
@@ -1087,8 +1194,10 @@ export function buildSuggestions(plans: ProductPlan[], days: number): PurchaseSu
     buyCapital: 0,
     avoidedCapital: 0,
     analisados: plans.length,
+    emRisco: 0,
   };
   for (const p of plans) {
+    if (p.stockoutInDays !== null) summary.emRisco += 1;
     if (p.recommendation === 'BUY') {
       summary.buy += 1;
       summary.buyCapital += p.capital;
@@ -1129,6 +1238,28 @@ export interface StoreProductInput {
   unitsSold: number;
   /** Estoque atual NESTA loja. */
   currentStock: number;
+  /**
+   * Idade ESTIMADA da peça NESTA loja, em dias. `null`/ausente = desconhecida.
+   *
+   * Estimativa, não medição: o ERP não guarda data de chegada por loja. O
+   * cálculo mora em `rebalancePlan` e as três formas conhecidas de ele mentir
+   * estão documentadas lá. Aqui o que importa é o contrato: idade desconhecida
+   * NÃO é peça nova (fail-open), igual ao `input.ageDays != null && …` que a
+   * liquidação já usa.
+   */
+  ageDays?: number | null;
+  /**
+   * Unidades desta posição já comprometidas com transferências pendentes que
+   * SAEM daqui (`StockItem.reserved`). Estão fisicamente na loja e não podem
+   * ser oferecidas de novo.
+   */
+  reserved?: number;
+  /**
+   * Unidades a caminho DESTA loja (transferências pendentes com destino aqui).
+   * Abatem a necessidade — senão o motor manda a mesma peça duas vezes para o
+   * mesmo lugar, uma por rodada, até alguém receber duas caixas.
+   */
+  inboundUnits?: number;
 }
 
 export interface RebalanceSuggestion {
@@ -1148,6 +1279,24 @@ export interface RebalanceSuggestion {
   toStoreId: string;
   toStoreName: string;
   quantity: number;
+  /**
+   * PISO do que sobra vendável na origem: o que fica se TODAS as linhas desta
+   * peça saindo desta origem forem aprovadas — não só esta. Vai para a tela
+   * porque é a resposta direta à queixa "o sistema esvazia a loja de origem":
+   * o número que o lojista quer conferir antes de clicar.
+   *
+   * É o pior caso de propósito, por duas razões que se somam. Cada linha tem
+   * botão próprio e é aprovada isolada, então o número precisa valer para
+   * quem aprovar QUALQUER subconjunto delas — e só o pior caso vale para
+   * todos. E a pergunta que ele responde é "vai me deixar sem?": errar para
+   * menos faz o lojista conferir à toa, errar para mais o faz esvaziar a
+   * loja confiando no sistema.
+   *
+   * Vendável, não físico: o que está `reserved` para outra transferência está
+   * na prateleira e já tem dono, e contá-lo aqui inflaria justamente o número
+   * que sustenta a promessa de piso de vitrine.
+   */
+  fromRemainingUnits: number;
   fromCoverageDays: number | null;
   toCoverageDays: number | null;
   /** Previsão de ruptura no destino (dias), quando houver. */
@@ -1159,10 +1308,36 @@ export interface RebalanceSuggestion {
   confidence: number;
 }
 
+/**
+ * Janela mínima de observação da demanda, em dias.
+ *
+ * Duas semanas: dois fins de semana e um ciclo de vitrine — a mesma razão que
+ * `newProductDays` documenta ("uma armação precisa passar por vitrine e por fim
+ * de semana antes de alguém dizer que ela não vende"), aplicada ao lado oposto
+ * da conta. Abaixo disso não se estima taxa de venda; extrapolar de três dias é
+ * inventar precisão, e o erro cresce justamente quando a evidência encolhe.
+ *
+ * Não vem de `PlanningConfig` porque a idade é lida antes de a configuração da
+ * grife ser resolvida, e porque isto não é política comercial por fornecedor —
+ * é o limite do que o dado suporta afirmar.
+ */
+const PISO_DE_OBSERVACAO_DIAS = 14;
+
 export interface RebalancePlan {
   days: number;
   summary: { suggestions: number; units: number; storesInvolved: number };
   rows: RebalanceSuggestion[];
+  /**
+   * As duas guardas que o motor aplicou ao escolher doadoras. Vão no plano, e
+   * não numa constante repetida no front, porque o que a tela precisa dizer é
+   * o que o MOTOR fez — se um dia a régua mudar, a tela muda junto.
+   */
+  guards: {
+    /** Dias de carência: abaixo disso a peça não é oferecida como doadora. */
+    newProductDays: number;
+    /** Piso de vitrine: unidades que a origem nunca entrega. */
+    donorFloorUnits: number;
+  };
 }
 
 const fmtCover = (c: number | null) =>
@@ -1176,10 +1351,19 @@ const fmtCover = (c: number | null) =>
  *
  * Regras (por produto):
  *  - Receptora: vende (demanda > 0) e cobertura < leadTime+safety; a
- *    necessidade repõe até a cobertura-alvo.
- *  - Doadora: sem giro com estoque parado (doa tudo), ou com giro e
- *    cobertura acima do alvo (doa só o excedente acima do alvo).
+ *    necessidade repõe até a cobertura-alvo, descontado o que já está a
+ *    caminho dela.
+ *  - Doadora: sem giro com estoque parado, ou com giro e cobertura acima do
+ *    alvo (doa só o excedente). Em qualquer caso, respeitando três limites:
+ *    a carência da peça na origem, o piso de vitrine e o que já está
+ *    reservado para outra transferência.
  *  - Receptoras mais urgentes primeiro; doadoras com mais sobra primeiro.
+ *
+ * NÃO tem sazonalidade: a demanda daqui é média simples da janela, enquanto
+ * `analyzeProduct` aplica índice sazonal. Consequência assumida e conhecida —
+ * em julho este motor pode mandar óculos de sol embora de uma loja de praia,
+ * porque na janela de inverno o giro dela é baixo. Unificar as duas contas é
+ * troca de motor, não ajuste de parâmetro.
  */
 export function buildRebalance(
   rows: StoreProductInput[],
@@ -1190,7 +1374,16 @@ export function buildRebalance(
     storeId: string;
     storeName: string;
     dailyDemand: number;
+    /** Físico na prateleira — inclui o que já tem dono. Só as frases o citam. */
     stock: number;
+    /** `stock` menos o reservado: o que esta loja pode de fato vender. */
+    vendavel: number;
+    /** Comprometido com transferência pendente que sai daqui. */
+    reserved: number;
+    /** A caminho daqui, por transferência pendente com destino nesta loja. */
+    inbound: number;
+    /** Idade estimada da peça nesta loja; `null` = desconhecida (fail-open). */
+    ageDays: number | null;
     coverage: number | null;
   }
   const byProduct = new Map<
@@ -1199,13 +1392,49 @@ export function buildRebalance(
   >();
 
   for (const r of rows) {
-    const dailyDemand = days > 0 ? r.unitsSold / days : 0;
+    // Demanda medida pelos dias em que a peça REALMENTE pôde vender nesta
+    // loja, não pela janela inteira. Uma peça que chegou há 10 dias e vendeu
+    // 2 vende 0,2/dia, não 0,022/dia (2/90) — e a diferença é o que separa
+    // "está acabando, mande mais" de "não vende, tire daqui".
+    //
+    // O piso era de 1 dia — só o suficiente para não dividir por zero — e isso
+    // transformava a correção acima numa máquina de extrapolar. Uma peça
+    // presente há 3 dias com UMA venda lia 0,33/dia, e o alvo de 60 dias pedia
+    // 20 unidades: a rede inteira remanejada por causa de uma venda. Quanto
+    // mais nova a peça, mais alto o número — exatamente ao contrário da
+    // confiança que se pode ter nele.
+    //
+    // O piso agora é a janela mínima de observação (`PISO_DE_OBSERVACAO_DIAS`),
+    // limitada pela janela pedida: não se pode observar mais dias do que se
+    // olhou. A mesma peça passa a ler 1/14 = 0,07/dia e pedir 5, que é uma
+    // aposta do tamanho da evidência. Sem idade conhecida, a janela inteira —
+    // o comportamento antigo.
+    const presentDays =
+      r.ageDays != null ? Math.min(days, Math.max(PISO_DE_OBSERVACAO_DIAS, r.ageDays)) : days;
+    const dailyDemand = presentDays > 0 ? r.unitsSold / presentDays : 0;
+    const reserved = Math.max(0, r.reserved ?? 0);
+    /*
+     * Cobertura se mede em unidades VENDÁVEIS, dos dois lados.
+     *
+     * A doadora já descontava o reservado (`livre`, mais abaixo) — "está na
+     * prateleira mas já tem dono". A receptora não descontava, e a assimetria
+     * dava à mesma unidade dois papéis contraditórios na mesma rodada: ela
+     * saía daqui e, ao mesmo tempo, contava como cobertura daqui. Uma loja com
+     * 10 peças, 8 delas reservadas para sair, aparecia com cobertura de 10 e
+     * era filtrada fora da lista de quem precisa — justamente a loja que ia
+     * ficar com 2.
+     */
+    const vendavel = Math.max(0, r.currentStock - reserved);
     const pos: StorePos = {
       storeId: r.storeId,
       storeName: r.storeName,
       dailyDemand,
       stock: r.currentStock,
-      coverage: dailyDemand > 0 ? r.currentStock / dailyDemand : null,
+      vendavel,
+      reserved,
+      inbound: Math.max(0, r.inboundUnits ?? 0),
+      ageDays: r.ageDays ?? null,
+      coverage: dailyDemand > 0 ? vendavel / dailyDemand : null,
     };
     const cur = byProduct.get(r.productId) ?? {
       description: r.description,
@@ -1227,21 +1456,42 @@ export function buildRebalance(
       .filter((s) => s.dailyDemand > 0 && (s.coverage as number) < minCover)
       .map((s) => ({
         ...s,
-        need: Math.max(0, Math.ceil(s.dailyDemand * cfg.targetCoverDays - s.stock)),
+        // `inbound` abate a necessidade: a peça que já saiu de outra loja
+        // ainda não está no estoque, mas está paga e a caminho. Sem isto o
+        // motor repete a mesma sugestão a cada rodada até a transferência ser
+        // confirmada, e quem recebe leva duas.
+        need: Math.max(0, Math.ceil(s.dailyDemand * cfg.targetCoverDays - s.vendavel - s.inbound)),
       }))
       .filter((s) => s.need > 0)
       .sort((a, b) => (a.coverage as number) - (b.coverage as number));
 
     const donors = p.stores
-      .map((s) => ({
-        ...s,
-        spare:
+      .map((s) => {
+        // Carência: peça recém-chegada na ORIGEM não doa. Mesma régua da
+        // liquidação (`newProductDays`) e mesmo contrato de fail-open — sem
+        // idade conhecida, a peça NÃO é nova. Fechar aqui esvaziaria o plano
+        // inteiro em qualquer base sem data (ver planning.test.ts).
+        const recemChegada = s.ageDays != null && s.ageDays < cfg.newProductDays;
+        // O reservado está fisicamente na prateleira mas já tem dono: outra
+        // transferência pendente. Oferecer de novo é prometer duas vezes.
+        const livre = s.vendavel;
+        const excedente =
           s.dailyDemand === 0
-            ? s.stock // parado: pode doar tudo
-            : Math.floor(s.stock - s.dailyDemand * cfg.targetCoverDays), // com giro: só o excedente
-      }))
+            ? livre // parado: em tese tudo, menos o piso de vitrine abaixo
+            : Math.floor(livre - s.dailyDemand * cfg.targetCoverDays); // com giro: só o excedente
+        // Piso de vitrine como TETO da doação, não como parcela somada ao
+        // alvo: quem tem giro continua doando o mesmo excedente de antes, e
+        // quem está parado passa a guardar o mostruário.
+        const teto = livre - cfg.donorFloorUnits;
+        return { ...s, livre, doado: 0, spare: recemChegada ? 0 : Math.min(excedente, teto) };
+      })
       .filter((s) => s.spare > 0)
       .sort((a, b) => b.spare - a.spare);
+
+    // As linhas desta peça, com a doadora de cada uma: `fromRemainingUnits` e
+    // as frases que o citam só fecham depois de TODAS as receptoras, porque o
+    // número é o pior caso — ver o campo em `RebalanceSuggestion`.
+    const doProduto: { sug: RebalanceSuggestion; donor: (typeof donors)[number] }[] = [];
 
     for (const receiver of receivers) {
       let need = receiver.need;
@@ -1251,6 +1501,7 @@ export function buildRebalance(
         const qty = Math.min(need, donor.spare);
         need -= qty;
         donor.spare -= qty;
+        donor.doado += qty;
 
         const stockout = (receiver.coverage as number) < minCover ? Math.floor(receiver.coverage as number) : null;
         const donorParado = donor.dailyDemand === 0;
@@ -1268,7 +1519,7 @@ export function buildRebalance(
         const volume = Math.min(1, recvRate / 30);
         const spareRatio = donorParado ? 1 : Math.min(1, donor.spare / Math.max(1, qty));
         const conf = Math.round(Math.min(0.97, Math.max(0.3, 0.4 + 0.4 * volume + 0.2 * spareRatio)) * 100);
-        out.push({
+        const sug: RebalanceSuggestion = {
           productId,
           description: p.description,
           brand: p.brand,
@@ -1278,13 +1529,30 @@ export function buildRebalance(
           toStoreId: receiver.storeId,
           toStoreName: receiver.storeName,
           quantity: qty,
+          fromRemainingUnits: 0, // fechado abaixo, quando o total doado é sabido
           fromCoverageDays: donor.coverage === null ? null : round1(donor.coverage),
           toCoverageDays: receiver.coverage === null ? null : round1(receiver.coverage),
           stockoutInDays: stockout,
           reason: `Vende em ${receiver.storeName} (${fmtCover(receiver.coverage)}) e está ${donorSide}.`,
           friendlyReason: friendly,
           confidence: conf,
-        });
+        };
+        out.push(sug);
+        doProduto.push({ sug, donor });
+      }
+    }
+
+    // Fecha o "fica com N" de cada linha desta peça, agora que o total doado
+    // por cada origem é sabido. O texto diz que é o piso porque o número só é
+    // verdade se todas as linhas forem aprovadas, e a tela aprova uma a uma —
+    // deixar isso subentendido foi como o número passou a mentir para mais.
+    for (const { sug, donor } of doProduto) {
+      const restante = Math.max(0, donor.livre - donor.doado);
+      const fromShort = donor.storeName.replace(/^.*—\s*/, '');
+      sug.fromRemainingUnits = restante;
+      sug.reason += ` Aprovando todas as sugestões desta peça, a origem fica com ${restante} un.`;
+      if (donor.dailyDemand === 0) {
+        sug.friendlyReason += ` Aprovando todas as sugestões desta peça, ${fromShort} ainda fica com ${restante} un. em vitrine.`;
       }
     }
   }
@@ -1297,6 +1565,9 @@ export function buildRebalance(
     stores.add(s.fromStoreId);
     stores.add(s.toStoreId);
   }
+  // As guardas saem da config da rede: `cfgFor` só varia `leadTimeDays` por
+  // fornecedor, e carência e piso de vitrine são régua única.
+  const cfgRede = cfgFor(null);
   return {
     days,
     summary: {
@@ -1305,6 +1576,10 @@ export function buildRebalance(
       storesInvolved: stores.size,
     },
     rows: out,
+    guards: {
+      newProductDays: cfgRede.newProductDays,
+      donorFloorUnits: cfgRede.donorFloorUnits,
+    },
   };
 }
 
@@ -1324,7 +1599,31 @@ export interface PurchaseOrderItem {
   stockoutInDays: number | null;
   /** Confiabilidade da sugestão de compra deste item (0–100). */
   confidence: number;
+  /**
+   * Como dividir esta compra entre as lojas. Ausente quando o chamador não
+   * passou as posições por loja — e ausente NÃO é "dividir igual": é "esta
+   * resposta não foi calculada", que a tela precisa poder dizer.
+   */
+  distribution?: ItemDistribution;
 }
+
+/** Rateio de um item de pedido entre as lojas, pronto para a tela. */
+export interface ItemDistribution {
+  basis: NeedBasis;
+  /** O que a base significa em palavras, para a tela não ter que traduzir. */
+  basisLabel: string;
+  /** Necessidade CRUA somada (un.): a carga cobre a falta da rede ou não. */
+  totalNeed: number;
+  rows: NeedSplitRow[];
+  /** Unidades que nenhuma loja reclamou — ficam para divisão manual. */
+  unassigned: number;
+}
+
+export const NEED_BASIS_LABEL: Record<NeedBasis, string> = {
+  necessidade: 'falta até a cobertura-alvo de cada loja — venda e estoque na mesma conta',
+  participacao:
+    'participação de cada loja nas vendas — nenhuma loja está abaixo do alvo (ou a peça não tem histórico)',
+};
 
 export interface PurchaseOrder {
   /** Fornecedor (campo "marca" do ERP); itens sem fornecedor ficam em "Sem fornecedor". */
@@ -1364,6 +1663,16 @@ export function buildPurchaseOrders(
   /** Opcional: fornecedor canônico por plano (catálogo de marcas). Sem ele,
    *  agrupa pelo campo do ERP (p.brand). */
   resolveSupplier?: (p: ProductPlan) => string | null,
+  /**
+   * Opcional: posições por loja (venda no período + estoque atual) de cada
+   * productId. Com elas, cada item sai da função já rateado entre as lojas.
+   *
+   * É o QUARTO parâmetro por obrigação, não por gosto: `resolveSupplier` já é
+   * passado posicionalmente como terceiro em chamadas que existem (inclusive
+   * em teste), e há chamadas com dois argumentos. Empurrar as posições para
+   * antes dele quebraria todas em silêncio — o tipo de quebra que compila.
+   */
+  positions?: Map<string, FairSplitInput[]>,
 ): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
@@ -1383,8 +1692,33 @@ export function buildPurchaseOrders(
         stockoutInDays: null,
       } as PurchaseOrder);
 
-    const productBrand = extractBrand(p.description);
+    // Com a CATEGORIA. Sem ela, `extractBrand` extrai de tudo — e a lista de
+    // grifes de um pedido de lentes vinha com "MULTIGRESSIV MONOFOCAIS",
+    // "HILUX LENTES" e companhia, que são LINHAS de produto, não grifes.
+    //
+    // Aqui é `extractBrand` e não `analysisBrand` de propósito: `brands` é a
+    // etiqueta de grifes do pedido, e o pedido JÁ está agrupado por
+    // fornecedor. Cair no fornecedor como reserva repetiria o cabeçalho
+    // dentro da própria linha, como se "ZEISS" fosse a grife de uma lente
+    // ZEISS. Sem grife reconhecível, melhor não etiquetar.
+    const productBrand = extractBrand(p.description, p.category);
     if (productBrand && !order.brands.includes(productBrand)) order.brands.push(productBrand);
+
+    // O rateio usa a MESMA janela `days` das vendas do plano: a necessidade é
+    // alvo de cobertura menos estoque, e o alvo sai da demanda diária — que só
+    // é comparável entre lojas se todas foram medidas no mesmo período.
+    //
+    // ARMADILHA MEDIDA: a demanda do rateio é a média chata (unitsSold ÷ days),
+    // enquanto `p.suggestedQty` veio de `forecastDemand`, com peso na janela
+    // recente e índice sazonal. Os dois não batem, e não deveriam: no dado real
+    // vimos um item comprar 20 un. contra um `totalNeed` de 2,5. Previsão por
+    // LOJA exigiria histórico mensal loja a loja, e o rateio precisa só de
+    // PESOS RELATIVOS — que a média preserva. O que não se pode é ler
+    // `totalNeed` como "o quanto a rede precisa comprar": ele é um piso de
+    // média, e por isso aparece na tela AO LADO da quantidade, nunca no lugar.
+    const posicoes = positions?.get(p.productId);
+    const rateio = posicoes ? splitByNeed(posicoes, p.suggestedQty, days) : null;
+
     order.items.push({
       productId: p.productId,
       description: p.description,
@@ -1396,6 +1730,17 @@ export function buildPurchaseOrders(
       orderByInDays: p.orderByInDays,
       stockoutInDays: p.stockoutInDays,
       confidence: p.confidence,
+      ...(rateio
+        ? {
+            distribution: {
+              basis: rateio.basis,
+              basisLabel: NEED_BASIS_LABEL[rateio.basis],
+              totalNeed: rateio.totalNeed,
+              rows: rateio.rows.filter((r) => r.suggestedQty > 0),
+              unassigned: rateio.unassigned,
+            },
+          }
+        : {}),
     });
     order.units += p.suggestedQty;
     order.total = round2(order.total + p.capital);
@@ -1598,6 +1943,53 @@ export function buildBrandMix(rows: BrandBannerInput[]): { banners: string[]; ro
   return { banners, rows: out };
 }
 
+// ─── Rateio de unidades inteiras: o núcleo dos maiores restos ────────────────
+
+/**
+ * Reparte `totalQty` unidades INTEIRAS entre pesos quaisquer pelo método dos
+ * maiores restos: cada peso leva a parte inteira da sua fatia exata, e o que
+ * sobra do arredondamento vai, uma a uma, para os maiores restos. A soma do
+ * resultado é EXATAMENTE `totalQty` — a única propriedade que importa quando o
+ * que se reparte é mercadoria física: unidade que evapora no arredondamento é
+ * estoque que ninguém procura.
+ *
+ * Mora aqui fora, e não dentro de `buildFairSplit`, porque a conta não tem
+ * nada a ver com vendas — ela reparte por QUALQUER peso. Enquanto ela estava
+ * presa lá dentro, rateio por participação e rateio por necessidade seriam
+ * duas implementações do mesmo arredondamento, e uma delas ia divergir.
+ *
+ * `tieBreak` recebe dois ÍNDICES e ordena o desempate entre restos iguais (o
+ * caso de lojas com a mesma participação). Sem ele o desempate cai na ordem de
+ * entrada, que é a ordem em que o banco devolveu as linhas — e o mesmo pedido
+ * rateado duas vezes daria respostas diferentes.
+ *
+ * Peso negativo vira 0: devolução lançada como venda líquida negativa existe
+ * no dado real, e um peso negativo inverteria o rateio inteiro.
+ */
+export function largestRemainders(
+  weights: number[],
+  totalQty: number,
+  tieBreak?: (i: number, j: number) => number,
+): number[] {
+  const qty = Math.max(0, Math.trunc(totalQty));
+  const pesos = weights.map((w) => (Number.isFinite(w) && w > 0 ? w : 0));
+  const total = pesos.reduce((a, b) => a + b, 0);
+  if (qty === 0 || total === 0) return pesos.map(() => 0);
+
+  const exact = pesos.map((w) => (qty * w) / total);
+  const base = exact.map(Math.floor);
+  let rest = qty - base.reduce((a, b) => a + b, 0);
+  const order = pesos
+    .map((_, i) => i)
+    .sort((i, j) => exact[j] - base[j] - (exact[i] - base[i]) || (tieBreak ? tieBreak(i, j) : 0));
+  for (const i of order) {
+    if (rest <= 0) break;
+    base[i] += 1;
+    rest -= 1;
+  }
+  return base;
+}
+
 // ─── Modo Feira: rateio de compra por loja (feedback 08, MVP) ────────────────
 
 export interface FairSplitInput {
@@ -1605,7 +1997,12 @@ export interface FairSplitInput {
   storeName: string;
   /** Unidades da marca/grupo vendidas pela loja no período. */
   unitsSold: number;
-  /** Estoque atual da marca/grupo na loja (contexto, não entra no rateio). */
+  /**
+   * Estoque atual da loja na chave rateada. É contexto em `buildFairSplit`
+   * (que só olha participação) e é METADE DA CONTA em `splitByNeed` — a mesma
+   * entrada serve às duas portas justamente para que trocar de régua não exija
+   * trocar de consulta.
+   */
   stockUnits: number;
 }
 
@@ -1617,51 +2014,167 @@ export interface FairSplitRow extends FairSplitInput {
 /**
  * Rateia uma compra (lançamentos de feira, sem histórico próprio) entre as
  * lojas proporcionalmente à participação de cada uma nas VENDAS da marca ou
- * do grupo escolhido. Arredondamento pelo método dos maiores restos — a soma
- * das sugestões é EXATAMENTE totalQty. Loja sem venda da marca não recebe.
+ * do grupo escolhido. Loja sem venda da marca não recebe.
+ *
+ * Casca fina sobre `largestRemainders`: o que sobrou aqui é a REGRA (peso =
+ * venda) e a apresentação (participação em %). Continua existindo como porta
+ * própria porque o Modo Feira pergunta outra coisa — "quem vende mais?" — e
+ * essa pergunta tem resposta legítima quando o gestor digita marca e
+ * quantidade à mão, sem posição de estoque nenhuma na tela.
  */
 export function buildFairSplit(
   rows: FairSplitInput[],
   totalQty: number,
 ): { totalQty: number; totalSold: number; rows: FairSplitRow[] } {
   // Devoluções podem vir como venda líquida negativa; participação nunca é
-  // negativa — clampa em 0 para o rateio dos maiores restos não se inverter.
-  rows = rows.map((r) => ({ ...r, unitsSold: Math.max(0, r.unitsSold) }));
-  const totalSold = rows.reduce((a, r) => a + r.unitsSold, 0);
+  // negativa — clampa em 0 antes de somar, para o total não encolher.
+  const limpas = rows.map((r) => ({ ...r, unitsSold: Math.max(0, r.unitsSold) }));
+  const totalSold = limpas.reduce((a, r) => a + r.unitsSold, 0);
   const qty = Math.max(0, Math.trunc(totalQty));
   if (qty === 0 || totalSold === 0) {
     return {
       totalQty: qty,
       totalSold,
-      rows: rows
+      rows: limpas
         .map((r) => ({ ...r, sharePct: 0, suggestedQty: 0 }))
         .sort((a, b) => b.unitsSold - a.unitsSold || a.storeName.localeCompare(b.storeName, 'pt-BR')),
     };
   }
 
-  const exact = rows.map((r) => (qty * r.unitsSold) / totalSold);
-  const base = exact.map(Math.floor);
-  let rest = qty - base.reduce((a, b) => a + b, 0);
-  // Maiores restos primeiro (empate: mais vendas, depois nome).
-  const order = rows
-    .map((r, i) => ({ i, frac: exact[i] - base[i], sold: r.unitsSold, name: r.storeName }))
-    .sort((a, b) => b.frac - a.frac || b.sold - a.sold || a.name.localeCompare(b.name, 'pt-BR'));
-  for (const o of order) {
-    if (rest <= 0) break;
-    base[o.i] += 1;
-    rest -= 1;
-  }
+  // Empate de resto: mais vendas primeiro, depois nome.
+  const cotas = largestRemainders(
+    limpas.map((r) => r.unitsSold),
+    qty,
+    (i, j) =>
+      limpas[j].unitsSold - limpas[i].unitsSold ||
+      limpas[i].storeName.localeCompare(limpas[j].storeName, 'pt-BR'),
+  );
 
   return {
     totalQty: qty,
     totalSold,
-    rows: rows
+    rows: limpas
       .map((r, i) => ({
         ...r,
         sharePct: round2((r.unitsSold / totalSold) * 100),
-        suggestedQty: base[i],
+        suggestedQty: cotas[i],
       }))
       .sort((a, b) => b.suggestedQty - a.suggestedQty || a.storeName.localeCompare(b.storeName, 'pt-BR')),
+  };
+}
+
+// ─── Rateio por NECESSIDADE (o que o cliente pediu de fato) ──────────────────
+
+/** De qual peso saiu o rateio: falta até o alvo, ou participação de reserva. */
+export type NeedBasis = 'necessidade' | 'participacao';
+
+export interface NeedSplitRow extends FairSplitInput {
+  /** Falta até o alvo — o peso do rateio quando a base é `necessidade`. */
+  needUnits: number;
+  /**
+   * O peso que DE FATO gerou `sharePct`: a falta, quando a base é a
+   * necessidade; o peso da reserva, quando não é.
+   *
+   * Existe porque na reserva as duas coisas divergem, e a tela mentia por
+   * omissão: `unitsSold` é a venda do PRÓPRIO SKU — zero num lançamento —
+   * enquanto o percentual vinha do peso da escada (grife/categoria/rede). As
+   * colunas que existem para EXPLICAR o número final apareciam todas em zero
+   * ao lado de "mandar 28". Coluna que não fala da mesma base que o percentual
+   * é pior que coluna nenhuma: convida a conferir uma conta que não fecha.
+   */
+  weightUnits: number;
+  /** Participação da loja na base EFETIVAMENTE usada (%). */
+  sharePct: number;
+  suggestedQty: number;
+}
+
+export interface NeedSplit {
+  basis: NeedBasis;
+  totalQty: number;
+  /**
+   * Necessidade somada, CRUA — em unidades, antes de virar percentual. É o
+   * número que responde a pergunta que o percentual esconde: a carga que
+   * chegou COBRE a falta da rede, ou é um cobertor curto sendo repartido?
+   * Normalizado, 100% do rateio parece sempre a mesma coisa.
+   */
+  totalNeed: number;
+  rows: NeedSplitRow[];
+  /** Unidades que nenhum peso reclamou — declaradas, nunca evaporadas. */
+  unassigned: number;
+}
+
+/**
+ * Rateia uma carga entre as lojas pela NECESSIDADE de cada uma: quanto falta,
+ * em unidades, para a loja chegar à cobertura-alvo da peça.
+ *
+ * Por que não participação nas vendas, que era o que estava aqui antes: o
+ * pedido do cliente é "melhor chance de venda E OTIMIZAÇÃO DO ESTOQUE", e são
+ * duas perguntas. Participação responde só a primeira — quem vende mais leva
+ * mais, mesmo já abarrotada; a loja que vende metade mas está rompendo hoje
+ * recebe metade. A necessidade responde as duas de uma vez, porque `alvo −
+ * estoque` já traz a venda dentro (o alvo É demanda × dias de cobertura) e
+ * desconta o que a loja já tem na prateleira.
+ *
+ * RESERVA: quando ninguém precisa de nada — soma das faltas zero, seja porque
+ * a peça é lançamento sem histórico, seja porque a rede inteira está acima do
+ * alvo — cai na participação. A carga foi comprada e vai chegar de qualquer
+ * jeito; melhor repartir por quem vende do que empilhar na retaguarda. O campo
+ * `basis` DECLARA qual das duas réguas valeu, porque as duas têm precisões
+ * muito diferentes e apresentá-las com a mesma cara venderia certeza que não
+ * temos.
+ *
+ * `fallbackWeight` existe para o chamador que tem uma participação MELHOR do
+ * que a venda da própria peça — na aba de compras é a escada grife → categoria
+ * → rede, que sabe onde Ray-Ban sai mesmo quando o modelo é lançamento. Sem
+ * ele, a reserva é a venda da própria peça.
+ */
+export function splitByNeed(
+  stores: FairSplitInput[],
+  totalQty: number,
+  days: number,
+  cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
+  fallbackWeight?: (row: FairSplitInput) => number,
+): NeedSplit {
+  const qty = Math.max(0, Math.trunc(totalQty));
+  const linhas = stores.map((r) => {
+    const vendido = Math.max(0, r.unitsSold);
+    const estoque = Math.max(0, r.stockUnits);
+    const demanda = days > 0 ? vendido / days : 0;
+    const alvo = demanda * cfg.targetCoverDays;
+    return { ...r, unitsSold: vendido, stockUnits: estoque, demanda, alvo, falta: Math.max(0, alvo - estoque) };
+  });
+
+  const necessidadeCrua = linhas.reduce((a, l) => a + l.falta, 0);
+  const basis: NeedBasis = necessidadeCrua > 0 ? 'necessidade' : 'participacao';
+  const pesos = linhas.map((l) =>
+    basis === 'necessidade' ? l.falta : Math.max(0, fallbackWeight ? fallbackWeight(l) : l.unitsSold),
+  );
+  const totalPeso = pesos.reduce((a, b) => a + b, 0);
+  const cotas = largestRemainders(
+    pesos,
+    qty,
+    (i, j) => pesos[j] - pesos[i] || linhas[i].storeName.localeCompare(linhas[j].storeName, 'pt-BR'),
+  );
+
+  return {
+    basis,
+    totalQty: qty,
+    totalNeed: round1(necessidadeCrua),
+    rows: linhas
+      .map((l, i) => ({
+        storeId: l.storeId,
+        storeName: l.storeName,
+        unitsSold: l.unitsSold,
+        stockUnits: l.stockUnits,
+        needUnits: round1(l.falta),
+        weightUnits: round1(pesos[i]),
+        sharePct: totalPeso > 0 ? round2((pesos[i] / totalPeso) * 100) : 0,
+        suggestedQty: cotas[i],
+      }))
+      .sort((a, b) => b.suggestedQty - a.suggestedQty || a.storeName.localeCompare(b.storeName, 'pt-BR')),
+    // Sobra só quando nenhum peso reclamou nada (falta zero E participação
+    // zero) — rede recém-aberta, ou peça que ninguém nunca vendeu.
+    unassigned: qty - cotas.reduce((a, b) => a + b, 0),
   };
 }
 
@@ -1752,6 +2265,10 @@ export function abcFromItems(items: AbcItem[], days: number, dimension: AbcDimen
 
 export type DecisionType = 'COMPRA' | 'REMANEJAMENTO' | 'LIQUIDACAO';
 export type DecisionPriority = 'ALTA' | 'MEDIA' | 'BAIXA';
+
+/** Os conjuntos fechados, para a rota validar o que vem em `?tipo=`/`?prioridade=`. */
+export const DECISION_TYPES: readonly DecisionType[] = ['COMPRA', 'REMANEJAMENTO', 'LIQUIDACAO'];
+export const DECISION_PRIORITIES: readonly DecisionPriority[] = ['ALTA', 'MEDIA', 'BAIXA'];
 
 export interface DecisionCard {
   id: string;
@@ -1857,11 +2374,179 @@ export interface BatchInfo {
   simulated?: boolean;
 }
 
+/**
+ * Recorte da resposta quando ela vem paginada.
+ *
+ * `total` é o tamanho da VISTA (o que sobrou dos filtros de vista), não o do
+ * quadro — esse continua em `summary.total`. Os dois juntos são o que permite
+ * à tela dizer "60 de 1.203 nesta grife" sem baixar os 1.203.
+ */
+export interface PaginaDaResposta {
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
 export interface DecisionBoard {
   summary: DecisionSummary;
   cards: DecisionCard[];
   /** Lote que gerou estes cards. Ausente enquanto o cron nunca rodou. */
   batch?: BatchInfo;
+  /**
+   * Grifes presentes no quadro INTEIRO. O seletor de grife da tela sai daqui:
+   * montá-lo a partir de `cards` daria as grifes da PÁGINA, e escolher uma
+   * grife que não coubesse na primeira página devolveria uma tela vazia.
+   */
+  grifes?: string[];
+  /** Recorte desta resposta. Ausente quando o quadro vem inteiro. */
+  pagina?: PaginaDaResposta;
+}
+
+/**
+ * Filtro de VISTA do quadro: recorta quais cards a tela mostra, sem tocar em
+ * NENHUM número do resumo — que continua sendo o do quadro inteiro.
+ *
+ * `loja` tem nome próprio de propósito. O escopo de cálculo do motor entra pelo
+ * `storeId` (que passa por `scopedStoreId` e muda a pergunta: a compra deixa de
+ * ser de rede). Aqui é só "quais cards tocam esta loja" — outra coisa, e
+ * confundir as duas trocaria silenciosamente a conta que o gestor está lendo.
+ */
+export interface FiltroDeVista {
+  tipo?: DecisionType;
+  prioridade?: DecisionPriority;
+  loja?: string;
+  grife?: string;
+}
+
+/**
+ * Lojas que um card TOCA. Remanejamento tem origem e destino; liquidação tem a
+ * loja de escoamento e a de onde a peça sai. Compra não tem loja — comprar é
+ * decisão de rede, e a divisão vem depois, no recebimento.
+ */
+export function lojasDoCard(c: DecisionCard): string[] {
+  return [c.fromStoreId, c.toStoreId, c.outletStoreId, c.outletFromStoreId].filter(
+    (x): x is string => !!x,
+  );
+}
+
+/** Aplica o filtro de vista. Sem nenhum critério, devolve a lista recebida. */
+export function filtrarVista(cards: DecisionCard[], f: FiltroDeVista): DecisionCard[] {
+  if (!f.tipo && !f.prioridade && !f.loja && !f.grife) return cards;
+  return cards.filter(
+    (c) =>
+      (!f.tipo || c.type === f.tipo) &&
+      (!f.prioridade || c.priority === f.prioridade) &&
+      (!f.loja || lojasDoCard(c).includes(f.loja)) &&
+      (!f.grife || c.brandLabel === f.grife),
+  );
+}
+
+/** Grifes distintas de um conjunto de cards, em ordem alfabética pt-BR. */
+export function grifesDoQuadro(cards: readonly DecisionCard[]): string[] {
+  const set = new Set<string>();
+  for (const c of cards) if (c.brandLabel) set.add(c.brandLabel);
+  return [...set].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+/**
+ * Corta uma lista na página pedida (1-based) e declara o recorte.
+ *
+ * Vive aqui, e não em cada chamador, para que a API e a demo cortem com a mesma
+ * aritmética — é o que faz o teste da demo valer como prova sobre a API.
+ */
+export function paginar<T>(
+  itens: readonly T[],
+  page: number,
+  pageSize: number,
+  /**
+   * ÂNCORA: a chave do último item que o cliente já tem. Quando ela é
+   * encontrada, o corte começa logo DEPOIS dela, e não no deslocamento
+   * aritmético da página.
+   *
+   * O motivo é o defeito que o corte por deslocamento tem e que nenhum
+   * `page`/`pageSize` conserta: a lista MUDA entre um clique e o seguinte. O
+   * quadro é recalculado a cada pedido, e decidir um card o remove — todos os
+   * seguintes escorregam uma posição para trás. Com 60 por página, decidir um
+   * card da primeira página faz o antigo item 60 virar o 59, e o pedido da
+   * página 2 (deslocamento 60) devolve o antigo 61: o card 60 PULA, e some da
+   * tela até alguém recarregar. Quanto mais o gestor decide — que é o uso
+   * normal da Central — mais cards ele deixa de ver.
+   *
+   * A âncora ignora quanto a lista andou: o que importa é onde o cliente
+   * parou. Some do item repetido a lista já se defende (`juntarPaginas`
+   * deduplica por chave); do item pulado, não havia defesa.
+   *
+   * Sem âncora, ou com uma âncora que sumiu da lista (o próprio card que
+   * acabou de ser decidido, quando ele era o último da página), cai no
+   * deslocamento — o comportamento de sempre. É degradação, não erro: volta a
+   * poder pular, e é o melhor que dá para fazer sem o item de referência.
+   */
+  ancora?: { chave?: string; de: (item: T) => string },
+): { itens: T[]; pagina: PaginaDaResposta } {
+  const tamanho = Math.max(1, Math.trunc(pageSize) || 1);
+  const numero = Math.max(1, Math.trunc(page) || 1);
+
+  let inicio = (numero - 1) * tamanho;
+  if (ancora?.chave) {
+    const i = itens.findIndex((item) => ancora.de(item) === ancora.chave);
+    if (i >= 0) inicio = i + 1;
+  }
+  return {
+    itens: itens.slice(inicio, inicio + tamanho),
+    pagina: { page: numero, pageSize: tamanho, total: itens.length },
+  };
+}
+
+/**
+ * Máximo de itens que uma resposta paginada entrega, por mais que se peça.
+ *
+ * O teto existe porque a RESPOSTA é o recurso escasso — sem ele, `?pageSize=0`
+ * ou `?pageSize=999999` reconstroem o 503 que a paginação veio resolver.
+ *
+ * Mora aqui junto de `paginar`, e não na rota, porque a demo se declara espelho
+ * offline da API: enquanto o teto vivia só na rota, a demo servia 1.260 cards
+ * para um `?pageSize=100000` que contra a API devolve 1.000, e os testes que se
+ * apoiavam nesse número passavam verdes exatamente onde o contrato aperta.
+ * Espelho que não reflete o limite é pior que espelho nenhum.
+ */
+export const TETO_DE_CARDS = 1000;
+export const TETO_DE_LINHAS = 2000;
+
+/**
+ * Quanto cabe numa resposta quando a query não pede outra coisa.
+ *
+ * Ao lado do teto pelo mesmo motivo: são números do CONTRATO da resposta, e a
+ * demo precisa dos mesmos quatro para ser espelho de verdade. Enquanto viviam
+ * no serviço — que a web não pode importar, porque arrasta o Prisma junto — a
+ * demo os repetia à mão.
+ */
+export const CARDS_POR_PAGINA = 60;
+export const LINHAS_POR_PAGINA = 100;
+
+/**
+ * Saneia o `page`/`pageSize` que chegou pela query: página 1-based, tamanho
+ * entre 1 e `teto`, e o padrão da rota quando o valor falta ou é lixo.
+ *
+ * Uma implementação só, chamada pela rota e pela demo. Eram duas, e duas
+ * implementações de um mesmo corte só concordam enquanto alguém lembrar — foi
+ * assim que o teto ficou de fora do lado da demo.
+ */
+export function recortePedido(
+  bruto: { page?: unknown; pageSize?: unknown; apos?: unknown },
+  padrao: number,
+  teto: number,
+): { page: number; pageSize: number; apos?: string } {
+  const page = Math.trunc(Number(bruto.page));
+  const pageSize = Math.trunc(Number(bruto.pageSize));
+  // `apos` é a chave do último item que o cliente já tem — ver `paginar`.
+  // Chega como string da query; qualquer outra coisa é tratada como ausente.
+  const bruta = Array.isArray(bruto.apos) ? bruto.apos[0] : bruto.apos;
+  const apos = typeof bruta === 'string' && bruta.trim() !== '' ? bruta.trim() : undefined;
+  return {
+    page: Number.isFinite(page) && page > 0 ? page : 1,
+    pageSize: Number.isFinite(pageSize) && pageSize > 0 ? Math.min(pageSize, teto) : padrao,
+    apos,
+  };
 }
 
 /** Uma aparição de card, como o lote de geração registra. */
@@ -1869,6 +2554,41 @@ export interface CardHistory {
   cardId: string;
   firstSeenAt: Date;
   timesSeen: number;
+}
+
+/** Dias inteiros desde a primeira aparição (nunca negativo). */
+const idadeEmDias = (desde: Date, now: Date) =>
+  Math.max(0, Math.floor((now.getTime() - desde.getTime()) / 86_400_000));
+
+/** Quantos cards estrearam no lote e quantos passaram do SLA sem decisão. */
+export interface ContagemDeIdades {
+  novos: number;
+  atrasados: number;
+}
+
+/**
+ * Conta novos e atrasados de uma lista de cards, sem alocar nada.
+ *
+ * Existe separada de `annotateCardAges` porque o quadro passou a ser PAGINADO:
+ * a CONTAGEM tem que sair do conjunto inteiro e a ANOTAÇÃO só dos cards que vão
+ * na resposta. É a mesma regra ("novo" = apareceu uma vez; "atrasado" = idade
+ * acima do SLA) escrita uma vez só, para as duas não divergirem.
+ */
+export function contarIdades(
+  cards: readonly DecisionCard[],
+  history: ReadonlyMap<string, CardHistory>,
+  slaDays = 30,
+  now = new Date(),
+): ContagemDeIdades {
+  let novos = 0;
+  let atrasados = 0;
+  for (const c of cards) {
+    const h = history.get(c.id);
+    if (!h) continue;
+    if (h.timesSeen <= 1) novos++;
+    if (idadeEmDias(h.firstSeenAt, now) > slaDays) atrasados++;
+  }
+  return { novos, atrasados };
 }
 
 /**
@@ -1879,6 +2599,13 @@ export interface CardHistory {
  * Card que reaparece há semanas sem decisão é o sintoma central que o painel
  * de governança precisa mostrar — sem isso, um card de 60 dias e um de ontem
  * são visualmente idênticos.
+ *
+ * `contagem` é o antídoto contra uma mentira silenciosa: sem ele, os "novos" e
+ * "atrasados" do resumo saem dos cards que esta função RECEBE. Passe uma
+ * página de 60 e o resumo diria "4 novos" onde o quadro tem 800 — número
+ * plausível, tela idêntica, errado. Quem pagina calcula a contagem sobre o
+ * conjunto inteiro (`contarIdades`) e a entrega aqui pronta. Ausente, deriva
+ * como sempre derivou — é o que mantém quem chama com o quadro completo.
  */
 export function annotateCardAges(
   board: DecisionBoard,
@@ -1886,6 +2613,7 @@ export function annotateCardAges(
   batch: BatchInfo | undefined,
   slaDays = 30,
   now = new Date(),
+  contagem?: ContagemDeIdades,
 ): DecisionBoard {
   if (history.size === 0) return { ...board, batch };
 
@@ -1894,7 +2622,7 @@ export function annotateCardAges(
   const cards = board.cards.map((c) => {
     const h = history.get(c.id);
     if (!h) return c;
-    const ageDays = Math.max(0, Math.floor((now.getTime() - h.firstSeenAt.getTime()) / 86_400_000));
+    const ageDays = idadeEmDias(h.firstSeenAt, now);
     // "Novo" = apareceu só uma vez, ou seja, estreou no lote mais recente.
     const isNew = h.timesSeen <= 1;
     const isOverdue = ageDays > slaDays;
@@ -1903,7 +2631,12 @@ export function annotateCardAges(
     return { ...c, firstSeenAt: h.firstSeenAt.toISOString(), ageDays, isNew, isOverdue };
   });
 
-  return { summary: { ...board.summary, novos, atrasados }, cards, batch };
+  return {
+    ...board,
+    summary: { ...board.summary, novos: contagem?.novos ?? novos, atrasados: contagem?.atrasados ?? atrasados },
+    cards,
+    batch,
+  };
 }
 
 const PRIORITY_RANK: Record<DecisionPriority, number> = { ALTA: 0, MEDIA: 1, BAIXA: 2 };
@@ -2350,6 +3083,22 @@ export function buildDecisionCards(
     });
   }
 
+  return finalizarBoard(cards, decidedIds);
+}
+
+/**
+ * A CAUDA do quadro: tira os cards já decididos, ordena por prioridade e
+ * impacto e conta o resumo. Está separada de `buildDecisionCards` porque o
+ * serviço monta os cards UMA vez (em `generateCards`, que precisa da foto
+ * completa para o lote) e depois precisa do quadro em aberto sobre esses
+ * MESMOS cards. Enquanto isto vivia só dentro de `buildDecisionCards`, a rota
+ * construía o lote inteiro, jogava fora e reconstruía do zero para chegar
+ * exatamente ao mesmo lugar (ver a medição em `decisionBoard`).
+ */
+export function finalizarBoard(
+  cards: DecisionCard[],
+  decidedIds?: ReadonlySet<string>,
+): DecisionBoard {
   const generated = cards.length;
   const open = decidedIds && decidedIds.size > 0 ? cards.filter((c) => !decidedIds.has(c.id)) : cards;
 

@@ -117,10 +117,40 @@ async function createMovementIn(input: CreateMovementInput, actor: Actor, db: Db
 
   const status = decideInitialStatus(input, actor);
 
-  // Só valida saldo quando a movimentação já vai reservar/efetivar agora.
-  if (input.fromStoreId && status !== 'REQUESTED') {
+  // Valida saldo em TODA saída, inclusive na solicitação que ainda espera
+  // aprovação.
+  //
+  // Antes a solicitação passava sem conferência, com o argumento de que ela não
+  // reserva nada — o ADMIN olharia antes de aprovar. Esse argumento morreu
+  // quando o plano de remanejamento passou a contar a solicitação como saldo
+  // comprometido na origem e como unidade a caminho no destino: uma quantidade
+  // que ninguém confere passou a APAGAR o par (produto, loja) do plano da rede
+  // inteira, sem aprovação de ninguém.
+  //
+  // Medido: um gestor de loja criava uma solicitação de 1.000 unidades numa
+  // loja que tem 12 — aceita, sem erro — e as sugestões daquele produto sumiam
+  // da origem e do destino até alguém aprovar ou rejeitar. Errava para o lado
+  // seguro (sugeria de menos, nunca mandava em dobro), mas desligar o
+  // remanejamento de um produto na rede não pode ser efeito colateral de um
+  // número que ninguém validou.
+  //
+  // O `available` de uma REQUESTED é o mesmo de qualquer outra: pedir mais do
+  // que existe nunca é pedido legítimo.
+  if (input.fromStoreId) {
     await lockStockPosition(db, input.fromStoreId, input.productId);
-    const available = await availableAt(input.fromStoreId, input.productId, db);
+    // `availableAt` desconta `StockItem.reserved`, e `recomputeReserved` só
+    // soma as saídas PENDING — as REQUESTED não entram lá. Sem descontá-las
+    // aqui, a conferência é feita uma a uma contra o mesmo saldo: três
+    // solicitações de 12 unidades numa loja de 12 passariam todas, cada uma
+    // "cabendo" sozinha. E o plano da rede soma as três, chega a zero livre e
+    // apaga o par (produto, loja) — que é exatamente o abuso que esta trava
+    // veio impedir.
+    const solicitado = await db.inventoryMovement.aggregate({
+      where: { status: 'REQUESTED', type: 'TRANSFER', fromStoreId: input.fromStoreId, productId: input.productId },
+      _sum: { quantity: true },
+    });
+    const available =
+      (await availableAt(input.fromStoreId, input.productId, db)) - (solicitado._sum.quantity ?? 0);
     if (input.quantity > available) {
       throw badRequest(
         `Saldo insuficiente na origem (disponível: ${available}, solicitado: ${input.quantity}).`,

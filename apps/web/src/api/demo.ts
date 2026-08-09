@@ -9,6 +9,7 @@
  */
 import {
   analysisBrand,
+  normBrandKey,
   abcFromItems,
   analyzeProduct,
   buildCommercialStrategy,
@@ -26,7 +27,19 @@ import {
   buildSuggestions,
   computeCoverage,
   computeStoreCoverage,
+  contarIdades,
+  filtrarVista,
+  grifesDoQuadro,
+  paginar,
+  recortePedido,
+  DECISION_PRIORITIES,
+  DECISION_TYPES,
   DEFAULT_PLANNING_CONFIG,
+  RECOMENDACOES,
+  CARDS_POR_PAGINA,
+  LINHAS_POR_PAGINA,
+  TETO_DE_CARDS,
+  TETO_DE_LINHAS,
   type AbcItem,
   type BrandBannerInput,
   type FairSplitInput,
@@ -237,7 +250,17 @@ const demoLeadTimes = new Map<string, number>([
 // Grifes fora do mix atual da rede (feedback 6.0 · item 03). Começa vazia de
 // propósito: é uma declaração comercial, e inventar uma na demonstração seria
 // mostrar ao cliente uma decisão que ele não tomou.
+/**
+ * Grifes marcadas como fora do mix na demonstração, pela CHAVE NORMALIZADA — a
+ * mesma régua da API (`normBrandKey`). Guardar a string literal da tela repetia
+ * aqui o defeito que a produção acabou de corrigir: marcar por uma forma e
+ * desmarcar por outra deixava a marcação presa, sem erro nenhum.
+ */
 const demoForaDoMix = new Set<string>();
+
+/** A grife está fora do mix? Aceita qualquer forma do nome. */
+const foraDoMixDemo = (grife: string | null) =>
+  grife != null && demoForaDoMix.has(normBrandKey(grife));
 
 // Histórico de pedidos de compra (enviado/recebido) da demo
 interface DemoOrderRecord {
@@ -1327,6 +1350,43 @@ function demoCardAge(cardId: string): { firstSeenAt: Date; timesSeen: number } {
   return { firstSeenAt: d, timesSeen: ageDays === 0 ? 1 : 1 + ageDays };
 }
 
+/**
+ * Idade simulada da peça NAQUELA loja, em dias.
+ *
+ * A tela de Planejamento declara, a partir de `plan.guards`, que peça com
+ * menos de 45 dias na loja não é remanejada. A demonstração alimentava o motor
+ * sem idade nenhuma, caía no fail-open e remanejava peça de qualquer idade: a
+ * nota anunciava uma trava que o motor da demo não aplicava — o pior defeito
+ * possível numa tela feita justamente para mostrar COMO o sistema decide.
+ *
+ * Hash estável por (loja, produto), como em `demoCardAge`, para a idade não
+ * mudar entre recargas. Cerca de 1 em cada 8 posições cai dentro da carência:
+ * o bastante para a trava aparecer em tela, pouco o bastante para a
+ * demonstração continuar tendo o que sugerir.
+ */
+export function demoIdadeNaLoja(storeId: string, productId: string): number {
+  const s = cardSeed(`IDADE|${storeId}|${productId}`);
+  return s < 12 ? 4 + s : 90 + s * 3;
+}
+
+/** Transferências ainda não efetivadas, somadas por (loja, produto). */
+function transferenciasEmAberto() {
+  const saindo = new Map<string, number>();
+  const chegando = new Map<string, number>();
+  for (const mv of movements) {
+    if (mv.type !== 'TRANSFER') continue;
+    if (!['REQUESTED', 'PENDING'].includes(mv.status as string)) continue;
+    const qtd = Number(mv.quantity) || 0;
+    const productId = (mv.product as { id: string } | undefined)?.id;
+    if (!productId) continue;
+    const de = (mv.fromStore as { id: string } | null)?.id;
+    const para = (mv.toStore as { id: string } | null)?.id;
+    if (de) saindo.set(key(de, productId), (saindo.get(key(de, productId)) ?? 0) + qtd);
+    if (para) chegando.set(key(para, productId), (chegando.get(key(para, productId)) ?? 0) + qtd);
+  }
+  return { saindo, chegando };
+}
+
 // ─── Roteador ────────────────────────────────────────────────────────────────
 
 export interface DemoRequest {
@@ -1339,6 +1399,32 @@ export interface DemoRequest {
 
 /** Colapsa um param que deveria ser único (1º valor quando vier array). */
 const one = (v?: string | string[]) => (Array.isArray(v) ? v[0] : v);
+
+/** Valor de query só é aceito quando está no conjunto conhecido (como na API). */
+const umDe = <T extends string>(v: unknown, aceitos: readonly T[]): T | undefined =>
+  aceitos.includes(v as T) ? (v as T) : undefined;
+
+/**
+ * `page` e `pageSize` da query, saneados pela MESMA função da rota — teto
+ * incluído. Devolve na ordem em que `paginar` os recebe, para o chamador não
+ * poder trocar os dois de lugar.
+ *
+ * A demo tinha um saneamento próprio, e ele não tinha teto: `?pageSize=100000`
+ * devolvia os 1.260 cards aqui e 1.000 contra a API. Um espelho cego no eixo
+ * que a mudança introduziu deixa os testes verdes justamente onde o contrato
+ * aperta — e ainda faz o "Ver mais" da demonstração chegar a um fim que a tela
+ * de produção não alcança.
+ */
+const recorte = (
+  params: Record<string, string | string[] | undefined>,
+  padrao: number,
+  teto: number,
+): { page: number; pageSize: number; apos?: string } =>
+  recortePedido(
+    { page: one(params.page), pageSize: one(params.pageSize), apos: one(params.apos) },
+    padrao,
+    teto,
+  );
 
 export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest): unknown {
   const m = method.toUpperCase();
@@ -1734,6 +1820,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           unitPrice: prod.price,
           costEstimated: prod.cost == null,
           onOrderQty: onOrderQty(prod.id),
+          // A marcação de "fora do mix" chega ao MOTOR, e não só à tabela da
+          // tela. Sem isto a demonstração era write-only: o gestor marcava a
+          // grife, a linha ficava marcada, e a aba de compras seguia sugerindo
+          // comprá-la — o oposto do que a plataforma promete, e justamente no
+          // ambiente em que a promessa é apresentada.
+          brandDiscontinued: foraDoMixDemo(analysisBrand(prod.description, prod.category, prod.brand)),
           demandHistory: demoDemandHistory(prod, scope, period),
         },
         period,
@@ -1765,10 +1857,45 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       const noRecorte = products.filter((p) => matchesProductGroup(p.category, planGroup)).length;
       r.summary.universo = Math.round(naRede * (noRecorte / products.length));
     }
-    return r;
+    // Mesmo recorte da API: `recomendacao` é filtro de vista, `page`/`pageSize`
+    // cortam as linhas, e o `summary` continua sendo do conjunto analisado.
+    const rec = umDe(one(params.recomendacao), RECOMENDACOES);
+    const vista = rec ? r.rows.filter((x) => x.recommendation === rec) : r.rows;
+    const corte = recorte(params, LINHAS_POR_PAGINA, TETO_DE_LINHAS);
+    const { itens, pagina } = paginar(vista, corte.page, corte.pageSize, {
+      chave: corte.apos,
+      de: (r) => r.productId,
+    });
+    return { ...r, rows: itens, pagina };
   }
-  if (url === '/planning/purchase-orders' && m === 'GET')
-    return buildPurchaseOrders(planningPlans(planDays, one(params.storeId), planGroup), planDays);
+  if (url === '/planning/purchase-orders' && m === 'GET') {
+    const lojaFiltrada = one(params.storeId);
+    const planos = planningPlans(planDays, lojaFiltrada, planGroup);
+    // Com filtro de loja NÃO há rateio, igual à API: `planningPlans` escopa
+    // venda e estoque àquela loja, então a quantidade já é dela. Repartir esse
+    // número entre a rede endereça mercadoria a lojas cuja demanda nem entrou
+    // na conta da compra.
+    //
+    // Posições por loja só das peças que viram item de pedido — o mesmo recorte
+    // que a API faz antes de consultar o banco, para a demo não montar 1.631
+    // vetores de loja para jogar fora 1.600 deles.
+    const posicoes = new Map<string, FairSplitInput[]>();
+    if (!lojaFiltrada) {
+      for (const p of planos) {
+        if (p.recommendation !== 'BUY' || p.suggestedQty <= 0) continue;
+        posicoes.set(
+          p.productId,
+          stores.map((s) => ({
+            storeId: s.id,
+            storeName: s.name,
+            unitsSold: soldQty.get(key(s.id, p.productId)) ?? 0,
+            stockUnits: stockQty.get(key(s.id, p.productId)) ?? 0,
+          })),
+        );
+      }
+    }
+    return buildPurchaseOrders(planos, planDays, undefined, lojaFiltrada ? undefined : posicoes);
+  }
   if (url === '/planning/purchase-orders' && m === 'POST') {
     const items = (body.items ?? []) as DemoOrderRecord['items'];
     const leadTimeDays = Number(body.leadTimeDays) || 14;
@@ -1811,22 +1938,47 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
   }
   const rebalanceRows = () => {
     const inputs: StoreProductInput[] = [];
+    // Idade, reserva e unidades a caminho: sem os três o motor da demo cai no
+    // fail-open e remaneja o que a nota da tela promete não remanejar — a
+    // demonstração passa a mostrar uma regra que ela não tem.
+    const { saindo, chegando } = transferenciasEmAberto();
     for (const s of stores)
       for (const prod of products.filter(
-        // O recorte já é uma partição: quem está em `planGroup` não está em
-        // lentes. A exclusão extra que existia aqui era de quando 'principal'
-        // ainda podia deixar lente passar.
-        (x) => matchesProductGroup(x.category, planGroup),
-      ))
+        // As DUAS condições, e a segunda não é redundante.
+        //
+        // O comentário que estava aqui dizia que o recorte já era uma partição
+        // — que quem está em `planGroup` não está em lentes — e por isso tinha
+        // apagado a exclusão explícita. Vale para 'principal' e 'relogios'.
+        // NÃO vale para `group=todos`, que é justamente o que a Central usa no
+        // consolidado: 'todos' aceita tudo, lente inclusive.
+        //
+        // Produção nunca dependeu dessa partição: `rebalancePlan` tem a regra
+        // absoluta escrita à parte ("lentes não se transferem entre lojas —
+        // só óculos e relógio"), aplicada depois do recorte de grupo. A demo
+        // se declara espelho da API e estava sem ela.
+        //
+        // Ficou latente até a demonstração passar a informar idade: com a
+        // demanda medida pelos dias reais de presença, uma lente com poucos
+        // dias na loja e uma venda passou a ter cobertura baixa o bastante
+        // para virar destino. O defeito não nasceu daí — só ficou visível.
+        (x) => matchesProductGroup(x.category, planGroup) && !matchesProductGroup(x.category, 'lentes'),
+      )) {
+        const k = key(s.id, prod.id);
         inputs.push({
           storeId: s.id,
           storeName: s.name,
           productId: prod.id,
           description: prod.description,
           brand: prod.brand,
-          unitsSold: soldQty.get(key(s.id, prod.id)) ?? 0,
-          currentStock: stockQty.get(key(s.id, prod.id)) ?? 0,
+          unitsSold: soldQty.get(k) ?? 0,
+          currentStock: stockQty.get(k) ?? 0,
+          // Carrinho aberto e transferência ainda não efetivada saindo daqui:
+          // as duas estão na prateleira e as duas já têm dono.
+          reserved: (reserved.get(k) ?? 0) + (saindo.get(k) ?? 0),
+          inboundUnits: chegando.get(k) ?? 0,
+          ageDays: demoIdadeNaLoja(s.id, prod.id),
         });
+      }
     return buildRebalance(inputs, planDays, cfgForBrand);
   };
   // ─── Governança da decisão: trilha em memória, na sessão do navegador ─────
@@ -1951,14 +2103,42 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const history = new Map(
       board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),
     );
-    return annotateCardAges(board, history, {
+    const lote = {
       id: 'demo-batch',
       generatedAt: demoBatchAt.toISOString(),
-      source: 'CRON',
+      source: 'CRON' as const,
       cardsTotal: board.cards.length + demoDecisions.length,
       cardsNew: [...history.values()].filter((h) => h.timesSeen <= 1).length,
       simulated: true,
+    };
+    // Daqui para baixo é a MESMA sequência da API (planning.service.ts): a
+    // contagem de idades e a lista de grifes saem do quadro inteiro, os filtros
+    // de vista recortam, e só então a página é cortada. A demo é o espelho
+    // offline da API — se ela paginasse de outro jeito, o teste da demo
+    // deixaria de provar qualquer coisa sobre a rota.
+    // Um `agora` só para contar e para anotar, como na API.
+    const agora = new Date();
+    const contagem = contarIdades(board.cards, history, 30, agora);
+    const grifes = grifesDoQuadro(board.cards);
+    const vista = filtrarVista(board.cards, {
+      tipo: umDe(one(params.tipo), DECISION_TYPES),
+      prioridade: umDe(one(params.prioridade), DECISION_PRIORITIES),
+      loja: one(params.loja) || undefined,
+      grife: one(params.grife) || undefined,
     });
+    const corte = recorte(params, CARDS_POR_PAGINA, TETO_DE_CARDS);
+    const { itens, pagina } = paginar(vista, corte.page, corte.pageSize, {
+      chave: corte.apos,
+      de: (c) => c.id,
+    });
+    return annotateCardAges(
+      { summary: board.summary, cards: itens, grifes, pagina },
+      history,
+      lote,
+      30,
+      agora,
+      contagem,
+    );
   }
   if (url === '/planning/batches') {
     // Série curta de lotes: um por dia às 6h, como o cron produz.
@@ -2014,7 +2194,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         leadTimeDays: demoLeadTimes.get(brand) ?? null,
         products: products.filter((x) => x.brand === brand).length,
         isDefault: !demoLeadTimes.has(brand),
-        discontinued: demoForaDoMix.has(brand),
       })),
     };
   }
@@ -2023,10 +2202,39 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const lt = body.leadTimeDays;
     if (lt === null) demoLeadTimes.delete(brand);
     else demoLeadTimes.set(brand, Number(lt));
-    // Feedback 6.0 · item 03 — grife fora do mix atual da rede.
-    if (body.discontinued === true) demoForaDoMix.add(brand);
-    else if (body.discontinued === false) demoForaDoMix.delete(brand);
-    return { brand, leadTimeDays: lt, discontinued: demoForaDoMix.has(brand) };
+    return { brand, leadTimeDays: lt };
+  }
+
+  // Mix de grifes (feedback 6.0 · item 03). Chave diferente da de
+  // fornecedores: aqui é `analysisBrand`, a grife da descrição, que é o que o
+  // motor consulta. É a mesma agregação que o backend faz — em memória,
+  // porque a grife é derivada e não existe coluna para agrupar.
+  if (url === '/planning/brand-mix' && m === 'GET') {
+    const contagem = new Map<string, { brand: string; products: number }>();
+    for (const p of products) {
+      const grife = analysisBrand(p.description, p.category, p.brand);
+      if (!grife) continue;
+      const k = normBrandKey(grife);
+      const atual = contagem.get(k);
+      if (atual) atual.products += 1;
+      else contagem.set(k, { brand: grife, products: 1 });
+    }
+    const rows = [...contagem.values()].map((c) => ({
+      brand: c.brand,
+      products: c.products,
+      discontinued: foraDoMixDemo(c.brand),
+    }));
+    for (const b of demoForaDoMix) {
+      if (!contagem.has(b)) rows.push({ brand: b, products: 0, discontinued: true });
+    }
+    rows.sort((a, b) => b.products - a.products || a.brand.localeCompare(b.brand, 'pt-BR'));
+    return { rows };
+  }
+  if (url === '/planning/brand-mix' && m === 'PUT') {
+    const chave = normBrandKey(String(body.brand ?? ''));
+    if (body.discontinued === true) demoForaDoMix.add(chave);
+    else demoForaDoMix.delete(chave);
+    return { brand: chave, discontinued: demoForaDoMix.has(chave) };
   }
 
   // Mix de marcas por bandeira (feedback 04 fase 2)

@@ -31,10 +31,33 @@
 
 	# A API serve também o frontend compilado (SERVE_WEB=true no Dockerfile),
 	# então há um destino só — sem dividir /api e / entre dois upstreams.
+	#
+	# E é justamente por haver UM destino só que a checagem ativa precisa ser
+	# tolerante. Com dois ou mais upstreams, marcar um como doente desvia o
+	# tráfego para o outro; com um só, marcar significa **503 em tudo** — a
+	# tela inteira, não só a rota lenta. Foi esse o 503 que o cliente
+	# fotografou na Central de Decisões: a rota de decisões não devolve 503 em
+	# lugar nenhum do código, e o /health responde em 4 ms sob carga do
+	# quadro. Quem devolveu foi o Caddy, porque uma checagem falhou.
+	#
+	# Três ajustes, cada um com um motivo próprio:
+	#   · `health_interval 10s` — enquanto o destino está marcado como doente,
+	#     TODA requisição é 503. Com 30s de intervalo, um soluço de meio
+	#     segundo derrubava o console por até meia janela inteira. O custo de
+	#     checar três vezes mais é uma consulta trivial a cada 10 s.
+	#   · `health_timeout 8s` — o /health toca o banco. Sob pressão de memória
+	#     o Postgres fica lento junto, e 5 s era apertado o bastante para a
+	#     checagem falhar por lentidão do banco e não por queda da API.
+	#   · `lb_try_duration`/`lb_try_interval` — se mesmo assim o destino
+	#     estiver marcado, a requisição ESPERA a próxima checagem passar em
+	#     vez de morrer na hora. Um usuário prefere uma tela que demora 3 s a
+	#     uma tela que diz "erro 503".
 	reverse_proxy app:3333 {
 		health_uri /health
-		health_interval 30s
-		health_timeout 5s
+		health_interval 10s
+		health_timeout 8s
+		lb_try_duration 15s
+		lb_try_interval 1s
 	}
 
 	log {

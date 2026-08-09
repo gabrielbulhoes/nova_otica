@@ -69,7 +69,30 @@ services:
       # para o motivo. Um endereço para liberar, um caminho para depurar.
       # Sem ${NODE_OPTIONS:-...} de propósito: com a forma de default, um
       # NODE_OPTIONS definido no host vence e a fixação de IPv4 some sem aviso.
-      NODE_OPTIONS: --dns-result-order=ipv4first
+      #
+      # `--max-old-space-size=768` não é afinação: é o que decide QUEM morre.
+      # Sem teto, o V8 dimensiona o heap pela memória da máquina e só coleta
+      # com folga quando acha que ainda há. Medido em base do tamanho da
+      # produção: o processo vai de 78 MB ocioso a 644 MB depois de UMA
+      # requisição a /planning/decisions, e a 856 MB com três concorrentes —
+      # e não devolve. Numa droplet de 2 GB que também roda Postgres e Caddy,
+      # quem escolhe a vítima passa a ser o OOM killer do kernel, e ele pode
+      # muito bem escolher o banco. Com o teto, o excesso vira um
+      # "JavaScript heap out of memory" no log deste container, com pilha, e o
+      # `restart: unless-stopped` recoloca a API no ar em segundos.
+      NODE_OPTIONS: --dns-result-order=ipv4first --max-old-space-size=768
+    # O teto do CONTÊINER fica acima do teto do heap de propósito: o processo
+    # Node também tem pilha, buffers de rede e o que o Prisma aloca fora do
+    # heap do V8. Se os dois fossem iguais, o cgroup mataria o processo antes
+    # de o V8 conseguir emitir o erro legível — trocaríamos um diagnóstico por
+    # um `Killed`.
+    #
+    # `memswap_limit` igual a `mem_limit` desliga o swap para este serviço.
+    # Sem isso, o contêiner que estoura passa a paginar em disco e o sintoma
+    # deixa de ser "a API caiu" e vira "o sistema inteiro está lento" — que é
+    # muito mais caro de diagnosticar, e leva o Postgres junto.
+    mem_limit: 1g
+    memswap_limit: 1g
     # Também sem `ports:`. Quem publica é o Caddy; a API só é alcançável por
     # dentro da rede do compose. É isso que impede alguém de chegar em
     # http://IP:3333 e pular o TLS.
