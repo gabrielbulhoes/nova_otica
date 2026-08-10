@@ -5,6 +5,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { env } from './config/env.js';
 import { getFrescor } from './sync/syncHealth.js';
+import { statusDoCatalogo } from './modules/planning/brandCatalog.js';
 import { prisma } from './lib/prisma.js';
 import { errorMiddleware } from './http/errorMiddleware.js';
 import { requireAuth } from './modules/auth/auth.middleware.js';
@@ -101,6 +102,20 @@ export function createApp() {
       // quem lê sabe que precisa perguntar em vez de confiar.
       versao: env.GIT_SHA || null,
       iniciadoEm: INICIADO_EM,
+      // A REGRA DE MIX ESTÁ VALENDO?
+      //
+      // Pela mesma razão da `versao`: ela esteve permissiva em produção desde
+      // sempre — o catálogo é gitignorado, o Dockerfile não o copiava e o
+      // contêiner não tinha por onde recebê-lo — e nada dizia isso. Duas
+      // entregas declaradas prontas ao cliente (o mix do remanejamento e o da
+      // distribuição) não faziam nada, e a lista de "lojas excluídas por mix"
+      // vinha vazia porque não havia catálogo, não porque não havia exclusão.
+      //
+      // Aqui em cima, um `curl` responde. E a `impressao` responde a segunda
+      // pergunta, que só aparece depois da primeira: valendo com QUAL catálogo
+      // — já que atualizá-lo é trocar o arquivo e reiniciar, o que não muda a
+      // versão da imagem.
+      mix: statusDoCatalogo(),
       mode: env.SELLBIE_MODE,
       db: 'up',
       sync: sync
