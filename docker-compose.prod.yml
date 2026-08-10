@@ -28,6 +28,23 @@ services:
         GIT_SHA: ${GIT_SHA:-}
     image: nova-otica-app:${TAG:-latest}
     restart: unless-stopped
+    volumes:
+      # O CATÁLOGO DE GRIFES, vindo do disco do servidor.
+      #
+      # Ele é gitignorado (dado comercial da rede) e por isso NÃO pode ser
+      # copiado na imagem: o build roda a partir do repositório, onde o arquivo
+      # não existe. Sem esta linha ele nunca chega ao contêiner — foi o que
+      # aconteceu desde sempre, e é o que deixou a regra de mix permissiva em
+      # produção sem nada denunciar.
+      #
+      # Fora de /srv/nova-otica de propósito: o `deploy.sh` faz `git reset
+      # --hard` na raiz do repositório, e dado de operação não mora em pasta
+      # que o deploy reescreve.
+      #
+      # `:ro` porque a aplicação só lê. E `${CATALOGO_DE_GRIFES:-/dev/null}`
+      # para o compose subir mesmo antes de o arquivo existir: sem catálogo a
+      # rede funciona permissiva, e o /health diz isso em alto e bom som.
+      - ${CATALOGO_DE_GRIFES:-/dev/null}:/dados/brand-catalog.json:ro
     depends_on:
       db:
         condition: service_healthy
