@@ -324,7 +324,21 @@ function TwoStepButton({
  * as mesmas colunas ali mostrava quatro zeros ao lado de "mandar 28", que é a
  * tela pedindo fé com cara de estar explicando.
  */
-function RateioPorLoja({
+/**
+ * EXPORTADA para o teste de tela poder montá-la.
+ *
+ * É a tabela que saiu com a coluna "Mandar" VAZIA numa entrega inteira, com
+ * typecheck verde: a tela lia `quantity` e a API mandava `suggestedQty`, porque
+ * o tipo do web era declarado à mão. Nada acusou — não havia teste que abrisse
+ * a tela, e a divergência só apareceu quando alguém exportou o arquivo e viu
+ * zeros onde deveria haver 38.
+ *
+ * Exportar um componente só para testá-lo é concessão, e vale dizer por quê:
+ * a alternativa era montar a página inteira (React Query, rotas, sessão) para
+ * chegar a esta tabela, e teste que precisa de meia aplicação de pé é teste que
+ * ninguém escreve o segundo.
+ */
+export function RateioPorLoja({
   rows,
   pesoLabel,
   porNecessidade,

@@ -108,13 +108,23 @@ describe('recarregarDoTopo · custo e continuidade', () => {
  * versão defeituosa e a suíte inteira ficou verde. Os testes exercitavam a
  * biblioteca; nenhum encostava em `Decisions.tsx` ou `Planning.tsx`.
  *
- * O conserto de verdade seria um harness de componente (jsdom +
- * testing-library), que este workspace não tem — as suítes do web são todas de
- * módulos puros. Enquanto ele não existe, isto aqui é uma REGRA DE LINT escrita
- * como teste: lê o código das telas e recusa o padrão que já custou caro duas
- * vezes. Não prova que a tela funciona; prova que ela não voltou a errar assim.
+ * O conserto de verdade seria um harness de componente. ELE AGORA EXISTE
+ * (jsdom + testing-library, ver `vitest.config.ts` e o primeiro teste de tela
+ * em `src/pages/RateioPorLoja.test.tsx`) — MAS AINDA NÃO COBRE ESTE CASO, e é
+ * por isso que este bloco continua aqui.
  *
- * Se um dia entrar o harness, este bloco sai.
+ * A diferença: montar `RateioPorLoja` é montar uma tabela com props. Montar
+ * `Decisions.tsx` inteira exige React Query com dado, rotas e sessão de pé, e a
+ * asserção que interessa é sobre QUANTAS VEZES o motor roda depois de um
+ * clique — coisa que se mede no `QueryClient`, não no DOM.
+ *
+ * Enquanto essa montagem não existe, isto aqui é uma REGRA DE LINT escrita como
+ * teste: lê o código das telas e recusa o padrão que já custou caro duas vezes.
+ * Não prova que a tela funciona; prova que ela não voltou a errar assim.
+ *
+ * CONDIÇÃO DE SAÍDA, agora concreta: quando houver um `Decisions.test.tsx` que
+ * monte a tela, clique "Ver mais", decida um card e conte as execuções da
+ * `queryFn`, este bloco sai.
  */
 describe('fiação: nenhuma tela invalida consulta paginada direto', () => {
   const ARQUIVOS = [
