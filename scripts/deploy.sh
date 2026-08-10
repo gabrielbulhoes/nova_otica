@@ -39,6 +39,11 @@ if [ ! -f .env ]; then
 fi
 
 echo "── Construindo a imagem ──"
+# A versão vai carimbada na imagem, e é o que o /health passa a devolver. Sai
+# daqui, e não de dentro do contêiner, porque lá não há repositório git — e
+# tem de ser DEPOIS do reset acima, senão carimbaria a versão antiga.
+export GIT_SHA="$(git rev-parse --short HEAD)"
+echo "carimbando a imagem como $GIT_SHA"
 $COMPOSE build app
 
 echo "── Subindo (as migrações rodam no entrypoint) ──"
@@ -62,6 +67,8 @@ if [ "$ok" -ne 1 ]; then
   # mais perigoso que o problema. Se a falha for de migração, é intervenção
   # manual, com o dump de /var/lib/docker/volumes/nova_otica_backups em mãos.
   git reset --hard "$ANTERIOR"
+  # Recarimba: sem isto a imagem do rollback anunciaria a versão que falhou.
+  export GIT_SHA="$(git rev-parse --short HEAD)"
   $COMPOSE build app
   $COMPOSE up -d
   echo "rollback concluído para $ANTERIOR" >&2
