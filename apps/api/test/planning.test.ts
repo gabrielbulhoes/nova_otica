@@ -950,7 +950,7 @@ describe('buildDecisionCards (portal de decisões — cards)', () => {
   it('card já decidido sai do board e é contado em summary.decididos', () => {
     const before = buildDecisionCards([buy, liq], reb.rows);
     const decidedId = before.cards[0].id;
-    const after = buildDecisionCards([buy, liq], reb.rows, new Set([decidedId]));
+    const after = buildDecisionCards([buy, liq], reb.rows, { decidedIds: new Set([decidedId]) });
 
     expect(after.cards.some((c) => c.id === decidedId)).toBe(false);
     expect(after.cards.length).toBe(before.cards.length - 1);
@@ -963,7 +963,7 @@ describe('buildDecisionCards (portal de decisões — cards)', () => {
 
   it('sem decisões registradas, o board é o mesmo de antes (decididos = 0)', () => {
     const a = buildDecisionCards([buy, liq], reb.rows);
-    const b = buildDecisionCards([buy, liq], reb.rows, new Set());
+    const b = buildDecisionCards([buy, liq], reb.rows, { decidedIds: new Set() });
     expect(b.cards.map((c) => c.id)).toEqual(a.cards.map((c) => c.id));
     expect(b.summary.decididos).toBe(0);
   });

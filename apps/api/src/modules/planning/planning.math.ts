@@ -2927,22 +2927,52 @@ export function outletTransfer(
   };
 }
 
-export function buildDecisionCards(
-  plans: ProductPlan[],
-  rebalance: RebalanceSuggestion[],
-  decidedIds?: ReadonlySet<string>,
+/**
+ * O que o quadro precisa além dos planos e do remanejamento.
+ *
+ * OBJETO, e não mais uma fila de parâmetros posicionais — que é o que isto era
+ * e o preço já foi pago. A assinatura chegou a sete posições, e o sétimo tinha
+ * default; quem chamava com cinco recebia os dois últimos em silêncio.
+ *
+ * Foi o que aconteceu com `stuckDaysByProduct`, e ainda estava acontecendo
+ * quando este refatoramento foi escrito: a produção chamava com CINCO
+ * argumentos e a demonstração com SEIS. Resultado visível para o cliente — na
+ * demo o desconto de liquidação variava por peça conforme o tempo parado, e em
+ * produção saía da constante. Nada acusava: o tipo aceita, o teste de unidade
+ * monta os argumentos que quer, e a diferença só aparece comparando duas telas
+ * lado a lado.
+ *
+ * Com objeto, esquecer um campo continua possível — mas passa a ser legível na
+ * chamada, e o próximo campo entra sem empurrar nada.
+ */
+export interface InsumosDoQuadro {
+  /** Cards já decididos, que saem do quadro. */
+  decidedIds?: ReadonlySet<string>;
   /** Posições por loja de cada produto, para escolher o destino de escoamento. */
-  positionsByProduct?: ReadonlyMap<string, OutletPosition[]>,
+  positionsByProduct?: ReadonlyMap<string, OutletPosition[]>;
   /** Posições por MARCA — reserva para peça sem venda própria. */
-  positionsByBrand?: ReadonlyMap<string, OutletPosition[]>,
+  positionsByBrand?: ReadonlyMap<string, OutletPosition[]>;
   /**
    * Dias parados por produto (primeira aparição do card no lote). É o sinal de
    * TEMPO que faz o desconto variar por peça em vez de sair constante.
    */
-  stuckDaysByProduct?: ReadonlyMap<string, number>,
+  stuckDaysByProduct?: ReadonlyMap<string, number>;
   /** Faixas da prioridade composta (feedback 6.0 · item 04). */
-  prioCfg: PriorityConfig = DEFAULT_PRIORITY_CONFIG,
+  prioCfg?: PriorityConfig;
+}
+
+export function buildDecisionCards(
+  plans: ProductPlan[],
+  rebalance: RebalanceSuggestion[],
+  insumos: InsumosDoQuadro = {},
 ): DecisionBoard {
+  const {
+    decidedIds,
+    positionsByProduct,
+    positionsByBrand,
+    stuckDaysByProduct,
+    prioCfg = DEFAULT_PRIORITY_CONFIG,
+  } = insumos;
   const cards: DecisionCard[] = [];
   // Preço unitário por produto, para dar valor às transferências. Sai dos
   // planos que já estão em memória.

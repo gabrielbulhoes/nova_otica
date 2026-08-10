@@ -156,3 +156,74 @@ describe('fiação: a versão chega até a imagem', () => {
     expect(runtime, 'ARG sem ENV não sobrevive ao build').toMatch(/GIT_SHA=\$GIT_SHA/);
   });
 });
+
+/**
+ * A DIVERGÊNCIA QUE A CAUDA POSICIONAL CAUSOU.
+ *
+ * `buildDecisionCards` chegou a sete parâmetros posicionais, e o sétimo tinha
+ * default. Quem chamava com cinco recebia os dois últimos em silêncio — o tipo
+ * aceita, e nada acusa.
+ *
+ * Foi o que aconteceu com `stuckDaysByProduct`, o sinal de TEMPO que faz o
+ * desconto de liquidação variar por peça. Medido no repositório antes deste
+ * refatoramento:
+ *
+ *   · produção  (planning.service.ts) → CINCO argumentos, sem o mapa
+ *   · demo      (demo.ts:2095)        → SEIS argumentos, COM o mapa
+ *
+ * Resultado visível para o cliente: na demonstração o desconto variava conforme
+ * o tempo parado; em produção saía da constante. A demo era mais capaz que a
+ * API, numa linha que o cliente olha para decidir preço.
+ *
+ * A assinatura virou objeto. Este teste prende a CONSEQUÊNCIA — e não a forma —
+ * porque objeto também pode ser chamado sem o campo.
+ *
+ * O QUE ELE AINDA NÃO PROVA, dito aqui para não virar a mesma armadilha: a
+ * produção continua NÃO passando o mapa. Passá-lo exige uma consulta a
+ * `CardSighting` antes de montar o quadro — e `generateCards` é a rota mais
+ * quente da plataforma, a que acabou de sair de um incidente de 503 e 856 MB.
+ * Acrescentar consulta ali sem medir seria repetir exatamente o erro que a
+ * correção do saldo ao vivo cometeu.
+ *
+ * A fiação entra junto da frente que materializa o quadro, onde o histórico já
+ * estará em mãos e a consulta deixa de ser por requisição. Até lá, o desconto
+ * em produção sai da constante — e isto está escrito para que a próxima pessoa
+ * saiba que é dívida conhecida, e não descuido.
+ */
+describe('quadro de decisões · o tempo parado chega ao desconto', () => {
+  it('o mesmo card, com e sem dias parados, sugere descontos diferentes', async () => {
+    const { analyzeProduct, buildDecisionCards, DEFAULT_PLANNING_CONFIG } = await import(
+      '../src/modules/planning/planning.math.js'
+    );
+    const parada = analyzeProduct(
+      {
+        productId: 'p-parada',
+        description: 'OO9208 AGGY 38 OCULOS OAKLEY',
+        brand: 'LUXOTTICA',
+        category: 'OCULOS',
+        unitsSold: 0,
+        currentStock: 6,
+        unitCost: 600,
+        unitPrice: 1500,
+      },
+      90,
+      DEFAULT_PLANNING_CONFIG,
+    );
+    expect(parada.recommendation, 'a peça precisa ser de liquidação').toBe('LIQUIDATE');
+
+    const semTempo = buildDecisionCards([parada], []);
+    const comTempo = buildDecisionCards([parada], [], {
+      stuckDaysByProduct: new Map([['p-parada', 240]]),
+    });
+
+    const desconto = (b: ReturnType<typeof buildDecisionCards>) =>
+      b.cards.find((c) => c.type === 'LIQUIDACAO')?.discountPct ?? null;
+
+    expect(desconto(semTempo)).not.toBeNull();
+    expect(desconto(comTempo)).not.toBeNull();
+    // 240 dias parados sobem o desconto acima do piso da faixa de preço. Se os
+    // dois derem igual, o mapa não está chegando ao motor — que era o estado da
+    // produção.
+    expect(desconto(comTempo)!).toBeGreaterThan(desconto(semTempo)!);
+  });
+});

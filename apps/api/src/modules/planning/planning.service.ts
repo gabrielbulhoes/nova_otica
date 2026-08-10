@@ -589,7 +589,10 @@ export async function generateCards(days: number, storeId?: string, group: Produ
     }
     porMarca.set(marca, lista);
   }
-  const board = buildDecisionCards(productPlans, reb.rows, undefined, posicoes, porMarca);
+  const board = buildDecisionCards(productPlans, reb.rows, {
+    positionsByProduct: posicoes,
+    positionsByBrand: porMarca,
+  });
   return {
     ...board,
     plans: productPlans,
