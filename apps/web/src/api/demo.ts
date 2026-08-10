@@ -2095,10 +2095,12 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const board = buildDecisionCards(
       planningPlans(planDays, one(params.storeId), planGroup),
       rebalanceRows().rows,
-      new Set(demoDecisions.map((r) => r.cardId)),
-      posicoes,
-      porMarca,
-      paradoPor,
+      {
+        decidedIds: new Set(demoDecisions.map((r) => r.cardId)),
+        positionsByProduct: posicoes,
+        positionsByBrand: porMarca,
+        stuckDaysByProduct: paradoPor,
+      },
     );
     const history = new Map(
       board.cards.map((c) => [c.id, { cardId: c.id, ...demoCardAge(c.id) }]),
