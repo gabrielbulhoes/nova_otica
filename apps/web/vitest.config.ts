@@ -36,6 +36,28 @@ export default mergeConfig(
        * `history`, `matchMedia` e `IntersectionObserver`, e o jsdom é o que a
        * documentação dos dois usa. Velocidade não é o gargalo aqui — são
        * poucos testes de tela, de propósito.
+       *
+       * ────────────────────────────────────────────────────────────────────
+       * O JSDOM ESTÁ PRESO EM ^26 NA RAIZ. NÃO SUBA SEM LER ISTO.
+       *
+       * `jsdom@30` exige Node `^22.22.2 || ^24.15.0 || >=26`. A produção roda
+       * `node:20-bookworm` (Dockerfile) e a CI roda Node 20 — de propósito,
+       * para a CI valer como prova sobre o que vai ao ar. Com o 30, a suíte
+       * quebra na CI com `webidl.util.markAsUncloneable is not a function`,
+       * estourado dentro do `undici` que o jsdom carrega.
+       *
+       * E ele mora na RAIZ, não em `apps/web`: o vitest está hoisted lá e
+       * resolve o pacote de ambiente a partir da própria localização. Pinar só
+       * no workspace do web não adianta — foi a primeira tentativa, e a CI
+       * continuou vermelha.
+       *
+       * Foi a CI que pegou. Aqui a suíte passou na primeira, porque o Node
+       * local é 22.22.2 — que satisfaz o `^22.22.2` por um fio. É a mesma
+       * lição do `demo-real-data.json`: RODAR LOCALMENTE NÃO É EQUIVALENTE À
+       * CI. Para conferir no runtime certo:
+       *
+       *     PATH=/opt/node20/bin:$PATH npx vitest run
+       * ────────────────────────────────────────────────────────────────────
        */
       environment: 'node',
       setupFiles: ['./src/teste/preparo.ts'],
