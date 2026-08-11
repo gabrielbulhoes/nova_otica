@@ -51,12 +51,12 @@ model Store {
   orders        Order[]
   movementsFrom InventoryMovement[] @relation("MovementFromStore")
   movementsTo   InventoryMovement[] @relation("MovementToStore")
+  decisions     DecisionRecord[]
 
   @@index([active])
   @@index([excludeFromPlanning])
   @@index([externalErp])
   @@index([excludeFromPlanning, externalErp])
-  decisions   DecisionRecord[]
 }
 
 enum Role {
@@ -67,25 +67,25 @@ enum Role {
 /// Usuário da plataforma. ADMIN enxerga toda a rede; STORE_MANAGER é
 /// limitado à `storeId` (estoque, vendas e movimentações da sua loja).
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String    @id @default(cuid())
+  email        String    @unique
   name         String
   passwordHash String
-  role         Role     @default(STORE_MANAGER)
+  role         Role      @default(STORE_MANAGER)
   storeId      String?
-  active       Boolean  @default(true)
+  active       Boolean   @default(true)
   lastLoginAt  DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  store Store? @relation(fields: [storeId], references: [id])
-
-  @@index([role])
-  decisions    DecisionRecord[]
+  store            Store?           @relation(fields: [storeId], references: [id])
+  decisions        DecisionRecord[]
   /// Tipos de card que este usuário pode decidir (COMPRA, REMANEJAMENTO,
   /// LIQUIDACAO). Vazio = todos — é o comportamento anterior, então nenhum
   /// usuário existente perde acesso na migração.
-  allowedCardTypes String[] @default([])
+  allowedCardTypes String[]         @default([])
+
+  @@index([role])
 }
 
 /// Vendedor / funcionário (Sellbie: rota `vendedores`, campo `funcionario`).
@@ -101,7 +101,7 @@ model Seller {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  store Store?  @relation(fields: [storeId], references: [id])
+  store Store? @relation(fields: [storeId], references: [id])
   sales Sale[]
 
   @@index([storeId])
@@ -162,11 +162,12 @@ model Product {
   cartItems   CartItem[]
   orderItems  OrderItem[]
   assets      ProductAsset[]
+  attributes  ProductAttribute?
   tryOnEvents TryOnEvent[]
+  decisions   DecisionRecord[]
 
   @@index([category])
   @@index([brand])
-  decisions   DecisionRecord[]
 }
 
 /// Cliente (Sellbie: rota `clientes`, campo `cpfCnpj`).
@@ -200,9 +201,9 @@ model StockItem {
   storeId   String
   productId String
 
-  quantity  Int @default(0) // quantidade vinda do Sellbie na última sync
-  available Int @default(0) // disponível (only_disp) na última sync
-  reserved  Int @default(0) // reservado por movimentações internas pendentes
+  quantity  Int  @default(0) // quantidade vinda do Sellbie na última sync
+  available Int  @default(0) // disponível (only_disp) na última sync
+  reserved  Int  @default(0) // reservado por movimentações internas pendentes
   minStock  Int? // mínimo específico desta loja (sobrepõe o do produto/rede)
 
   syncedAt  DateTime?
@@ -302,17 +303,17 @@ enum MovementStatus {
 /// Permite operar em "tempo real" mesmo com a fonte disponível só às 06h:
 /// o estoque exibido = base sincronizada + movimentações não reconciliadas.
 model InventoryMovement {
-  id          String         @id @default(cuid())
-  type        MovementType
-  status      MovementStatus @default(PENDING)
-  productId   String
-  fromStoreId String? // origem (TRANSFER/SALE/ADJUSTMENT-)
-  toStoreId   String? // destino (TRANSFER/RETURN/ADJUSTMENT+)
-  quantity    Int
-  reason      String?
-  reference   String? // ex.: nº da venda/OS de origem
-  createdBy   String? // usuário que registrou/solicitou
-  approvedBy  String? // usuário que aprovou/rejeitou
+  id           String         @id @default(cuid())
+  type         MovementType
+  status       MovementStatus @default(PENDING)
+  productId    String
+  fromStoreId  String? // origem (TRANSFER/SALE/ADJUSTMENT-)
+  toStoreId    String? // destino (TRANSFER/RETURN/ADJUSTMENT+)
+  quantity     Int
+  reason       String?
+  reference    String? // ex.: nº da venda/OS de origem
+  createdBy    String? // usuário que registrou/solicitou
+  approvedBy   String? // usuário que aprovou/rejeitou
   decisionNote String? // justificativa da aprovação/recusa
 
   createdAt    DateTime  @default(now())
@@ -325,6 +326,7 @@ model InventoryMovement {
   toStore   Store?  @relation("MovementToStore", fields: [toStoreId], references: [id])
 
   fiscalDocuments FiscalDocument[]
+
   @@index([status])
   @@index([productId])
   @@index([createdAt])
@@ -339,12 +341,12 @@ model InventoryMovement {
 /// carrega o fornecedor ("LUXOTTICA BRASIL PRODUTOS OTICOS E ESPORTIVOS
 /// LTDA"), e é essa mesma string que `supplierConfigResolver` procura.
 model SupplierSetting {
-  id           String   @id @default(cuid())
-  brand        String   @unique
+  id           String @id @default(cuid())
+  brand        String @unique
   leadTimeDays Int
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// Grife fora do mix atual da rede (feedback 6.0 · item 03: "sugere grifes que
@@ -369,7 +371,7 @@ model SupplierSetting {
 /// aí `analysisBrand` cai no fornecedor. As 63 grifes que o motor conhece —
 /// RAY BAN, OAKLEY, ARNETTE, MIU MIU — não apareciam em lugar nenhum.
 model BrandMix {
-  id           String   @id @default(cuid())
+  id           String  @id @default(cuid())
   /// A GRIFE na forma NORMALIZADA por `normBrandKey` — maiúscula, sem acento,
   /// espaços colapsados —, para "Dolce & Gabbana" casar com "DOLCE E GABBANA".
   ///
@@ -377,11 +379,11 @@ model BrandMix {
   /// tela, e as duas só concordavam por acaso. Grave por `setBrandMix`, que
   /// normaliza: gravar a forma literal aqui cria uma linha que a leitura
   /// enxerga mas o `deleteMany` da tela nunca acha.
-  brand        String   @unique
-  discontinued Boolean  @default(false)
+  brand        String  @unique
+  discontinued Boolean @default(false)
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([discontinued])
 }
@@ -498,16 +500,17 @@ model Order {
   // exportedAt marca sucesso; error guarda a última falha (retry até o teto
   // de tentativas). attemptedAt sem exportedAt e sem error = envio
   // interrompido: só reprocessa via retryStuck após conferir o ERP.
-  erpExportedAt       DateTime?
+  erpExportedAt        DateTime?
   erpExportAttemptedAt DateTime?
-  erpExportAttempts   Int       @default(0)
-  erpExportError      String?
+  erpExportAttempts    Int       @default(0)
+  erpExportError       String?
 
   store   Store          @relation(fields: [storeId], references: [id])
   items   OrderItem[]
   payment OnlinePayment?
 
   fiscalDocuments FiscalDocument[]
+
   @@index([status])
   @@index([storeId])
 }
@@ -650,25 +653,25 @@ enum DecisionOutcome {
 /// qual era o impacto em R$ no momento da decisão. Nunca se atualiza uma
 /// linha — decidir de novo cria outra, e a mais recente vale.
 model DecisionRecord {
-  id        String          @id @default(cuid())
+  id         String          @id @default(cuid())
   /// ID do card (determinístico: mesmo card gera o mesmo id entre execuções).
-  cardId    String
+  cardId     String
   /// Tipo do card no momento da decisão (BUY / REBALANCE / LIQUIDATE…).
-  cardType  String
-  outcome   DecisionOutcome
+  cardType   String
+  outcome    DecisionOutcome
   /// Texto livre do gestor. Obrigatório na recusa pela regra de negócio.
-  note      String?
+  note       String?
   /// Impacto financeiro (R$) que o card exibia quando foi decidido — o valor
   /// muda a cada nova execução do motor, então congelamos o da decisão.
-  impact    Decimal         @db.Decimal(14, 2)
+  impact     Decimal         @db.Decimal(14, 2)
   /// Quando o card foi gerado — permite medir o tempo até a decisão (SLA).
   cardSeenAt DateTime?
-  productId String?
-  storeId   String?
-  decidedBy String
-  decidedAt DateTime        @default(now())
+  productId  String?
+  storeId    String?
+  decidedBy  String
+  decidedAt  DateTime        @default(now())
 
-  user    User    @relation(fields: [decidedBy], references: [id])
+  user    User     @relation(fields: [decidedBy], references: [id])
   product Product? @relation(fields: [productId], references: [id])
   store   Store?   @relation(fields: [storeId], references: [id])
 
@@ -690,21 +693,21 @@ enum BatchSource {
 /// calculado?" nem "o que apareceu de novo hoje?" — as duas primeiras
 /// perguntas que o gestor faz ao abrir a tela de manhã.
 model GenerationBatch {
-  id          String      @id @default(cuid())
-  generatedAt DateTime    @default(now())
-  source      BatchSource
+  id            String      @id @default(cuid())
+  generatedAt   DateTime    @default(now())
+  source        BatchSource
   /// Gatilho do sync que originou o lote ('schedule', 'manual', 'boot').
-  trigger     String
+  trigger       String
   /// Janela de dias que o motor usou.
-  days        Int
-  cardsTotal  Int
+  days          Int
+  cardsTotal    Int
   /// Cards que nunca haviam aparecido em lote anterior.
-  cardsNew    Int
+  cardsNew      Int
   compra        Int
   remanejamento Int
   liquidacao    Int
   /// Impacto somado (R$) de todos os cards do lote.
-  impactTotal Decimal @db.Decimal(14, 2)
+  impactTotal   Decimal     @db.Decimal(14, 2)
 
   sightings CardSighting[]
 
@@ -731,4 +734,64 @@ model CardSighting {
 
   @@index([firstSeenAt])
   @@index([lastSeenAt])
+}
+
+/// Tudo o que sabemos de uma peça e que NÃO vem do endpoint de produtos do ERP.
+///
+/// Duas fontes distintas alimentam esta tabela, por chaves distintas, e por
+/// isso cada uma carrega a própria procedência:
+///
+///  · os CADASTROS DE FORNECEDOR (Luxottica, Marchon, …) trazem gênero,
+///    formato, material, medidas e a marcação de best-seller. Casam pela
+///    decomposição da descrição — `Referência + Código da Cor + Tamanho da
+///    lente`, que reconstrói a "Barra CDS" do fornecedor. Não casam por GTIN
+///    nem por código: medi, e os dois dão zero.
+///  · a PLANILHA DE PROMOÇÃO DO CDS traz o teto de desconto por peça, e essa
+///    casa direto por `externalId` (o `codigo_base`).
+///
+/// Um produto pode ter só uma das duas. Por isso as colunas de procedência são
+/// separadas: dizer "importado em" sobre uma linha que só tem metade do dado
+/// esconde exatamente o que precisa aparecer.
+model ProductAttribute {
+  productId String  @id
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // ── Cadastro do fornecedor ────────────────────────────────────────────────
+  /// A chave que casou, guardada para auditoria do próximo import.
+  barraCds      String?
+  referencia    String?
+  gtin          String?
+  /// Marca como o FORNECEDOR a escreve. NÃO substitui `analysisBrand`, que
+  /// continua sendo a grife extraída da descrição — são espaços de nome
+  /// diferentes, e confundi-los já custou uma entrega aqui.
+  marcaCatalogo String?
+  /// Feminino · Masculino · Unisex · Menina · Menino
+  genero        String?
+  /// Retangular, Quadrado, Gatinho, Phantos… — é o "tipo de olho" do feedback.
+  formato       String?
+  material      String?
+  cor           String?
+  codigoCor     String?
+  tamanhoLente  Int?
+  alturaLente   Int?
+  tamanhoPonte  Int?
+  tamanhoHaste  Int?
+  /// Marcação oficial do fornecedor. O motor cruza com giro real antes de usar.
+  bestSeller    Boolean @default(false)
+  imagemUrl     String?
+
+  fonteCadastro String?
+  cadastroEm    DateTime?
+
+  // ── Promoção do CDS ───────────────────────────────────────────────────────
+  /// Teto COMERCIAL de desconto, definido pelo CDS. Distinto do `maxPct` que o
+  /// motor calcula a partir da margem: aquele diz até onde a conta fecha, este
+  /// diz até onde a rede tem permissão de ir.
+  maxDiscountPct Decimal?  @db.Decimal(5, 2)
+  fonteDesconto  String?
+  descontoEm     DateTime?
+
+  @@index([bestSeller])
+  @@index([genero])
+  @@index([marcaCatalogo])
 }
