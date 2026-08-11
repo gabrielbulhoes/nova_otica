@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "sync:backfill": "tsx src/sync/backfill.ts",
     "catalogo:importar": "tsx src/catalogo/importar.ts",
+    "catalogo:semear-mix": "tsx src/catalogo/semearMix.ts",
     "bootstrap:admin": "tsx src/db/bootstrapAdmin.ts"
   },
   "prisma": {
