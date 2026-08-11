@@ -1286,6 +1286,19 @@ async function reconcileMovements(cutoff: Date) {
       where: { id: { in: pending.map((p) => p.id) } },
       data: { status: 'RECONCILED', reconciledAt: cutoff },
     });
+    // A SEXTA TRANSIÇÃO — e a única que estava calada.
+    //
+    // As cinco de `movements.service.ts` anunciam; esta não anunciava. Passou
+    // despercebida porque o próprio `runSync` publica `sync.completed` no fim
+    // do ciclo, e a tela invalida tudo em qualquer evento — a conciliação
+    // pegava carona. Carona não é contrato: no dia em que o quadro passar a ser
+    // guardado e invalidado por `movement.changed`, a conciliação mudaria o
+    // saldo ao vivo (CONFIRMED sai do delta) sem derrubar a foto.
+    //
+    // UM evento para o lote inteiro, sem loja nem id: são milhares de linhas em
+    // todas as lojas, e o que o assinante precisa saber é "movimentação mudou",
+    // não quais.
+    publish({ type: 'movement.changed' });
   }
   // Recalcula reservas a partir das movimentações ainda pendentes. Upsert:
   // reservas de posições sem linha em StockItem também precisam persistir,

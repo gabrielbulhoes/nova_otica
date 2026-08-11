@@ -9,7 +9,17 @@ export type AppEvent =
   | { type: 'planning.urgent'; items: number; suppliers: number; total: number }
   | { type: 'purchase-order.changed'; recordId?: string }
   /** Decisão registrada sobre um card do Planejamento (aprovar/recusar). */
-  | { type: 'decision.recorded'; recordId?: string };
+  | { type: 'decision.recorded'; recordId?: string }
+  /**
+   * Parâmetro comercial do planejamento mudou: grife entrou ou saiu do mix,
+   * prazo de fornecedor alterado. Sem loja — a decisão vale para a rede.
+   *
+   * Estes dois são os únicos insumos do motor que a operação edita À MÃO, e
+   * eram os únicos que não avisavam ninguém: marcar uma grife como fora do mix
+   * mudava a compra sugerida de toda a rede e nenhuma tela ficava sabendo até
+   * alguém recarregar a página.
+   */
+  | { type: 'planning.settings.changed'; setting: 'brand-mix' | 'supplier'; brand?: string };
 
 const CHANNEL = 'app';
 const emitter = new EventEmitter();

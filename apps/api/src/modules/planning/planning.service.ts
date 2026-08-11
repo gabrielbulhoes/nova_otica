@@ -998,6 +998,7 @@ export async function setBrandMix(brand: string, discontinued: boolean) {
     // lista que ninguém consegue ler.
     await prisma.brandMix.deleteMany({ where: { brand: chave } });
     esquecerContagemDeGrifes();
+    publish({ type: 'planning.settings.changed', setting: 'brand-mix', brand: chave });
     return { brand: chave, discontinued: false };
   }
 
@@ -1007,6 +1008,7 @@ export async function setBrandMix(brand: string, discontinued: boolean) {
     update: { discontinued: true },
   });
   esquecerContagemDeGrifes();
+  publish({ type: 'planning.settings.changed', setting: 'brand-mix', brand: row.brand });
   return { brand: row.brand, discontinued: row.discontinued };
 }
 
@@ -1087,6 +1089,7 @@ export async function setSupplierSetting(brand: string, leadTimeDays: number | n
   // de existir. É o que "voltar ao padrão" significa.
   if (leadTimeDays === null) {
     await prisma.supplierSetting.deleteMany({ where: { brand: clean } });
+    publish({ type: 'planning.settings.changed', setting: 'supplier', brand: clean });
     return { brand: clean, leadTimeDays: null };
   }
 
@@ -1095,6 +1098,7 @@ export async function setSupplierSetting(brand: string, leadTimeDays: number | n
     create: { brand: clean, leadTimeDays },
     update: { leadTimeDays },
   });
+  publish({ type: 'planning.settings.changed', setting: 'supplier', brand: row.brand });
   return { brand: row.brand, leadTimeDays: row.leadTimeDays };
 }
 

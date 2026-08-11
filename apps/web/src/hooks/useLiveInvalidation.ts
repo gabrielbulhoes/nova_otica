@@ -23,6 +23,11 @@ const LIVE_KEYS = [
   'planning-orders',
   'planning-history',
   'purchase-suggestions',
+  // Os dois parâmetros que a operação edita à mão. Estavam de fora: um ADMIN
+  // marcava uma grife como fora do mix e a aba do outro ADMIN continuava
+  // mostrando a marcação antiga até alguém recarregar a página.
+  'planning-brand-mix',
+  'planning-suppliers',
 ];
 
 const RECONNECT_DELAY_MS = 5_000;
