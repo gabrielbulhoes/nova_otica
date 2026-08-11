@@ -94,7 +94,11 @@ primeiro registro** de cada rota. As respostas brutas ficam em
 Sincronização avulsa (uma rodada completa agora):
 
 ```bash
+# Em desenvolvimento (com `src` presente):
 npm run sync:once --workspace=@nova-otica/api
+
+# Em produção (a imagem só tem `dist` — ver RUNBOOK-ARGOS.md §6):
+docker compose -f docker-compose.prod.yml exec app node apps/api/dist/sync/runOnce.js
 ```
 
 Isso lê a CDS, faz upsert por `externalId` (idempotente) e reconcilia o
