@@ -126,9 +126,18 @@ docker compose -f docker-compose.prod.yml logs api | tail -20
 3. Sincronização avulsa para validar de ponta a ponta:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec api npm run sync:once --workspace=@nova-otica/api
+docker compose -f docker-compose.prod.yml exec app node apps/api/dist/sync/runOnce.js
 # ou, logado como ADMIN no painel: Sincronização → "Sincronizar agora"
 ```
+
+> **Por que `node dist/...` e não `npm run sync:once`.** A imagem de produção é
+> multi-stage (`Dockerfile`): o estágio final copia só `apps/api/dist`
+> (compilado), não `apps/api/src`. O script `sync:once` do `package.json` roda
+> `tsx src/sync/runOnce.ts` — que existe para o desenvolvimento, onde `src` está
+> presente — e não existe dentro do contêiner. `bootstrap:admin` já segue este
+> padrão dentro do `entrypoint.sh`; os scripts de catálogo (`catalogo:importar`,
+> `catalogo:semear-mix`) seguem o mesmo. Descoberto em produção em 11/08/2026 ao
+> rodar o importador de atributos pela primeira vez.
 
 Verificação:
 
@@ -142,7 +151,7 @@ A partir daqui o cron das 06:00 roda sozinho (`SYNC_CRON`).
    previsão de demanda com 24 meses de vendas; idempotente, pode repetir:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec api npm run sync:backfill --workspace=@nova-otica/api -- 24
+docker compose -f docker-compose.prod.yml exec app node apps/api/dist/sync/backfill.js 24
 ```
 
 ---
