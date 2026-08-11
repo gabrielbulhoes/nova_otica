@@ -728,6 +728,24 @@ export interface DecisionCard {
   outletFromStoreId?: string;
   outletFromStoreName?: string;
   outletQuantity?: number;
+
+  /**
+   * Compra (feedback 6.0 · item 06): o que a rede JÁ TEM parado desta peça.
+   *
+   * O número NÃO é abatido da compra — as unidades paradas já entram no
+   * estoque da rede que gerou a sugestão, e descontá-las de novo compraria de
+   * menos, que é o lado do erro que gera ruptura. A justificativa completa
+   * está em `DecisionCard`, em planning.math.ts.
+   */
+  redeParadaQty?: number;
+  redeParadaLojas?: string[];
+  remanejamentoSugeridoQty?: number;
+
+  /** Remanejamento (item 12): o malote. Ausente quando a rota é desconhecida. */
+  maloteEmbarque?: string;
+  maloteChegada?: string;
+  maloteDias?: number;
+  maloteTexto?: string;
 }
 
 /** Lote de geração: a execução do motor que produziu estes cards. */
