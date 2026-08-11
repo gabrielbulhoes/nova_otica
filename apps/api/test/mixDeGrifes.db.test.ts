@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma.js';
+import { subscribe, type AppEvent } from '../src/lib/eventBus.js';
 import { analysisBrand, normBrandKey } from '../src/modules/planning/planning.math.js';
 import {
   discontinuedBrandResolver,
@@ -7,6 +8,7 @@ import {
   listSupplierSettings,
   planningInputs,
   setBrandMix,
+  setSupplierSetting,
 } from '../src/modules/planning/planning.service.js';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
@@ -185,5 +187,62 @@ d('mix de grifes · a chave gravada é a chave lida', () => {
     for (const r of prazos.rows) expect(r).not.toHaveProperty('discontinued');
     const mix = await listBrandMix();
     for (const r of mix.rows) expect(r).not.toHaveProperty('leadTimeDays');
+  });
+
+  /**
+   * OS DOIS PARÂMETROS QUE A OPERAÇÃO EDITA À MÃO — E QUE NÃO AVISAVAM NINGUÉM.
+   *
+   * Tudo o mais que muda card publica evento: movimentação, sync, pedido,
+   * decisão. Estes dois, não. Marcar uma grife como fora do mix muda a compra
+   * sugerida da rede inteira, e nenhuma tela ficava sabendo — nem a de outro
+   * ADMIN com a mesma aba aberta, nem a Central de Decisões — até alguém
+   * recarregar a página.
+   *
+   * Passou despercebido porque o efeito É visível para quem clicou: a mutação
+   * invalida a própria consulta ali mesmo. O buraco só aparece com duas pessoas
+   * (que é a operação real: uma na compra, outra no mix) — e vai importar mais
+   * quando o quadro for guardado, porque aí o card errado sobrevive.
+   */
+  const anunciados = async (acao: () => Promise<unknown>) => {
+    const vistos: Extract<AppEvent, { type: 'planning.settings.changed' }>[] = [];
+    const parar = subscribe((e) => {
+      if (e.type === 'planning.settings.changed') vistos.push(e);
+    });
+    try {
+      await acao();
+      return vistos;
+    } finally {
+      parar();
+    }
+  };
+
+  it('marcar e desmarcar grife ANUNCIAM', async () => {
+    await limpar();
+    const aoMarcar = await anunciados(() => setBrandMix(grife, true));
+    expect(aoMarcar).toHaveLength(1);
+    expect(aoMarcar[0]).toMatchObject({ setting: 'brand-mix', brand: normBrandKey(grife) });
+
+    const aoDesmarcar = await anunciados(() => setBrandMix(grife, false));
+    expect(aoDesmarcar).toHaveLength(1);
+    expect(aoDesmarcar[0]).toMatchObject({ setting: 'brand-mix' });
+  });
+
+  it('mudar e zerar prazo de fornecedor ANUNCIAM', async () => {
+    // Marca própria: `setSupplierSetting(_, null)` APAGA a linha, então mexer
+    // num fornecedor de verdade do banco de quem roda a suíte destruiria o
+    // prazo configurado pela rede.
+    const FORNECEDOR = 'FORNECEDOR TESTE ZZZ';
+    expect(
+      await prisma.supplierSetting.count({ where: { brand: FORNECEDOR } }),
+      'o fornecedor de teste não pode existir de verdade',
+    ).toBe(0);
+
+    const aoDefinir = await anunciados(() => setSupplierSetting(FORNECEDOR, 45));
+    expect(aoDefinir).toHaveLength(1);
+    expect(aoDefinir[0]).toMatchObject({ setting: 'supplier', brand: FORNECEDOR });
+
+    const aoZerar = await anunciados(() => setSupplierSetting(FORNECEDOR, null));
+    expect(aoZerar).toHaveLength(1);
+    expect(await prisma.supplierSetting.count({ where: { brand: FORNECEDOR } })).toBe(0);
   });
 });
