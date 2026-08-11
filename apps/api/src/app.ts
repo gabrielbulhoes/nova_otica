@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { env } from './config/env.js';
 import { getFrescor } from './sync/syncHealth.js';
 import { statusDoCatalogo } from './modules/planning/brandCatalog.js';
+import { statusDosAtributos } from './catalogo/status.js';
 import { prisma } from './lib/prisma.js';
 import { errorMiddleware } from './http/errorMiddleware.js';
 import { requireAuth } from './modules/auth/auth.middleware.js';
@@ -82,6 +83,14 @@ export function createApp() {
       // engolido de propósito — ver acima
     }
 
+    // Pelo mesmo motivo, e com o mesmo cuidado: informação, nunca veredito.
+    let atributos: Awaited<ReturnType<typeof statusDosAtributos>> | null = null;
+    try {
+      atributos = await statusDosAtributos();
+    } catch {
+      // engolido de propósito — ver acima
+    }
+
     res.json({
       status: 'ok',
       service: 'nova-otica-api',
@@ -116,6 +125,14 @@ export function createApp() {
       // — já que atualizá-lo é trocar o arquivo e reiniciar, o que não muda a
       // versão da imagem.
       mix: statusDoCatalogo(),
+      // OS ATRIBUTOS DE PEÇA ESTÃO CARREGADOS?
+      //
+      // Terceira armadilha da mesma família: gênero, formato, best-seller e o
+      // teto de desconto do CDS entram por importador MANUAL. Não rodar, ou
+      // rodar contra o banco errado, deixa o motor decidindo sem o dado — e
+      // sem nada dizendo. `null` aqui é "não consegui apurar", distinto de
+      // zero, que é "apurei e não tem nada".
+      atributos,
       mode: env.SELLBIE_MODE,
       db: 'up',
       sync: sync

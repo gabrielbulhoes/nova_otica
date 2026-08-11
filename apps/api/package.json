@@ -20,6 +20,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "sync:backfill": "tsx src/sync/backfill.ts",
+    "catalogo:importar": "tsx src/catalogo/importar.ts",
     "bootstrap:admin": "tsx src/db/bootstrapAdmin.ts"
   },
   "prisma": {
