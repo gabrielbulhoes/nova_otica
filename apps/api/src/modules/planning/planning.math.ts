@@ -2448,6 +2448,15 @@ export interface FiltroDeVista {
   prioridade?: DecisionPriority;
   loja?: string;
   grife?: string;
+  /**
+   * Loja de ORIGEM — "ter filtro pra remetente também" (feedback 6.0 · item 02).
+   *
+   * `loja` casa com QUALQUER loja que o card toca, e por isso não responde a
+   * pergunta do gerente: "o que estão querendo tirar de mim?". Numa rota
+   * MIDWAY → MOSSORO, filtrar por MIDWAY em `loja` traz também tudo que
+   * MIDWAY vai RECEBER, e as duas coisas exigem ações opostas.
+   */
+  remetente?: string;
 }
 
 /**
@@ -2461,14 +2470,26 @@ export function lojasDoCard(c: DecisionCard): string[] {
   );
 }
 
+/**
+ * De qual loja o card TIRA peça. Distinto de `lojasDoCard`, que casa com
+ * qualquer loja tocada.
+ *
+ * Remanejamento tira da origem; liquidação com escoamento tira da loja que
+ * cede a peça. Compra não tira de ninguém — nasce no fornecedor.
+ */
+export function remetentesDoCard(c: DecisionCard): string[] {
+  return [c.fromStoreId, c.outletFromStoreId].filter((x): x is string => !!x);
+}
+
 /** Aplica o filtro de vista. Sem nenhum critério, devolve a lista recebida. */
 export function filtrarVista(cards: DecisionCard[], f: FiltroDeVista): DecisionCard[] {
-  if (!f.tipo && !f.prioridade && !f.loja && !f.grife) return cards;
+  if (!f.tipo && !f.prioridade && !f.loja && !f.grife && !f.remetente) return cards;
   return cards.filter(
     (c) =>
       (!f.tipo || c.type === f.tipo) &&
       (!f.prioridade || c.priority === f.prioridade) &&
       (!f.loja || lojasDoCard(c).includes(f.loja)) &&
+      (!f.remetente || remetentesDoCard(c).includes(f.remetente)) &&
       (!f.grife || c.brandLabel === f.grife),
   );
 }

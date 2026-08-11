@@ -214,6 +214,30 @@ export function Sales() {
                 </tr>
               ))}
             </tbody>
+            {/*
+              A SOMA TOTAL DO FATURAMENTO — feedback 6.0 · item 01.
+              "Criar espaço para soma total do faturamento."
+
+              Ela vai no `tfoot` da ANÁLISE, e não no rodapé da lista de vendas
+              logo abaixo, por uma razão de honestidade: aquela lista traz as
+              100 vendas mais recentes do recorte, e somar o que está na tela
+              devolveria um número menor que o real sem nada dizendo. A análise
+              por dimensão vem agregada do servidor sobre o PERÍODO INTEIRO —
+              somar as linhas dela é somar tudo.
+
+              Some `rows`, não `top`: a tabela desenha as 20 primeiras, e o
+              total precisa contar as que ficaram fora da tela.
+            */}
+            <tfoot>
+              <tr>
+                <th>Total do período</th>
+                <th className="num">{rows.reduce((a, r) => a + r.units, 0).toLocaleString('pt-BR')}</th>
+                <th className="num">{formatBRL(rows.reduce((a, r) => a + r.revenue, 0))}</th>
+                <th className="muted" style={{ fontWeight: 400, fontSize: 12.5 }}>
+                  {rows.length.toLocaleString('pt-BR')} linha(s) · {days} dias
+                </th>
+              </tr>
+            </tfoot>
           </table>
         ) : (
           <div

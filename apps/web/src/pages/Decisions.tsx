@@ -6,7 +6,14 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { getDecisionBoard, createMovement, formatBRL, getStores, recordDecision } from '../api/client';
+import {
+  getDecisionBoard,
+  createMovement,
+  formatBRL,
+  getDecisionHistory,
+  getStores,
+  recordDecision,
+} from '../api/client';
 import type {
   DecisionCard,
   DecisionType,
@@ -98,6 +105,36 @@ const prioMeta: Record<
 
 type TypeFilter = 'ALL' | DecisionType;
 type PrioFilter = 'ALL' | DecisionPriority;
+
+/**
+ * As abas da Central — feedback 6.0 · item 11.
+ *
+ * "Separe-os em 3 abas: 'à comprar', 'Transferir' e 'Aprovadas'."
+ *
+ * São QUATRO, e não três, de propósito: "Liquidar" ficou. Ela não estava na
+ * lista do cliente, mas é a aba onde mora o item 03 do mesmo feedback (o Dior
+ * sugerido para uma loja que não trabalha a grife) — tirá-la removeria a tela
+ * de uma queixa que ele acabou de fazer. Fica registrado para ele confirmar.
+ *
+ * "Aprovadas" não é um filtro do quadro: é um RELATÓRIO. Card aprovado sai da
+ * fila e deixa de existir no board — o que ele vira está no histórico de
+ * decisões, que é outra consulta.
+ */
+type Aba = 'ALL' | DecisionType | 'APROVADAS';
+
+/**
+ * O rótulo da ABA, que não é o do card.
+ *
+ * O cliente escreveu "à comprar" e "Transferir"; `typeMeta` diz "Comprar" e
+ * "Remanejar", que é o verbo da AÇÃO dentro do card. Numa barra de abas o que
+ * se lê é o conteúdo da lista, não a ação — e "Transferir" é a palavra que a
+ * operação usa para o malote.
+ */
+const ROTULO_DA_ABA: Record<DecisionType, string> = {
+  COMPRA: 'A comprar',
+  REMANEJAMENTO: 'Transferir',
+  LIQUIDACAO: 'Liquidar',
+};
 
 /**
  * Par rótulo/valor do manual: número em Fraunces (herói), rótulo em mono caixa
@@ -514,8 +551,50 @@ function Card({ c, onDecided }: { c: DecisionCard; onDecided: () => void }) {
               para={c.target.split('→')[1].trim()}
               quantidade={c.quantity}
             />
+            {/* O MALOTE (item 12). Só aparece quando o calendário conhece as
+                duas praças — loja sem praça mapeada não ganha prazo, porque
+                data inventada aqui é o tipo de número que ninguém confere e
+                todo mundo usa para decidir se dá tempo de esperar. */}
+            {c.maloteTexto && (
+              <p
+                style={{ margin: '6px 0 0', fontSize: 12.5, lineHeight: 1.4, display: 'flex', gap: 6 }}
+                title="Calendário de malotes da rede"
+              >
+                <Icon name="prazo" size={14} style={{ marginTop: 1, color: 'var(--muted)' }} />
+                <span>{c.maloteTexto}</span>
+              </p>
+            )}
           </div>
         </>
+      )}
+
+      {/* O QUE A REDE JÁ TEM (item 06). "Antes de comprar, certifique-se se
+          existe esse mesmo produto em outras lojas."
+
+          O número NÃO é abatido da compra, e o texto diz isso: as unidades
+          paradas já entram no estoque da rede que gerou a sugestão. O que
+          faltava era o comprador enxergar que parte da falta já está paga e só
+          precisa de uma transferência. */}
+      {c.type === 'COMPRA' && (c.redeParadaQty || c.remanejamentoSugeridoQty) && (
+        <div className="acao-do-card" style={{ marginTop: 10 }}>
+          <div className="label">A rede já tem</div>
+          {c.redeParadaQty ? (
+            <p style={{ margin: '4px 0 0', fontSize: 12.5, lineHeight: 1.45 }}>
+              <strong>{c.redeParadaQty}</strong>
+              <Unidade>un.</Unidade> paradas em {c.redeParadaLojas?.join(', ')}
+              {' — sem venda no período.'}
+            </p>
+          ) : null}
+          {c.remanejamentoSugeridoQty ? (
+            <p style={{ margin: '4px 0 0', fontSize: 12.5, lineHeight: 1.45 }}>
+              <strong>{c.remanejamentoSugeridoQty}</strong>
+              <Unidade>un.</Unidade> já com transferência sugerida hoje.
+            </p>
+          ) : null}
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
+            A quantidade a comprar já conta esse saldo — transferir não cria unidade nova.
+          </p>
+        </div>
       )}
 
       <hr className="rule" />
@@ -716,10 +795,93 @@ function BatchLine({ board }: { board?: DecisionBoardT }) {
   );
 }
 
+/**
+ * A aba "Aprovadas" — feedback 6.0 · item 11: "um relatório apenas com os cards
+ * aprovados".
+ *
+ * NÃO é um recorte do quadro, e a distinção não é técnica: card aprovado SAI da
+ * fila e deixa de existir no board. O que ele virou está no histórico de
+ * decisões — outra consulta, outra tabela, outra pergunta ("o que já foi
+ * decidido?" em vez de "o que falta decidir?").
+ *
+ * Por isso a recusa aparece por CONTRASTE no rodapé, e não numa coluna: quem
+ * abre esta aba quer conferir o que foi aprovado. O relatório completo, com as
+ * duas metades e a série no tempo, continua em Histórico.
+ */
+function Aprovadas() {
+  const q = useQuery({ queryKey: ['decision-history'], queryFn: () => getDecisionHistory(200) });
+
+  if (q.isLoading) return <Loading />;
+  if (q.error) return <ErrorState message={q.error instanceof Error ? q.error.message : undefined} />;
+
+  const todas = q.data ?? [];
+  const aprovadas = todas.filter((r) => r.outcome === 'APPROVED');
+  const recusadas = todas.length - aprovadas.length;
+  const impacto = aprovadas.reduce((a, r) => a + (Number(r.impact) || 0), 0);
+
+  if (aprovadas.length === 0) {
+    return (
+      <div className="empty" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+        <Icon name="aprovar" size={18} />
+        <span>Nenhum card aprovado ainda — as aprovações aparecem aqui assim que forem registradas.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <div className="grid grid-3" style={{ marginBottom: 14 }}>
+        <StatCard nivel={3} label="Cards aprovados" value={String(aprovadas.length)} unidade="cards" />
+        <StatCard nivel={3} label="Impacto somado" value={formatBRL(impacto)} />
+        <StatCard
+          nivel={3}
+          label="Recusados no período"
+          value={String(recusadas)}
+          unidade="cards"
+          hint="Aparecem no Histórico, com a justificativa."
+        />
+      </div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Decidido em</th>
+              <th>Tipo</th>
+              <th>Por quem</th>
+              <th style={{ textAlign: 'right' }}>Impacto</th>
+              <th style={{ textAlign: 'right' }}>Dias até decidir</th>
+            </tr>
+          </thead>
+          <tbody>
+            {aprovadas.map((r) => (
+              <tr key={r.id}>
+                <td>{new Date(r.decidedAt).toLocaleDateString('pt-BR')}</td>
+                <td>{ROTULO_DA_ABA[r.cardType as DecisionType] ?? r.cardType}</td>
+                <td>{r.decidedByName}</td>
+                <td style={{ textAlign: 'right' }}>{formatBRL(Number(r.impact) || 0)}</td>
+                {/* Traço, e não zero: "decidido no mesmo dia" e "não sei há
+                    quanto tempo o card existia" são coisas diferentes. */}
+                <td style={{ textAlign: 'right' }}>{r.daysToDecide ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint" style={{ marginTop: 10 }}>
+        As {aprovadas.length} aprovações mais recentes. O relatório completo — com recusas,
+        justificativas e a série no tempo — está em Histórico.
+      </p>
+    </div>
+  );
+}
+
 export function Decisions() {
   const qc = useQueryClient();
-  const [typeF, setTypeF] = useState<TypeFilter>('ALL');
+  const [aba, setAba] = useState<Aba>('ALL');
   const [prioF, setPrioF] = useState<PrioFilter>('ALL');
+  // A aba "Aprovadas" é relatório, não recorte do quadro: o tipo que vai para a
+  // consulta do board é o das outras três.
+  const typeF: TypeFilter = aba === 'APROVADAS' ? 'ALL' : aba;
   // Feedback 6.0 · item 05 — "na Central de Decisões é importante ter o filtro
   // de loja e grife".
   //
@@ -735,6 +897,14 @@ export function Decisions() {
   // passaria a responder outra pergunta. Aqui só se quer achar cards.
   const [lojaF, setLojaF] = useState<string>('ALL');
   const [grifeF, setGrifeF] = useState<string>('ALL');
+  // Feedback 6.0 · item 02 — "ter filtro pra remetente também".
+  //
+  // `loja` casa com QUALQUER loja que o card toca, e por isso não responde a
+  // pergunta do gerente: "o que estão querendo tirar de mim?". Numa rota
+  // MIDWAY → MOSSORO, filtrar MIDWAY em `loja` traz junto tudo que MIDWAY vai
+  // RECEBER — e ceder e receber pedem ações opostas. São dois campos porque
+  // são duas perguntas.
+  const [remetenteF, setRemetenteF] = useState<string>('ALL');
 
   const params = {
     days: 90,
@@ -742,6 +912,7 @@ export function Decisions() {
     tipo: typeF === 'ALL' ? undefined : typeF,
     prioridade: prioF === 'ALL' ? undefined : prioF,
     loja: lojaF === 'ALL' ? undefined : lojaF,
+    remetente: remetenteF === 'ALL' ? undefined : remetenteF,
     grife: grifeF === 'ALL' ? undefined : grifeF,
   };
   // "Ver mais" pede a PRÓXIMA PÁGINA, com `pageSize` FIXO, e a tela acumula o
@@ -860,6 +1031,7 @@ export function Decisions() {
               className="largo"
               label="Cards em aberto"
               value={String(s.total)}
+              unidade="cards"
               hint={
                 s.decididos > 0
                   ? `${s.decididos} já decidido${s.decididos > 1 ? 's' : ''} neste lote — esses saíram da fila.`
@@ -879,21 +1051,23 @@ export function Decisions() {
             <StatCard
               label="Críticos (~7 dias)"
               value={String(s.criticos)}
+              unidade="cards"
               icon="prazo"
               hint="Vai faltar antes de o pedido chegar."
             />
             <StatCard
               label="Alta prioridade"
               value={String(s.byPriority.alta)}
+              unidade="cards"
               icon="atencao"
               hint={`${s.byPriority.media} de média · ${s.byPriority.baixa} de baixa.`}
             />
           </div>
 
           <div className="grid grid-3" style={{ marginTop: 6, marginBottom: 18 }}>
-            <StatCard nivel={3} label="A comprar" value={String(s.byType.compra)} />
-            <StatCard nivel={3} label="A remanejar" value={String(s.byType.remanejamento)} />
-            <StatCard nivel={3} label="A liquidar" value={String(s.byType.liquidacao)} />
+            <StatCard nivel={3} label="A comprar" value={String(s.byType.compra)} unidade="cards" />
+            <StatCard nivel={3} label="Transferir" value={String(s.byType.remanejamento)} unidade="cards" />
+            <StatCard nivel={3} label="A liquidar" value={String(s.byType.liquidacao)} unidade="cards" />
           </div>
 
           {/* A grade de cards abria sem nada que dissesse onde a leitura dos
@@ -914,17 +1088,17 @@ export function Decisions() {
               protegia assim; os filtros, que são quatro cliques a um dedo de
               distância um do outro, não. */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-            <div className="segmented" role="group" aria-label="Filtrar por tipo de decisão">
-              {(['ALL', 'COMPRA', 'REMANEJAMENTO', 'LIQUIDACAO'] as TypeFilter[]).map((k) => (
+            <div className="segmented" role="group" aria-label="Aba da Central de Decisões">
+              {(['ALL', 'COMPRA', 'REMANEJAMENTO', 'LIQUIDACAO', 'APROVADAS'] as Aba[]).map((k) => (
                 <button
                   key={k}
                   type="button"
-                  className={typeF === k ? 'active' : ''}
+                  className={aba === k ? 'active' : ''}
                   disabled={buscando}
-                  onClick={() => setTypeF(k)}
-                  aria-pressed={typeF === k}
+                  onClick={() => setAba(k)}
+                  aria-pressed={aba === k}
                 >
-                  {k === 'ALL' ? 'Todos' : typeMeta[k].label}
+                  {k === 'ALL' ? 'Todos' : k === 'APROVADAS' ? 'Aprovadas' : ROTULO_DA_ABA[k]}
                 </button>
               ))}
             </div>
@@ -961,6 +1135,25 @@ export function Decisions() {
               ))}
             </select>
 
+            {/* O REMETENTE, separado da loja (item 02). "Quem está querendo
+                tirar peça de mim" é outra pergunta de "o que toca minha loja",
+                e misturá-las devolvia as duas pontas da mesma rota. */}
+            <select
+              className="input"
+              style={{ maxWidth: 230 }}
+              aria-label="Filtrar por loja remetente"
+              value={remetenteF}
+              disabled={buscando}
+              onChange={(e) => setRemetenteF(e.target.value)}
+            >
+              <option value="ALL">Qualquer remetente</option>
+              {(lojas.data?.rows ?? []).map((l) => (
+                <option key={l.id} value={l.id}>
+                  Sai de {l.name}
+                </option>
+              ))}
+            </select>
+
             <select
               className="input"
               style={{ maxWidth: 230 }}
@@ -988,7 +1181,9 @@ export function Decisions() {
             </p>
           )}
 
-          {cards.length === 0 ? (
+          {aba === 'APROVADAS' ? (
+            <Aprovadas />
+          ) : cards.length === 0 ? (
             <div className="empty" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
               <Icon name={filtrando ? 'filtro' : 'aprovar'} size={18} />
               <span>

@@ -2126,6 +2126,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       tipo: umDe(one(params.tipo), DECISION_TYPES),
       prioridade: umDe(one(params.prioridade), DECISION_PRIORITIES),
       loja: one(params.loja) || undefined,
+      remetente: one(params.remetente) || undefined,
       grife: one(params.grife) || undefined,
     });
     const corte = recorte(params, CARDS_POR_PAGINA, TETO_DE_CARDS);

@@ -177,6 +177,7 @@ planningRouter.get(
           tipo: umDe(req.query.tipo, DECISION_TYPES),
           prioridade: umDe(req.query.prioridade, DECISION_PRIORITIES),
           loja: texto(req.query.loja),
+          remetente: texto(req.query.remetente),
           grife: texto(req.query.grife),
         },
       }),
