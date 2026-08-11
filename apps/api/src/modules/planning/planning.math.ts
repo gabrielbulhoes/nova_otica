@@ -2338,6 +2338,38 @@ export interface DecisionCard {
   outletStoreName?: string;
   /** Se o destino veio do giro da própria peça ou do giro da marca. */
   outletBasis?: 'sku' | 'marca';
+
+  // ── Compra: o que a rede JÁ TEM (feedback 6.0 · item 06) ──────────────────
+  /**
+   * Unidades desta peça paradas em lojas que não a venderam na janela.
+   *
+   * "Antes de adicionar um pedido de compra de qualquer produto, certifique-se
+   * se existe esse mesmo produto em outras lojas." O card de compra nascia
+   * cego a isso: dizia "comprar 25" sem dizer que 7 já estão na rede, na loja
+   * errada.
+   *
+   * ELE DECLARA, NÃO ABATE — e a distinção é aritmética, não estilística. A
+   * compra sai de `targetStock - position`, e `position` é o estoque da REDE:
+   * as unidades paradas JÁ ESTÃO contadas ali. Abatê-las de novo seria contar
+   * duas vezes e comprar de menos, que é o lado do erro que gera ruptura.
+   * O que faltava não era a conta — era o gestor enxergar que parte da solução
+   * já está paga e só precisa de uma transferência.
+   */
+  redeParadaQty?: number;
+  /** Em que lojas estão essas unidades paradas (as maiores primeiro). */
+  redeParadaLojas?: string[];
+  /** Unidades desta peça que o remanejamento do dia já propõe mover. */
+  remanejamentoSugeridoQty?: number;
+
+  // ── Remanejamento: o malote (feedback 6.0 · item 12) ──────────────────────
+  /** Data de embarque no malote (ISO). Ausente quando a rota é desconhecida. */
+  maloteEmbarque?: string;
+  /** Chegada prevista no destino (ISO). */
+  maloteChegada?: string;
+  /** Dias corridos até a peça chegar — o número que muda a decisão. */
+  maloteDias?: number;
+  /** A frase pronta: "Embarca segunda, chega terça — 3 dia(s)." */
+  maloteTexto?: string;
 }
 
 export interface DecisionSummary {
@@ -2959,6 +2991,49 @@ export interface InsumosDoQuadro {
   stuckDaysByProduct?: ReadonlyMap<string, number>;
   /** Faixas da prioridade composta (feedback 6.0 · item 04). */
   prioCfg?: PriorityConfig;
+  /**
+   * O prazo do malote para uma rota (feedback 6.0 · item 12).
+   *
+   * Entra como FUNÇÃO, e não como data, por duas razões que se somam:
+   *
+   *  · este arquivo não tem um único `import`, e isso é deliberado — ele é a
+   *    fonte única compartilhada com o web por alias (`@planning`), e a pureza
+   *    é o que permite a demo reusá-lo sem arrastar o backend junto. O
+   *    calendário de malotes é configuração do cliente, não matemática de
+   *    estoque, e mora em `./malotes.ts`;
+   *  · um card cujo conteúdo depende de `new Date()` lá dentro não é testável
+   *    nem reproduzível, e a frente do quadro guardado precisa saber que a foto
+   *    tem um dia de validade.
+   *
+   * Ausente, ou devolvendo `null`, o card simplesmente não fala de prazo.
+   */
+  malote?: (fromStoreName: string, toStoreName: string) => MaloteDoCard | null;
+}
+
+/** O que o calendário de malotes devolve para um card de remanejamento. */
+export interface MaloteDoCard {
+  embarque: string;
+  chegada: string;
+  dias: number;
+  texto: string;
+}
+
+/**
+ * Os campos de malote do card, ou nada.
+ *
+ * "Ou nada" é a parte que importa: sem calendário, ou com uma ponta em loja de
+ * praça desconhecida, o card simplesmente não fala de prazo. Uma data inventada
+ * aqui seria pior que silêncio — é o tipo de número que ninguém confere e todo
+ * mundo usa para decidir se dá tempo de esperar.
+ */
+function camposDoMalote(m: MaloteDoCard | null | undefined): Partial<DecisionCard> {
+  if (!m) return {};
+  return {
+    maloteEmbarque: m.embarque,
+    maloteChegada: m.chegada,
+    maloteDias: m.dias,
+    maloteTexto: m.texto,
+  };
 }
 
 export function buildDecisionCards(
@@ -2972,8 +3047,16 @@ export function buildDecisionCards(
     positionsByBrand,
     stuckDaysByProduct,
     prioCfg = DEFAULT_PRIORITY_CONFIG,
+    malote,
   } = insumos;
   const cards: DecisionCard[] = [];
+
+  // Quanto o remanejamento do dia já propõe mover de cada peça. O card de
+  // compra usa isto para dizer que parte da falta já tem solução sem dinheiro.
+  const remanejadoPorProduto = new Map<string, number>();
+  for (const s of rebalance) {
+    remanejadoPorProduto.set(s.productId, (remanejadoPorProduto.get(s.productId) ?? 0) + s.quantity);
+  }
   // Preço unitário por produto, para dar valor às transferências. Sai dos
   // planos que já estão em memória.
   const precoPorProduto = new Map(plans.map((p) => [p.productId, p.unitPrice]));
@@ -2990,6 +3073,14 @@ export function buildDecisionCards(
         },
         prioCfg,
       );
+      // O QUE A REDE JÁ TEM (item 06). Unidades desta peça em lojas que não a
+      // venderam na janela: existem, estão pagas, e não estão vendendo.
+      const paradas = (positionsByProduct?.get(p.productId) ?? [])
+        .filter((pos) => pos.currentStock > 0 && pos.unitsSold === 0)
+        .sort((a, b) => b.currentStock - a.currentStock);
+      const paradaQty = paradas.reduce((a, pos) => a + pos.currentStock, 0);
+      const jaRemanejando = remanejadoPorProduto.get(p.productId) ?? 0;
+
       cards.push({
         id: cardId('COMPRA', p.productId),
         type: 'COMPRA',
@@ -3007,6 +3098,13 @@ export function buildDecisionCards(
         impact: round2(p.capital),
         impactLabel: 'Custo do pedido',
         urgencyDays: p.stockoutInDays,
+        ...(paradaQty > 0
+          ? {
+              redeParadaQty: paradaQty,
+              redeParadaLojas: paradas.slice(0, 4).map((pos) => pos.storeName),
+            }
+          : {}),
+        ...(jaRemanejando > 0 ? { remanejamentoSugeridoQty: jaRemanejando } : {}),
       });
     } else if (p.recommendation === 'LIQUIDATE') {
       // "Liquidar" sozinho devolve a decisão para quem não sabia decidir: o
@@ -3110,6 +3208,7 @@ export function buildDecisionCards(
       impact: 0,
       impactLabel: 'Giro (sem capital)',
       urgencyDays: s.stockoutInDays,
+      ...camposDoMalote(malote?.(s.fromStoreName, s.toStoreName)),
     });
   }
 

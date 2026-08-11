@@ -5,6 +5,7 @@ import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stores/store.scope.js';
 import { computeLiveStock, liveDeltas, saldosAoVivo } from '../stock/stock.service.js';
 import { loadBrandCatalog } from './brandCatalog.js';
+import { maloteEmTexto, previsaoDeMalote } from './malotes.js';
 import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
 import {
@@ -589,9 +590,24 @@ export async function generateCards(days: number, storeId?: string, group: Produ
     }
     porMarca.set(marca, lista);
   }
+  // O calendário de malotes entra como função (ver `InsumosDoQuadro.malote`):
+  // `planning.math.ts` não tem imports de propósito, e a logística é
+  // configuração do cliente, não matemática de estoque.
+  const agora = new Date();
   const board = buildDecisionCards(productPlans, reb.rows, {
     positionsByProduct: posicoes,
     positionsByBrand: porMarca,
+    malote: (de, para) => {
+      const p = previsaoDeMalote(de, para, agora);
+      return p
+        ? {
+            embarque: p.embarque.toISOString(),
+            chegada: p.chegada.toISOString(),
+            dias: p.diasAteChegar,
+            texto: maloteEmTexto(p),
+          }
+        : null;
+    },
   });
   return {
     ...board,
