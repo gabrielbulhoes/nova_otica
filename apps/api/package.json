@@ -22,6 +22,7 @@
     "sync:backfill": "tsx src/sync/backfill.ts",
     "catalogo:importar": "tsx src/catalogo/importar.ts",
     "catalogo:semear-mix": "tsx src/catalogo/semearMix.ts",
+    "catalogo:estoque-ideal": "tsx src/catalogo/estoqueIdeal.ts",
     "bootstrap:admin": "tsx src/db/bootstrapAdmin.ts"
   },
   "prisma": {

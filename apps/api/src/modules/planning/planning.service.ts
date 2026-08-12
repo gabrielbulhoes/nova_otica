@@ -6,7 +6,7 @@ import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stor
 import { computeLiveStock, liveDeltas, saldosAoVivo } from '../stock/stock.service.js';
 import { loadBrandCatalog } from './brandCatalog.js';
 import { maloteEmTexto, previsaoDeMalote } from './malotes.js';
-import { currentDecisions, DECISION_SLA_DAYS } from './decisions.service.js';
+import { currentDecisions, DECISION_SLA_DAYS, produtosComCompraAprovada } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
 import {
   analysisBrand,
@@ -431,8 +431,30 @@ export async function purchaseOrders(
   storeId?: string,
   group: ProductGroup = 'todos',
   comRateio = false,
+  somenteAprovados = false,
 ) {
-  const [productPlans, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
+  const [todosOsPlanos, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
+
+  /*
+   * SÓ OS APROVADOS (feedback 6.0 · item 10).
+   *
+   * O rascunho de pedido nascia de TODO plano com recomendação de compra,
+   * independente de alguém ter olhado. A Central de Decisões e o Planejamento
+   * eram dois caminhos paralelos: aprovar um card ali não mudava nada aqui.
+   *
+   * É OPCIONAL, e o padrão continua sendo o comportamento antigo. Ligá-lo por
+   * padrão esvaziaria a tela de pedidos no dia da publicação — ninguém aprovou
+   * nada ainda — e uma tela vazia depois de um deploy é indistinguível de uma
+   * tela quebrada para quem a abre. A tela oferece o botão e diz quantos itens
+   * cada modo traz; a operação escolhe quando virar a chave.
+   *
+   * O corte é sobre `recommendation === 'BUY'`: os demais planos seguem para
+   * `buildPurchaseOrders`, que precisa deles para os totais de contexto.
+   */
+  const aprovados = somenteAprovados ? await produtosComCompraAprovada() : null;
+  const productPlans = aprovados
+    ? todosOsPlanos.filter((p) => p.recommendation !== 'BUY' || aprovados.has(p.productId))
+    : todosOsPlanos;
   // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
   // sem ele, cai no campo "marca" do ERP (comportamento anterior).
   // `analysisBrand` e não `extractBrand(...) ?? p.brand`: é a mesma regra,

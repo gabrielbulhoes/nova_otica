@@ -2443,6 +2443,59 @@ export interface DecisionBoard {
  * ser de rede). Aqui é só "quais cards tocam esta loja" — outra coisa, e
  * confundir as duas trocaria silenciosamente a conta que o gestor está lendo.
  */
+/**
+ * O ESTOQUE IDEAL DE UMA PEÇA NUMA LOJA — feedback 6.0 · item 08.
+ *
+ * "Falta uma definição de qual é o estoque ideal de cada peça em cada loja."
+ *
+ * O schema já tinha onde guardar (`StockItem.minStock`, migração
+ * `1_minstock_por_loja`) e o alerta já sabia usar (`resolveThreshold`: mínimo
+ * da loja > do produto > da rede). O que nunca existiu foi quem CALCULASSE o
+ * número — então o campo ficou nulo em toda posição e o alerta por loja nunca
+ * disparou por outro critério que não o padrão da rede.
+ *
+ * SÃO DOIS NÚMEROS, E CONFUNDI-LOS FLOODARIA O PAINEL DE ALERTAS.
+ *
+ *  · `ideal` é o ALVO: quanto a loja deveria ter para cobrir `targetCoverDays`
+ *    (60) de venda dela. É o número que responde a pergunta do cliente.
+ *  · `minimo` é o GATILHO: quanto pode cair antes de virar alerta — a demanda
+ *    do prazo de entrega mais a segurança (14 + 7 = 21 dias).
+ *
+ * Gravar o `ideal` como limiar de alerta poria quase toda posição em "abaixo do
+ * mínimo" no primeiro dia, porque alvo é onde se quer chegar, não onde se está.
+ * O alerta usa `minimo`; a tela mostra `ideal`.
+ *
+ * O PISO DE VITRINE. Loja que vende a peça tem mínimo 1 mesmo com demanda
+ * ínfima: é o mostruário, sem o qual ela não vende nem sob encomenda. Loja que
+ * NÃO vende a peça tem zero — forçar mostruário em toda loja para todo SKU
+ * imobilizaria a cauda longa inteira do catálogo.
+ */
+export interface EstoqueIdealDaLoja {
+  /** Alvo de cobertura (`targetCoverDays` de venda da loja). */
+  ideal: number;
+  /** Limiar de alerta (prazo de entrega + segurança). */
+  minimo: number;
+  /** Demanda diária DA LOJA usada na conta — para a tela poder mostrar. */
+  demandaDiaria: number;
+}
+
+export function estoqueIdealDaLoja(
+  entrada: { unitsSold: number; days: number },
+  cfg: PlanningConfig = DEFAULT_PLANNING_CONFIG,
+): EstoqueIdealDaLoja {
+  const demandaDiaria = entrada.days > 0 ? Math.max(0, entrada.unitsSold) / entrada.days : 0;
+  if (demandaDiaria === 0) {
+    // Sem venda na loja, não há alvo nem gatilho. Zero, e não o piso da rede:
+    // um mínimo positivo aqui mandaria repor peça que aquela loja não vende.
+    return { ideal: 0, minimo: 0, demandaDiaria: 0 };
+  }
+  return {
+    ideal: Math.max(1, Math.ceil(demandaDiaria * cfg.targetCoverDays)),
+    minimo: Math.max(1, Math.ceil(demandaDiaria * (cfg.leadTimeDays + cfg.safetyDays))),
+    demandaDiaria,
+  };
+}
+
 export interface FiltroDeVista {
   tipo?: DecisionType;
   prioridade?: DecisionPriority;

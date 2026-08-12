@@ -338,6 +338,61 @@ function TwoStepButton({
  * chegar a esta tabela, e teste que precisa de meia aplicação de pé é teste que
  * ninguém escreve o segundo.
  */
+/**
+ * Para onde vai o pedido INTEIRO, e quanto para cada loja — feedback 6.0 · 07.
+ *
+ * "No planejamento de compras só aparece o total de peças mas não indica
+ * facilmente para onde vai, e qual a quantidade para cada loja."
+ *
+ * O rateio já era calculado e já aparecia — dentro de cada item, atrás de um
+ * clique, um item por vez. Para saber o destino de um pedido de 40 itens era
+ * preciso abrir 40 gavetas e somar de cabeça. Aqui é a mesma conta, feita uma
+ * vez, sobre todos os fornecedores.
+ *
+ * Cala quando não há rateio (loja selecionada, ou usuário sem visão de rede) em
+ * vez de mostrar uma faixa vazia: a tela já explica o motivo logo abaixo.
+ */
+export function DestinoDoPedido({ orders }: { orders: PurchaseOrder[] }) {
+  const porLoja = new Map<string, number>();
+  let semRateio = 0;
+  for (const o of orders) {
+    for (const it of o.items) {
+      if (!it.distribution) {
+        semRateio += it.quantity;
+        continue;
+      }
+      for (const r of it.distribution.rows) {
+        porLoja.set(r.storeName, (porLoja.get(r.storeName) ?? 0) + r.suggestedQty);
+      }
+      // O que o rateio não conseguiu endereçar continua sendo do pedido, e
+      // some da soma por loja se ninguém contar. Ver `unassigned` no motor.
+      semRateio += it.distribution.unassigned;
+    }
+  }
+  if (porLoja.size === 0) return null;
+
+  const linhas = [...porLoja.entries()].sort((a, b) => b[1] - a[1]);
+  const total = linhas.reduce((a, [, q]) => a + q, 0);
+
+  return (
+    <div className="acao-do-card" style={{ margin: '0 0 12px' }}>
+      <div className="label">Para onde vai</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 6 }}>
+        {linhas.map(([loja, un]) => (
+          <span key={loja} style={{ fontSize: 12.5 }}>
+            {loja} <strong>{un}</strong>
+            <Unidade>un.</Unidade>
+          </span>
+        ))}
+      </div>
+      <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+        {total} un. endereçadas
+        {semRateio > 0 && ` · ${semRateio} un. sem destino definido (divisão manual)`}
+      </p>
+    </div>
+  );
+}
+
 export function RateioPorLoja({
   rows,
   pesoLabel,
@@ -1388,6 +1443,32 @@ export function Planning() {
 
   const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
   const params = { days, storeId: storeId || undefined, group };
+
+  /*
+   * Feedback 6.0 · item 05 — "separar as abas de transferência entre lojas da
+   * aba de Compras".
+   *
+   * As duas frentes viviam empilhadas na mesma rolagem, e é a ordem certa de
+   * PENSAR (redistribuir antes de comprar) apresentada como ordem de LER — o
+   * que faz o comprador atravessar a tabela de transferências toda vez que
+   * quer ver o pedido. Viram duas frentes com o mesmo peso.
+   *
+   * Abre em "Transferir" de propósito: é a decisão que não gasta dinheiro, e o
+   * título da seção sempre disse "antes de comprar".
+   */
+  const [frente, setFrente] = useState<'transferir' | 'comprar'>('transferir');
+
+  /*
+   * Feedback 6.0 · item 10 — "adicionar ao planejamento de pedido apenas as
+   * indicações dos cards aprovados".
+   *
+   * Padrão DESLIGADO, e não é hesitação: ligado por padrão, a tela de pedidos
+   * amanheceria vazia no dia da publicação, porque ninguém aprovou nada ainda.
+   * Tela vazia logo depois de um deploy é indistinguível de tela quebrada para
+   * quem a abre. O botão fica à vista, diz o que faz, e a operação vira a
+   * chave quando o fluxo de aprovação estiver rodando.
+   */
+  const [somenteAprovados, setSomenteAprovados] = useState(false);
   // O recorte por recomendação virou pergunta ao servidor pelo mesmo motivo do
   // quadro de decisões: as linhas vêm paginadas, e filtrar a PÁGINA mostraria
   // "nenhum item nesta categoria" com a lista cheia deles logo adiante.
@@ -1418,7 +1499,10 @@ export function Planning() {
     placeholderData: keepPreviousData,
   });
   const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
-  const orders = useQuery({ queryKey: ['planning-orders', days, storeId, group], queryFn: () => getPurchaseOrders(params) });
+  const orders = useQuery({
+    queryKey: ['planning-orders', days, storeId, group, somenteAprovados],
+    queryFn: () => getPurchaseOrders({ ...params, somenteAprovados: somenteAprovados ? 1 : undefined }),
+  });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
   const sugPaginas = suggestions.data?.pages;
@@ -1549,6 +1633,23 @@ export function Planning() {
           seta como pontuação até funciona ("De → Para"), mas invertida ela
           obriga a ler a linha de trás para frente. Reescrita no sentido da
           leitura, sem glifo nenhum. */}
+      {/* As duas frentes, com o mesmo peso (item 05). */}
+      <div className="segmented" role="group" aria-label="Frente de trabalho" style={{ marginTop: 18 }}>
+        {(['transferir', 'comprar'] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            className={frente === f ? 'active' : ''}
+            onClick={() => setFrente(f)}
+            aria-pressed={frente === f}
+          >
+            {f === 'transferir' ? 'Transferir entre lojas' : 'Comprar de fornecedor'}
+          </button>
+        ))}
+      </div>
+
+      {frente === 'transferir' && (
+      <>
       <AberturaDeSecao
         eyebrow="Remanejar"
         titulo="Redistribuir entre lojas (antes de comprar)"
@@ -1588,21 +1689,41 @@ export function Planning() {
       </div>
 
       {/* ── 2º: pedidos prontos por fornecedor, com total e data-limite ── */}
+      </>
+      )}
+
+      {frente === 'comprar' && (
+      <>
       <AberturaDeSecao
         eyebrow="Comprar"
         titulo="Pedidos por fornecedor (rascunho)"
         descricao="Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item mais urgente define o prazo do pedido. Exporte e envie."
         acoes={
-          orders.data && orders.data.orders.length > 0 ? (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/* SÓ OS APROVADOS — item 10. Sai desligado por decisão explícita:
+                ligado por padrão, esta tela amanheceria vazia no dia da
+                publicação, e tela vazia depois de deploy é indistinguível de
+                tela quebrada. */}
             <Botao
               variante="discreto"
               pequeno
-              icone="exportar"
-              onClick={() => downloadCsv('pedidos-fornecedores', orders.data!.orders.map(orderCsv).join('\n\n'))}
+              icone={somenteAprovados ? 'aprovar' : 'filtro'}
+              onClick={() => setSomenteAprovados((v) => !v)}
+              title="Monta o pedido só com os itens cujo card de compra foi aprovado na Central de Decisões (últimos 30 dias)"
             >
-              Exportar tudo (CSV)
+              {somenteAprovados ? 'Só os aprovados ✓' : 'Só os aprovados'}
             </Botao>
-          ) : undefined
+            {orders.data && orders.data.orders.length > 0 ? (
+              <Botao
+                variante="discreto"
+                pequeno
+                icone="exportar"
+                onClick={() => downloadCsv('pedidos-fornecedores', orders.data!.orders.map(orderCsv).join('\n\n'))}
+              >
+                Exportar tudo (CSV)
+              </Botao>
+            ) : null}
+          </div>
         }
       />
       <div className="card" ref={ordersRef}>
@@ -1617,6 +1738,14 @@ export function Planning() {
               {orders.data!.summary.items} itens · {orders.data!.summary.units} un. ·{' '}
               <strong>{formatBRL(orders.data!.summary.total)}</strong>
             </div>
+
+            {/* PARA ONDE VAI, E QUANTO PARA CADA LOJA — item 07.
+                "No planejamento de compras só aparece o total de peças mas não
+                indica facilmente para onde vai."
+                O rateio já existia, mas dentro de cada item, atrás de um clique.
+                Somado aqui em cima, o comprador vê o destino do pedido inteiro
+                antes de abrir item nenhum. */}
+            <DestinoDoPedido orders={orders.data!.orders} />
             {/* Com uma loja selecionada não há rateio, e o silêncio sozinho
                 pareceria falta de permissão ou defeito. */}
             {storeId && (
@@ -1636,6 +1765,8 @@ export function Planning() {
 
       {/* ── Ciclo: enviado → recebido, com pedidos em trânsito abatidos ── */}
       <OrderHistory />
+      </>
+      )}
 
       {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>
