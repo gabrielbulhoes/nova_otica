@@ -133,6 +133,7 @@ planningRouter.get(
         storeId,
         group(req.query.group),
         req.user?.role === 'ADMIN',
+        req.query.somenteAprovados === '1',
       ),
     );
   }),

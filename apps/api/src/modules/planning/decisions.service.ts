@@ -225,3 +225,37 @@ export function isCriticallyOverdue(firstSeenAt: Date | null | undefined, now = 
   if (!firstSeenAt) return false;
   return (now.getTime() - firstSeenAt.getTime()) / 86_400_000 > DECISION_SLA_DAYS;
 }
+
+/**
+ * Produtos cujo card de COMPRA foi APROVADO e ainda não foi comprado —
+ * feedback 6.0 · item 10.
+ *
+ * "Adicionar ao planejamento de pedido apenas as indicações dos cards
+ * aprovados."
+ *
+ * Hoje o rascunho de pedido nasce de TODO plano com recomendação de compra,
+ * independente de alguém ter olhado. A Central e o Planejamento eram dois
+ * caminhos paralelos: aprovar um card na Central não mudava nada no pedido.
+ *
+ * SÓ `COMPRA`, e não qualquer aprovação: aprovar um remanejamento ou uma
+ * liquidação daquela peça não é autorização para comprá-la. `cardType` é o
+ * tipo do card no instante da decisão, e é por ele que se filtra.
+ *
+ * A janela existe porque a aprovação não expira sozinha no banco: sem ela, uma
+ * aprovação de março continuaria mandando comprar em agosto. Trinta dias é o
+ * ciclo de compra da rede — acima disso a decisão precisa ser retomada.
+ */
+export async function produtosComCompraAprovada(diasDeValidade = 30): Promise<Set<string>> {
+  const desde = new Date(Date.now() - diasDeValidade * 86_400_000);
+  const rows = await prisma.decisionRecord.findMany({
+    where: {
+      outcome: 'APPROVED',
+      cardType: 'COMPRA',
+      decidedAt: { gte: desde },
+      productId: { not: null },
+    },
+    select: { productId: true },
+    distinct: ['productId'],
+  });
+  return new Set(rows.flatMap((r) => (r.productId ? [r.productId] : [])));
+}
