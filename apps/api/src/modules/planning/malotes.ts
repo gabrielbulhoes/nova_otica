@@ -50,15 +50,21 @@ const CALENDARIO: Partial<Record<Cidade, Partial<Record<Cidade, Perna>>>> = {
 /**
  * De que praça é cada loja, por palavra-chave no nome.
  *
- * DELIBERADAMENTE INCOMPLETO. Só entram aqui os nomes de que se tem certeza:
- * shopping cujo nome é único e inequívoco, ou a própria cidade no nome da loja.
- * Loja não mapeada NÃO ganha prazo — o card simplesmente não fala de malote,
- * em vez de exibir uma data inventada.
+ * DUAS PROCEDÊNCIAS, e a diferença importa para quem for mexer:
  *
- * Os casos ambíguos ficaram de fora de propósito e estão listados em
- * `lojasSemPraca()` para o cliente confirmar: "RIOMAR" existe em Fortaleza e em
- * Natal; "IGUATEMI" é quase certamente Fortaleza, mas "quase certamente" não é
- * base para dizer a um gerente que a peça chega terça.
+ *  · as sete primeiras saem do próprio nome — shopping de nome único ou a
+ *    cidade escrita na loja. São inferência, e inferência óbvia;
+ *  · as quatro últimas foram CONFIRMADAS PELO CLIENTE em 11/08/2026, e não
+ *    poderiam ter sido deduzidas. "RIOMAR" existe em Fortaleza, Natal, Recife,
+ *    Aracaju e São Luís — o palpite inicial aqui foi Natal, e estava errado.
+ *    "VARANDA" também é Fortaleza, contra o palpite de Natal. Foi exatamente
+ *    para não acertar por sorte que estas quatro ficaram sem prazo até a
+ *    confirmação chegar.
+ *
+ * Loja não mapeada NÃO ganha prazo: o card não fala de malote, em vez de
+ * exibir uma data inventada. `lojasSemPraca()` lista o que falta — e o teste
+ * `malotes.test.ts` prende a lista real das 16 lojas, para que uma filial nova
+ * apareça como falha de teste em vez de sumir do calendário em silêncio.
  */
 const PRACA_POR_PALAVRA: { palavra: string; cidade: Cidade }[] = [
   { palavra: 'GUARABIRA', cidade: 'GUARABIRA' },
@@ -68,6 +74,12 @@ const PRACA_POR_PALAVRA: { palavra: string; cidade: Cidade }[] = [
   { palavra: 'NATAL SHOP', cidade: 'NATAL' },
   { palavra: 'PRAIA SHOPPING', cidade: 'NATAL' },
   { palavra: 'PETROPOLIS', cidade: 'NATAL' },
+  // Confirmadas pelo cliente em 11/08/2026 — ver acima.
+  { palavra: 'IGUATEMI', cidade: 'FORTALEZA' },
+  { palavra: 'RIOMAR', cidade: 'FORTALEZA' },
+  { palavra: 'RIO MAR', cidade: 'FORTALEZA' },
+  { palavra: 'VARANDA', cidade: 'FORTALEZA' },
+  { palavra: 'AFONSO PENA', cidade: 'NATAL' },
 ];
 
 const semAcento = (s: string) =>

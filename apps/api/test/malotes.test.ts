@@ -34,20 +34,54 @@ describe('praça de cada loja', () => {
     expect(pracaDaLoja('A GRACIOSA JUAZEIRO')).toBe('JUAZEIRO');
   });
 
-  it('devolve null no que é ambíguo, em vez de chutar', () => {
-    // "RIOMAR" existe em Fortaleza E em Natal; "IGUATEMI" é quase certamente
-    // Fortaleza — e "quase certamente" não é base para dizer a um gerente que a
-    // peça chega terça-feira.
-    expect(pracaDaLoja('A GRACIOSA RIOMAR')).toBeNull();
-    expect(pracaDaLoja('A GRACIOSA IGUATEMI')).toBeNull();
-    expect(pracaDaLoja('A GRACIOSA VARANDA')).toBeNull();
-    expect(pracaDaLoja(null)).toBeNull();
+  it('as quatro que o cliente confirmou — e que NÃO dava para deduzir', () => {
+    // Confirmadas em 11/08/2026. Os palpites que eu teria dado estavam
+    // errados em duas delas: "RIOMAR" (existe em cinco capitais; eu teria
+    // chutado Natal) e "VARANDA" (também Fortaleza). É por isso que ficaram
+    // sem prazo até a resposta chegar, em vez de acertar por sorte.
+    expect(pracaDaLoja('A GRACIOSA IGUATEMI')).toBe('FORTALEZA');
+    expect(pracaDaLoja('A GRACIOSA RIOMAR')).toBe('FORTALEZA');
+    expect(pracaDaLoja('A GRACIOSA VARANDA')).toBe('FORTALEZA');
+    expect(pracaDaLoja('A GRACIOSA AFONSO PENA')).toBe('NATAL');
   });
 
-  it('lista o que falta o cliente confirmar', () => {
-    expect(
-      lojasSemPraca(['A GRACIOSA MIDWAY', 'A GRACIOSA RIOMAR', 'A GRACIOSA IGUATEMI', 'A GRACIOSA RIOMAR']),
-    ).toEqual(['A GRACIOSA IGUATEMI', 'A GRACIOSA RIOMAR']);
+  it('continua devolvendo null para o que não conhece', () => {
+    expect(pracaDaLoja('A GRACIOSA FILIAL NOVA')).toBeNull();
+    expect(pracaDaLoja(null)).toBeNull();
+    expect(lojasSemPraca(['A GRACIOSA MIDWAY', 'LOJA X', 'LOJA X'])).toEqual(['LOJA X']);
+  });
+
+  it('AS 16 LOJAS DA REDE ESTÃO TODAS MAPEADAS', () => {
+    /*
+     * O teste que impede o calendário de emudecer em silêncio.
+     *
+     * Loja sem praça não ganha prazo — é a decisão certa, e é justamente por
+     * isso que uma filial nova entraria no sistema e os cards dela ficariam
+     * calados sem nada acusando. Aqui a lista real vira asserção: abrir loja
+     * passa a quebrar o teste, que é onde alguém olha.
+     *
+     * A lista saiu do catálogo de produção (16 lojas de planejamento).
+     */
+    const REDE = [
+      'A GRACIOSA AFONSO PENA',
+      'A GRACIOSA GUARABIRA',
+      'A GRACIOSA IGUATEMI',
+      'A GRACIOSA JUAZEIRO',
+      'A GRACIOSA MIDWAY',
+      'A GRACIOSA MOSSORO CENTRO',
+      'A GRACIOSA MOSSORO PARTAGE',
+      'A GRACIOSA NATAL SHOP',
+      'A GRACIOSA RIOMAR',
+      'A GRACIOSA VARANDA',
+      'GRAND OPTICAL MIDWAY',
+      'GRAND OPTICAL NATAL SHOPPING',
+      'GRAND OPTICAL PETROPOLIS',
+      'OTICALLI MIDWAY',
+      'OTICALLI NATAL SHOPPING',
+      'OTICALLI PRAIA SHOPPING',
+    ];
+    expect(REDE).toHaveLength(16);
+    expect(lojasSemPraca(REDE)).toEqual([]);
   });
 
   it('ignora acento e caixa', () => {
@@ -56,13 +90,26 @@ describe('praça de cada loja', () => {
 });
 
 describe('previsão do malote · rotas diretas', () => {
-  it('a rota Natal → Fortaleza existe, mas nenhuma loja mapeia para lá', () => {
-    // O calendário tem a perna; o que falta é saber QUE loja fica em Fortaleza.
-    // "IGUATEMI" e "RIOMAR" são os candidatos, e os dois são ambíguos. Enquanto
-    // o cliente não confirmar, a resposta certa é o silêncio — e este teste
-    // existe para que ligar a praça de Fortaleza seja uma mudança consciente,
-    // e não algo que alguém descubra por um prazo errado na tela.
-    expect(previsaoDeMalote('A GRACIOSA MIDWAY', 'A GRACIOSA IGUATEMI', em(10))).toBeNull();
+  it('Natal → Fortaleza: sai segunda, chega terça', () => {
+    const p = previsaoDeMalote('A GRACIOSA MIDWAY', 'A GRACIOSA IGUATEMI', em(10))!;
+    expect(p.embarque.getDay()).toBe(1);
+    expect(p.chegada.getDay()).toBe(2);
+    expect(p.diasAteChegar).toBe(1);
+    expect(p.viaNatal).toBe(false);
+  });
+
+  it('Fortaleza → Natal: sai terça, chega quarta', () => {
+    const p = previsaoDeMalote('A GRACIOSA RIOMAR', 'OTICALLI MIDWAY', em(10))!;
+    expect(p.embarque.getDay()).toBe(2);
+    expect(p.chegada.getDay()).toBe(3);
+  });
+
+  it('entre as três lojas de Fortaleza o malote não entra', () => {
+    // IGUATEMI, RIOMAR e VARANDA são todas de Fortaleza: a peça atravessa a
+    // cidade, não pega malote. Antes da confirmação do cliente essas três
+    // caíam em `null` por serem desconhecidas; agora caem em `null` pelo
+    // motivo certo — e a diferença aparece nos pares com Natal, acima.
+    expect(previsaoDeMalote('A GRACIOSA IGUATEMI', 'A GRACIOSA VARANDA', em(10))).toBeNull();
   });
 
   it('Natal → Guarabira numa segunda: embarca na terça e chega na terça', () => {
@@ -128,8 +175,13 @@ describe('previsão do malote · quando calar', () => {
     // Silêncio é a resposta certa. O card deixa de mostrar prazo em vez de
     // mostrar um prazo errado — que é exatamente o tipo de número que ninguém
     // confere e todo mundo usa.
-    expect(previsaoDeMalote('A GRACIOSA RIOMAR', 'A GRACIOSA GUARABIRA', em(10))).toBeNull();
-    expect(previsaoDeMalote('A GRACIOSA GUARABIRA', 'A GRACIOSA RIOMAR', em(10))).toBeNull();
+    //
+    // Este teste usava RIOMAR como exemplo de loja desconhecida, e QUEBROU
+    // quando o cliente confirmou que RIOMAR é Fortaleza. Foi o próprio teste
+    // avisando que tinha envelhecido — e é o comportamento que se quer de uma
+    // filial nova entrando na rede.
+    expect(previsaoDeMalote('A GRACIOSA FILIAL NOVA', 'A GRACIOSA GUARABIRA', em(10))).toBeNull();
+    expect(previsaoDeMalote('A GRACIOSA GUARABIRA', 'A GRACIOSA FILIAL NOVA', em(10))).toBeNull();
   });
 });
 
