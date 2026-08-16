@@ -6,6 +6,7 @@ import { publish } from '../lib/eventBus.js';
 import { notifySyncFailure } from '../lib/opsAlert.js';
 import { HttpError } from '../http/helpers.js';
 import { getSellbieClient } from '../integrations/sellbie/index.js';
+import { SellbieUnreachableError } from '../integrations/sellbie/httpClient.js';
 import { checkWindow } from '../integrations/sellbie/window.js';
 import * as map from '../integrations/sellbie/mappers.js';
 import { emLotes, varrerPorJanelas } from '../integrations/sellbie/sweep.js';
@@ -115,11 +116,37 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
 
   let totalRead = 0;
   let totalWritten = 0;
+
+  /*
+   * O DISJUNTOR — incidente de 16/08/2026.
+   *
+   * Naquela manhã as DEZ entidades falharam com o mesmo `timeout of 30000ms
+   * exceeded`. Cada uma gastou cinco tentativas de 30 s antes de desistir, e o
+   * ciclo levou 39 minutos para concluir o que a PRIMEIRA rota já havia
+   * provado em três: a CDS não estava respondendo.
+   *
+   * O custo não é o tempo de máquina. É a JANELA. A CDS só aceita ser
+   * consultada entre 06:00 e 07:00, e o cron dispara uma vez, às 06:00 — de
+   * modo que aquela hora era a única chance do dia. Gastá-la inteira provando
+   * dez vezes a mesma indisponibilidade eliminou qualquer possibilidade de uma
+   * segunda tentativa, e a rede passou o dia servindo o dado da véspera.
+   *
+   * `SellbieUnreachableError` é lançado só quando as cinco tentativas terminam
+   * SEM NENHUMA resposta HTTP — timeout, DNS, pacote descartado. Erro DA CDS
+   * (4xx/5xx) não conta: aquilo é a CDS falando, e uma rota quebrada não diz
+   * nada sobre as outras nove.
+   */
+  let cdsInalcancavel: SellbieUnreachableError | null = null;
+
   const track = async (
     name: string,
     fn: () => Promise<{ read: number; written: number; error?: string }>,
     opts: { countTotals?: boolean } = {},
   ): Promise<void> => {
+    if (cdsInalcancavel) {
+      entities[name] = { read: 0, written: 0, error: 'pulada: CDS inalcançável' };
+      return;
+    }
     try {
       const r = await fn();
       // Erro estruturado (ex.: write-back parcial) preserva os contadores de
@@ -136,6 +163,13 @@ async function runFullSyncLocked(trigger: Trigger): Promise<SyncResult> {
       const message = err instanceof Error ? err.message : String(err);
       entities[name] = { read: 0, written: 0, error: message };
       log.error(`Falha ao sincronizar ${name}`, { error: message });
+      if (err instanceof SellbieUnreachableError) {
+        cdsInalcancavel = err;
+        log.error('CDS inalcançável — interrompendo o ciclo para preservar a janela', {
+          entidade: name,
+          rota: err.route,
+        });
+      }
     }
   };
 
