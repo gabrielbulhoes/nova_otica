@@ -52,6 +52,50 @@ function resumirParams(params?: object): string {
 }
 
 /**
+ * A causa, em texto legível.
+ *
+ * `String(causa)` devolve `[object Object]` para o que não é `Error` — e o
+ * axios rejeita com objeto simples em alguns caminhos de rede, justamente os
+ * de timeout. A mensagem que chega ao Telegram do cliente é a única pista que
+ * ele tem; perdê-la ali é perder o incidente.
+ */
+function detalharCausa(causa: unknown): string {
+  if (causa instanceof Error) return causa.message;
+  if (causa && typeof causa === 'object') {
+    try {
+      return JSON.stringify(causa);
+    } catch {
+      // Referência circular: melhor as chaves que `[object Object]`.
+      return Object.keys(causa).join(', ') || 'objeto sem detalhe';
+    }
+  }
+  return String(causa);
+}
+
+/**
+ * A CDS não está ao alcance — timeout, DNS ou pacote descartado.
+ *
+ * Distinta de um erro da CDS (4xx/5xx com resposta): aquilo é a CDS falando,
+ * isto é a CDS calada. A diferença decide se vale continuar o ciclo.
+ *
+ * Nasceu do incidente de 16/08/2026: as dez entidades falharam com o MESMO
+ * `timeout of 30000ms exceeded`, cada uma gastando cinco tentativas de 30 s. O
+ * ciclo levou 39 minutos para concluir o que a primeira rota já tinha provado
+ * em três, e comeu quase inteira a janela de uma hora em que a CDS aceita ser
+ * consultada — janela que era a única chance de tentar de novo no mesmo dia.
+ */
+export class SellbieUnreachableError extends Error {
+  readonly route: string;
+  readonly causa: unknown;
+  constructor(route: string, causa: unknown) {
+    super(`CDS inalcançável em "${route}": ${detalharCausa(causa)}`);
+    this.name = 'SellbieUnreachableError';
+    this.route = route;
+    this.causa = causa;
+  }
+}
+
+/**
  * Cliente HTTP da API CDS (modo "live").
  * - Autentica com os três cabeçalhos da CDS: x_api_key, x_api_token e
  *   x_cliente_id.
@@ -118,6 +162,12 @@ export class SellbieHttpClient implements SellbieClient {
         const retryable = !status || status >= 500 || status === 429;
         if (!retryable || attempt > this.maxRetries) {
           log.error('Falha ao consultar Sellbie', { route, status, attempt });
+          // ESGOTOU AS TENTATIVAS SEM NUNCA TER RESPOSTA HTTP → a CDS não está
+          // ao alcance. `status` indefinido depois de 5 idas é timeout, DNS ou
+          // pacote descartado — nunca um erro de aplicação, que viria com
+          // código. O tipo existe para o sync poder PARAR em vez de provar a
+          // mesma indisponibilidade em mais nove rotas: ver `runFullSyncLocked`.
+          if (status === undefined) throw new SellbieUnreachableError(route, err);
           throw err;
         }
         const backoff = 2 ** attempt * 1000;
