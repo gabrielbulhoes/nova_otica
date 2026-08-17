@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
 import { scopedStoreWhere } from '../auth/auth.middleware.js';
+import { stockVisibleWhere } from '../stores/store.scope.js';
 import { parseGroup, productWhereForGroup, scopeCategories } from './product.scope.js';
 
 export const productsRouter = Router();
@@ -70,7 +71,14 @@ productsRouter.get(
       include: {
         color: true,
         size: true,
-        stockItems: { where: scopedStoreWhere(req), include: { store: true } },
+        // O escopo do USUÁRIO (gestor vê só a própria loja) e o da PLATAFORMA
+        // (filial em outro ERP não existe) são perguntas diferentes, e as duas
+        // valem aqui. Só a primeira estava escrita: para o ADMIN, o detalhe do
+        // produto listava a posição das lojas ZEISS com saldo desatualizado.
+        stockItems: {
+          where: { ...scopedStoreWhere(req), ...stockVisibleWhere },
+          include: { store: true },
+        },
       },
     });
     if (!product) throw notFound('Produto não encontrado');

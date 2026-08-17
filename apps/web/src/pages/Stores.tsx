@@ -75,15 +75,10 @@ export function Stores() {
                         O que faltava era o rótulo — sem ele, a mesma lista
                         servia de prova de que "elas continuam gerando
                         informação". */}
-                    {s.externalErp ? (
-                      <Selo
-                        tom="gray"
-                        icone="atencao"
-                        title="Opera em outro ERP. O CDS devolve dados desta filial, mas desatualizados — ficam fora de todo número da plataforma."
-                      >
-                        outro ERP
-                      </Selo>
-                    ) : s.excludeFromPlanning ? (
+                    {/* O selo "outro ERP" morava aqui e saiu junto com as
+                        filiais: a ZEISS não chega mais nesta lista, então o
+                        selo não teria a quem rotular. Ver `ESCOPOS.todas`. */}
+                    {s.excludeFromPlanning ? (
                       <Selo
                         tom="gray"
                         icone="informacao"

@@ -74,11 +74,26 @@ d('escopo da lista de lojas · sai da conta E sai da tela', () => {
     expect(r).not.toContain(zeissId);
   });
 
-  it('todas é o cadastro inteiro — e existe só para quem o administra', async () => {
+  it('todas traz a retaguarda de volta — mas NÃO a filial em outro ERP', async () => {
+    /*
+     * Esta asserção era o oposto até a rodada seguinte, e a mudança é uma
+     * DECISÃO DO CLIENTE, não uma correção de defeito.
+     *
+     * `todas` era o cadastro literal, com a ZEISS listada sob um selo "outro
+     * ERP". O argumento era que esconder a filial esconderia a linha que
+     * precisa ser conferida. O cliente discordou, pela terceira vez: "Zeiss
+     * continua aparecendo. Tirar totalmente do campo de visão."
+     *
+     * Ele tem razão, e o argumento é dele: não há o que conferir numa filial
+     * cujos números a plataforma não usa e não atualiza.
+     *
+     * A retaguarda continua — o pedido nunca foi sobre ela, e o GMAIS é a
+     * origem da distribuição do recebimento.
+     */
     const r = await ids('todas');
     expect(r).toContain(varejoId);
     expect(r).toContain(retaguardaId);
-    expect(r).toContain(zeissId);
+    expect(r).not.toContain(zeissId);
   });
 
   it('os três escopos são encaixados, nunca cruzados', async () => {
