@@ -415,14 +415,23 @@ function stockRows(params: Record<string, string | string[] | undefined>) {
 
 function alerts(group: ProductGroup = 'todos', category?: string | string[], storeId?: string) {
   const rows = stockRows({ group, category, storeId }).filter((x) => {
-    // Com o dataset real (catálogo amostrado), só alerta posições que EXISTEM
-    // na loja: linha de estoque presente ou venda no período. Sem isso, cada
-    // produto ausente numa filial viraria "ruptura" fantasma.
-    if (real) {
-      const k = key(x.storeId as string, x.productId as string);
-      const conhecido = stockQty.has(k) || (soldQty.get(k) ?? 0) > 0;
-      if (!conhecido) return false;
-    }
+    /*
+     * A GUARDA "A LOJA TRABALHA A PEÇA" — a mesma que a API passou a ter.
+     *
+     * Só alerta posição que EXISTE na loja: linha de estoque presente ou venda
+     * no período. Sem isso, cada produto ausente numa filial viraria "ruptura"
+     * fantasma. A produção NÃO tinha esta guarda e alertava sobre 1,1 milhão de
+     * posições, quase todas de peças que a loja nunca trabalhou — mais uma vez
+     * as duas pontas discordavam, e a certa era esta.
+     *
+     * VALE PARA OS DOIS DATASETS agora. Era `if (real)`, e o motivo do recorte
+     * se perdeu: no catálogo fictício toda posição tem linha, então a guarda
+     * não mudava nada ali — mas escrita como exceção ela sugeria que a regra
+     * era um remendo do dataset real, e não a regra de negócio que é.
+     */
+    const k = key(x.storeId as string, x.productId as string);
+    const conhecido = stockQty.has(k) || (soldQty.get(k) ?? 0) > 0;
+    if (!conhecido) return false;
     const override = storeMinStock.get(key(x.storeId as string, x.productId as string));
     const threshold = override ?? (x.minStock as number);
     (x as Record<string, unknown>).minStock = threshold;

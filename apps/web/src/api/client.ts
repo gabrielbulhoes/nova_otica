@@ -466,7 +466,22 @@ export const getFairSplit = (params: Record<string, string | number | undefined>
 
 export const getAlerts = (params: Record<string, string | undefined>) =>
   api
-    .get<{ total: number; out: number; low: number; rows: StockAlert[] }>('/alerts', { params })
+    .get<{
+      total: number;
+      out: number;
+      low: number;
+      rows: StockAlert[];
+      /** Posições examinadas — o universo depois da guarda "a loja trabalha". */
+      examinadas?: number;
+      /**
+       * A LISTA foi cortada (os contadores nunca são). Existe porque o corte
+       * era silencioso: a tela contava sobre uma fatia alfabética do catálogo
+       * e apresentava o número como se fosse da rede inteira.
+       */
+      truncado?: boolean;
+      /** Teto da lista, para a tela dizer "as N mais críticas". */
+      limite?: number;
+    }>('/alerts', { params })
     .then((r) => r.data);
 export const setMinStock = (productId: string, minStock: number | null, storeId?: string) =>
   api.put('/alerts/min-stock', { productId, minStock, storeId }).then((r) => r.data);

@@ -1,4 +1,6 @@
+import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
+import { lojaTrabalhaAPeca, resolveThreshold } from '../modules/alerts/alerts.service.js';
 import { DEFAULT_PLANNING_CONFIG, estoqueIdealDaLoja } from '../modules/planning/planning.math.js';
 import { PLANNED_STORE_WHERE } from '../modules/stores/store.scope.js';
 
@@ -39,6 +41,10 @@ async function main(): Promise<void> {
   let comAlvo = 0;
   let zerados = 0;
   let gravados = 0;
+  // O painel de ruptura, antes e depois — ver a nota longa no laço.
+  let trabalhadas = 0;
+  let alertasAntes = 0;
+  let alertasDepois = 0;
   const exemplos: string[] = [];
 
   for (const [storeId, storeName] of nomePorLoja) {
@@ -57,12 +63,47 @@ async function main(): Promise<void> {
 
     const itens = await prisma.stockItem.findMany({
       where: { storeId },
-      select: { productId: true, quantity: true, minStock: true },
+      select: {
+        productId: true,
+        quantity: true,
+        reserved: true,
+        minStock: true,
+        product: { select: { minStock: true } },
+      },
     });
 
     const aGravar: { productId: string; minimo: number }[] = [];
     for (const it of itens) {
       posicoes += 1;
+
+      /*
+       * O ANTES E O DEPOIS DO PAINEL DE RUPTURA.
+       *
+       * Esta contagem é a condição que eu mesmo pus para autorizar o
+       * `--gravar`, e ela continua certa: o campo que este comando preenche
+       * decide quando o alerta apita. Sem medir os dois lados, gravar é apostar
+       * em duas direções ao mesmo tempo — pode afogar a operação em alerta novo
+       * ou CALAR alerta que hoje dispara pelo padrão da rede.
+       *
+       * Conta só as posições que a loja TRABALHA, a mesma guarda do painel
+       * (`lojaTrabalhaAPeca`). Contar sobre toda posição do banco daria um
+       * número que a tela nunca mostra, e comparar com ele não decide nada.
+       *
+       * Nota de precisão: a janela aqui é a do comando (`dias`, 90 por padrão)
+       * e a do painel é de 180. Onde as duas divergem, esta contagem é a
+       * CONSERVADORA — vê menos posições como "trabalhadas", então nunca
+       * promete uma queda de alertas maior do que a real.
+       */
+      const vendeu = (vendidoPorProduto.get(it.productId) ?? 0) > 0;
+      if (lojaTrabalhaAPeca(it.quantity, vendeu)) {
+        // Sem `pendingDelta`: o comando roda fora do ciclo de requisição e o
+        // delta é volátil por natureza. A diferença é de unidades em trânsito,
+        // e o que se compara aqui são duas réguas sobre a MESMA foto.
+        const disponivel = Math.max(it.quantity - it.reserved, 0);
+        const limiarHoje = resolveThreshold(it.minStock, it.product.minStock, env.DEFAULT_MIN_STOCK);
+        if (disponivel <= limiarHoje) alertasAntes += 1;
+        trabalhadas += 1;
+      }
       const { ideal, minimo } = estoqueIdealDaLoja(
         { unitsSold: vendidoPorProduto.get(it.productId) ?? 0, days: dias },
         DEFAULT_PLANNING_CONFIG,
@@ -87,6 +128,18 @@ async function main(): Promise<void> {
        * `null` onde não há venda deixa a cascata como está (mínimo do produto,
        * senão o da rede). O comando só ACRESCENTA precisão onde tem lastro.
        */
+      // O DEPOIS: o mesmo teste, com o limiar que este comando gravaria.
+      // Onde ele não grava (sem venda na loja), a cascata segue como está —
+      // então o limiar do "depois" é o de hoje, e a posição conta igual nos
+      // dois lados. É por isso que a maior parte dos 35 mil não se move: o
+      // conserto delas é a guarda do painel, não este comando.
+      if (lojaTrabalhaAPeca(it.quantity, vendeu)) {
+        const disponivel = Math.max(it.quantity - it.reserved, 0);
+        const limiarDepois =
+          ideal > 0 ? minimo : resolveThreshold(it.minStock, it.product.minStock, env.DEFAULT_MIN_STOCK);
+        if (disponivel <= limiarDepois) alertasDepois += 1;
+      }
+
       if (ideal > 0 && it.minStock !== minimo) aGravar.push({ productId: it.productId, minimo });
       if (ideal > 0 && exemplos.length < 6) {
         exemplos.push(
@@ -114,6 +167,25 @@ async function main(): Promise<void> {
   console.log(`   com alvo (a loja vende) . ${comAlvo}`);
   console.log(`   sem venda na loja ....... ${zerados}  ← intocadas, a cascata segue como está`);
   console.log(`   limiares a mudar ........ ${gravados}${gravar ? ' (GRAVADOS)' : ' (nada foi escrito)'}`);
+
+  // ── O painel de ruptura, antes e depois ──────────────────────────────────
+  const delta = alertasDepois - alertasAntes;
+  const sinal = delta > 0 ? `+${delta}` : String(delta);
+  console.log('');
+  console.log(`   posições que a loja trabalha .. ${trabalhadas}  ← o universo do painel`);
+  console.log(`   alertas de ruptura HOJE ....... ${alertasAntes}`);
+  console.log(`   alertas com os limiares novos . ${alertasDepois}  (${sinal})`);
+  if (delta > 0) {
+    console.log('');
+    console.log(`   ATENÇÃO: os limiares novos ACRESCENTAM ${delta} alertas. Isso acontece onde a`);
+    console.log('   loja vende bem e o mínimo calculado fica ACIMA do padrão da rede — é');
+    console.log('   correto, mas confira se a operação aguenta o volume antes de gravar.');
+  } else if (delta < 0) {
+    console.log('');
+    console.log(`   Os limiares novos SILENCIAM ${-delta} alertas. Confira a amostra acima: cada`);
+    console.log('   um deles é uma posição que hoje apita pelo padrão 3 e passaria a não');
+    console.log('   apitar. Onde a loja não vende a peça, é o resultado desejado.');
+  }
   if (exemplos.length) {
     console.log('\n   amostra:');
     for (const e of exemplos) console.log(e);
