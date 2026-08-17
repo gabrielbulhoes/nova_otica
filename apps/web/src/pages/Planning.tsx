@@ -24,6 +24,8 @@ import {
   setSupplierLeadTime,
   getMixDeGrifes,
   setGrifeForaDoMix,
+  getMixPorLoja,
+  declararMixDaGrife,
   settlePurchaseOrder,
   type MovementClass,
   type PurchaseOrder,
@@ -654,6 +656,11 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                         rows={it.distribution.rows}
                         pesoLabel={rotuloDoPeso(it.distribution.basis, `${dias} dias`)}
                         porNecessidade={it.distribution.basis === 'necessidade'}
+                        // As lojas que o mix tirou da divisão. Sem esta linha,
+                        // uma loja que some do rateio é indistinguível de uma
+                        // loja que não precisava de nada — e as duas pedem
+                        // reações opostas de quem compra.
+                        excludedByMix={it.distribution.excludedByMix}
                       />
                       {it.distribution.unassigned > 0 && (
                         <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
@@ -1277,6 +1284,259 @@ function MixDeGrifes({ canEdit }: { canEdit: boolean }) {
           </>
         )}
       </div>
+    </>
+  );
+}
+
+/**
+ * MIX POR LOJA — quais lojas trabalham cada grife.
+ *
+ * A tela existe por causa de um defeito que o cliente reportou DUAS rodadas
+ * seguidas, com o mesmo exemplo: "Dior para Guarabira ainda continua
+ * aparecendo". A regra sempre esteve no motor. A LISTA morava num arquivo JSON
+ * no disco do servidor, e o arquivo nunca chegou ao contêiner — `/health` dizia
+ * `mix.ativo: false` desde sempre, e nada mais dizia.
+ *
+ * Consertar seria copiar o arquivo. O que se fez foi outra coisa: uma regra
+ * COMERCIAL não pode morar em artefato que só o deploy sabe colocar no lugar.
+ * Quem sabe onde a Chanel pode ser vendida é o cliente, e agora ele declara,
+ * vê e corrige aqui — sem intermediário e sem publicação no meio.
+ *
+ * A SEMÂNTICA É ASSIMÉTRICA, e a tela precisa dizer isso em voz alta: grife sem
+ * nenhuma loja marcada é CORRENTE (vendida em todas), não proibida. É o estado
+ * da esmagadora maioria do catálogo, e trocar os dois sentidos travaria a rede
+ * inteira no dia em que alguém salvasse a primeira grife.
+ */
+function MixPorLoja({ canEdit }: { canEdit: boolean }) {
+  const mix = useQuery({ queryKey: ['planning-mix-por-loja'], queryFn: getMixPorLoja });
+  const grifes = useQuery({ queryKey: ['planning-brand-mix'], queryFn: getMixDeGrifes });
+  const [busca, setBusca] = useState('');
+  const [editando, setEditando] = useState<string | null>(null);
+
+  const declaradoPor = new Map((mix.data?.rows ?? []).map((r) => [r.brand, r]));
+
+  // As grifes ofertadas são as que o MOTOR conhece (`analysisBrand`), a mesma
+  // lista da tabela de cima — e não os fornecedores do ERP. Marcar "Chanel"
+  // numa lista que só tem "LUXOTTICA BRASIL PRODUTOS OTICOS LTDA" foi
+  // exatamente o defeito da rodada passada, e não vale a pena repeti-lo aqui.
+  //
+  // Uma grife declarada que sumiu do catálogo continua na lista, com o aviso:
+  // escondê-la deixaria a restrição valendo no banco sem tela para desfazê-la.
+  const doCatalogo = (grifes.data?.rows ?? []).map((g) => g.brand);
+  const orfas = [...declaradoPor.keys()].filter((b) => !doCatalogo.includes(b));
+  const todas = [...doCatalogo, ...orfas];
+
+  const filtro = busca.trim().toLowerCase();
+  const linhas = todas
+    .filter((b) => (filtro === '' ? true : b.toLowerCase().includes(filtro)))
+    // As restritas primeiro: são as decisões tomadas, e é o que se volta a
+    // conferir. As correntes são o padrão e não precisam ser lidas.
+    .sort((a, b) => {
+      const da = declaradoPor.has(a) ? 0 : 1;
+      const db = declaradoPor.has(b) ? 0 : 1;
+      return da - db || a.localeCompare(b, 'pt-BR');
+    })
+    // Sem busca, mostra só as restritas: a lista completa tem centenas de
+    // grifes correntes, e rolar por elas para achar as quatro que importam é
+    // o contrário do que esta tela serve.
+    .slice(0, filtro === '' ? declaradoPor.size : 60);
+
+  return (
+    <>
+      <AberturaDeSecao
+        eyebrow="Mix"
+        titulo="Quais lojas trabalham cada grife"
+        descricao="Grife sem loja marcada é corrente: vendida em todas. Marcar lojas restringe a grife a elas — o motor deixa de sugerir compra, remanejamento e distribuição da grife para as demais. Nenhum dado do ERP diz isso; é contrato com o fornecedor e precisa ser declarado aqui."
+        acoes={
+          declaradoPor.size > 0 ? (
+            <Selo tom="blue" icone="lojas" title="Grifes com lojas declaradas.">
+              {declaradoPor.size} grifes restritas
+            </Selo>
+          ) : undefined
+        }
+      />
+      <div className="card">
+        {mix.isLoading || grifes.isLoading || !mix.data ? (
+          <Loading />
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <input
+                type="search"
+                value={busca}
+                placeholder="Buscar grife para restringir…"
+                onChange={(e) => setBusca(e.target.value)}
+                aria-label="Buscar grife"
+                style={{ maxWidth: 280 }}
+              />
+              <span className="muted" style={{ fontSize: 12 }}>
+                {filtro === ''
+                  ? `${declaradoPor.size} restritas · busque para restringir outra`
+                  : `${linhas.length} de ${todas.length} grifes`}
+              </span>
+            </div>
+
+            {linhas.length === 0 ? (
+              <p className="muted">
+                {filtro === ''
+                  ? 'Nenhuma grife restrita. Todas são vendidas em todas as lojas — busque uma grife acima para restringi-la.'
+                  : 'Nenhuma grife com esse nome.'}
+              </p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Grife</th>
+                    <th>Lojas que trabalham</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {linhas.map((brand) => (
+                    <LinhaDoMixPorLoja
+                      key={brand}
+                      brand={brand}
+                      declarado={declaradoPor.get(brand) ?? null}
+                      lojas={mix.data.lojas}
+                      canEdit={canEdit}
+                      aberto={editando === brand}
+                      abrir={() => setEditando(editando === brand ? null : brand)}
+                      fechar={() => setEditando(null)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function LinhaDoMixPorLoja({
+  brand,
+  declarado,
+  lojas,
+  canEdit,
+  aberto,
+  abrir,
+  fechar,
+}: {
+  brand: string;
+  declarado: { storeIds: string[]; stores: { id: string; name: string | null }[] } | null;
+  lojas: { id: string; name: string }[];
+  canEdit: boolean;
+  aberto: boolean;
+  abrir: () => void;
+  fechar: () => void;
+}) {
+  const qc = useQueryClient();
+  const [state, setState] = useState<'idle' | 'saving' | 'error'>('idle');
+  // A seleção em edição é local: só vai ao servidor no "Salvar". Salvar a cada
+  // clique mandaria a grife para um estado intermediário real — a Chanel
+  // restrita a uma loja só, entre o primeiro e o segundo clique — e nesse
+  // intervalo o motor decidiria com ele.
+  const [sel, setSel] = useState<Set<string>>(new Set(declarado?.storeIds ?? []));
+
+  const salvar = async (ids: string[]) => {
+    setState('saving');
+    try {
+      await declararMixDaGrife(brand, ids);
+      await qc.invalidateQueries({ queryKey: ['planning-mix-por-loja'] });
+      // As mesmas quatro consultas do "fora do mix": compra, quadro, pedidos e
+      // remanejamento mudam TODOS com esta decisão. Deixar qualquer uma de
+      // fora faz a tela ao lado seguir mostrando a sugestão que acabou de ser
+      // proibida — e o cliente já viu essa cena.
+      recarregarDoTopo(qc, 'purchase-suggestions');
+      recarregarDoTopo(qc, 'decisions');
+      await qc.invalidateQueries({ queryKey: ['planning-orders'] });
+      await qc.invalidateQueries({ queryKey: ['planning-rebalance'] });
+      setState('idle');
+      fechar();
+    } catch {
+      setState('error');
+    }
+  };
+
+  const nomes = (declarado?.stores ?? []).map((s) => s.name ?? '(loja fora do escopo)');
+
+  return (
+    <>
+      <tr>
+        <td>{brand}</td>
+        <td>
+          {declarado && declarado.storeIds.length > 0 ? (
+            <span>{nomes.join(', ')}</span>
+          ) : (
+            <span className="muted">Todas as lojas (grife corrente)</span>
+          )}
+        </td>
+        <td className="num">
+          {canEdit && (
+            <Botao
+              onClick={() => {
+                setSel(new Set(declarado?.storeIds ?? []));
+                abrir();
+              }}
+              aria-expanded={aberto}
+            >
+              {aberto ? 'Fechar' : declarado ? 'Alterar' : 'Restringir'}
+            </Botao>
+          )}
+        </td>
+      </tr>
+      {aberto && canEdit && (
+        <tr>
+          <td colSpan={3}>
+            <div style={{ padding: '10px 0' }}>
+              <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                Marque as lojas que trabalham <strong>{brand}</strong>. Sem nenhuma marcada, a grife
+                volta a ser vendida em todas.
+              </p>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+                  gap: 6,
+                }}
+              >
+                {lojas.map((l) => (
+                  <label key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={sel.has(l.id)}
+                      onChange={(e) => {
+                        const s = new Set(sel);
+                        if (e.target.checked) s.add(l.id);
+                        else s.delete(l.id);
+                        setSel(s);
+                      }}
+                    />
+                    {l.name}
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+                <BotaoPrimario onClick={() => salvar([...sel])} disabled={state === 'saving'}>
+                  {state === 'saving' ? 'Salvando…' : `Salvar (${sel.size} lojas)`}
+                </BotaoPrimario>
+                <Botao onClick={fechar}>Cancelar</Botao>
+                {declarado && (
+                  <Botao onClick={() => salvar([])} disabled={state === 'saving'}>
+                    Voltar a ser corrente
+                  </Botao>
+                )}
+                {state === 'error' && (
+                  <span className="muted" style={{ color: 'var(--nf-danger, crimson)', fontSize: 12 }}>
+                    Não foi possível salvar. Tente de novo.
+                  </span>
+                )}
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
     </>
   );
 }
@@ -1994,6 +2254,12 @@ export function Planning() {
           catálogo inteiro a cada abertura — custo de rede pago por quem não
           tem decisão a tomar com a lista. Marcar sempre foi ADMIN. */}
       {isAdmin && <MixDeGrifes canEdit={isAdmin} />}
+
+      {/* ── Mix POR LOJA: onde cada grife pode ser vendida (ADMIN) ──
+          Vem logo depois da tabela acima porque as duas se leem juntas e são
+          fáceis de confundir: aquela tira a grife da REDE, esta tira a grife
+          de ALGUMAS LOJAS. Separadas por um título, na mesma dobra. */}
+      {isAdmin && <MixPorLoja canEdit={isAdmin} />}
 
       {/* ── Modo Feira: distribuir uma compra nova entre as lojas (ADMIN) ── */}
       {isAdmin && <FairSplit />}

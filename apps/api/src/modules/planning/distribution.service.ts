@@ -2,11 +2,10 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql } from '../stores/store.scope.js';
-import { loadBrandCatalog } from './brandCatalog.js';
+import { porteiroDeMix } from './mixDeLoja.js';
 import {
   analysisBrand,
   splitByNeed,
-  storeCarriesBrand,
   type NeedSplitRow,
 } from './planning.math.js';
 import { createMovement, type Actor } from '../movements/movements.service.js';
@@ -211,7 +210,7 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
   ]);
 
   const produtoPor = new Map(produtos.map((p) => [p.id, p]));
-  const catalogo = loadBrandCatalog();
+  const mix = await porteiroDeMix();
   const items: DistributionItem[] = [];
   let unassigned = 0;
 
@@ -225,21 +224,21 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     }
     const marca = analysisBrand(prod.description, prod.category, prod.brand);
 
-    // Mix: grife premium não vai para loja que não a trabalha. Mesma regra do
-    // remanejamento — mandar uma peça para onde ela não pode ser vendida é
-    // criar o encalhe que a plataforma existe para evitar.
+    // Mix: grife não vai para loja que não a trabalha. Mesma regra do
+    // remanejamento e da compra, agora pelo MESMO porteiro — mandar uma peça
+    // para onde ela não pode ser vendida é criar o encalhe que a plataforma
+    // existe para evitar.
     //
     // O filtro vem ANTES do rateio, e é a ordem que importa: se o rateio
     // rodasse sobre a rede inteira e as linhas das lojas excluídas fossem
     // descartadas depois, as unidades delas sumiriam da conta sem aparecer nem
     // no rateio nem em `unassigned`. Aqui a carga inteira é sempre repartida
     // entre as lojas elegíveis, e a contabilidade fecha contra `it.quantity`.
-    const excluidas: string[] = [];
-    const elegiveis = lojas.filter((l) => {
-      const trabalha = storeCarriesBrand(marca, l.name, catalogo);
-      if (!trabalha) excluidas.push(l.name);
-      return trabalha;
-    });
+    const { elegiveis, excluidas: lojasForaDoMix } = mix.separar(
+      marca,
+      lojas.map((l) => ({ storeId: l.id, storeName: l.name })),
+    );
+    const excluidas = lojasForaDoMix.map((l) => l.storeName);
 
     // Degraus da RESERVA, na ordem. O primeiro com alguma venda ganha — e só é
     // consultado se a necessidade não souber responder.
@@ -254,14 +253,14 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
 
     const rateio = splitByNeed(
       elegiveis.map((l) => ({
-        storeId: l.id,
-        storeName: l.name,
+        storeId: l.storeId,
+        storeName: l.storeName,
         // A venda que entra na NECESSIDADE é a da própria peça: o alvo de
         // cobertura de um SKU não pode sair da venda da categoria inteira.
-        unitsSold: vendas.porSku.get(prod.id)?.get(l.id) ?? 0,
+        unitsSold: vendas.porSku.get(prod.id)?.get(l.storeId) ?? 0,
         // VENDÁVEL: a unidade reservada para outra loja não cobre a
         // demanda desta, e contá-la desvia a caixa de quem precisa.
-        stockUnits: saldos.get(`${l.id}:${prod.id}`)?.disponivel ?? 0,
+        stockUnits: saldos.get(`${l.storeId}:${prod.id}`)?.disponivel ?? 0,
       })),
       it.quantity,
       JANELA_DIAS,

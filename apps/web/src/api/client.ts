@@ -636,6 +636,12 @@ export interface ItemDistribution {
   rows: RateioLoja[];
   /** Unidades sem loja — declaradas, nunca evaporadas. */
   unassigned: number;
+  /**
+   * Lojas fora do rateio por não trabalharem a grife (mix por loja). Ausente
+   * quando não há mix valendo — nunca presente e vazia, para a tela poder ler
+   * a presença como "houve exclusão".
+   */
+  excludedByMix?: string[];
 }
 
 export interface PurchaseOrderItem {
@@ -990,6 +996,28 @@ export const getMixDeGrifes = () =>
   api.get<{ rows: GrifeDoMix[] }>('/planning/brand-mix').then((r) => r.data);
 export const setGrifeForaDoMix = (brand: string, discontinued: boolean) =>
   api.put('/planning/brand-mix', { brand, discontinued }).then((r) => r.data);
+
+/**
+ * O mix POR LOJA: quais lojas trabalham cada grife.
+ *
+ * Pergunta diferente da de `GrifeDoMix`, e as duas precisam continuar
+ * separadas: lá é "a REDE parou de trabalhar esta grife" (corta a compra em
+ * toda parte), aqui é "estas LOJAS trabalham esta grife" (corta o destino).
+ * Chanel está viva na rede e proibida em catorze lojas.
+ */
+export interface GrifeComLojas {
+  brand: string;
+  storeIds: string[];
+  /** `name: null` = loja saiu do escopo planejável, mas a linha existe. */
+  stores: { id: string; name: string | null }[];
+}
+export const getMixPorLoja = () =>
+  api
+    .get<{ rows: GrifeComLojas[]; lojas: { id: string; name: string }[] }>('/planning/mix-por-loja')
+    .then((r) => r.data);
+/** A seleção INTEIRA, não um delta. Lista vazia = grife volta a ser corrente. */
+export const declararMixDaGrife = (brand: string, storeIds: string[]) =>
+  api.put('/planning/mix-por-loja', { brand, storeIds }).then((r) => r.data);
 
 // ─── BI ──────────────────────────────────────────────────────────────────────
 

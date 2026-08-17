@@ -1617,6 +1617,12 @@ export interface ItemDistribution {
   rows: NeedSplitRow[];
   /** Unidades que nenhuma loja reclamou — ficam para divisão manual. */
   unassigned: number;
+  /**
+   * Lojas fora do rateio por não trabalharem a grife. Ausente quando não há
+   * mix valendo; presente e vazia nunca — a tela lê a presença como "houve
+   * exclusão", e uma lista vazia diria isso mentindo.
+   */
+  excludedByMix?: string[];
 }
 
 export const NEED_BASIS_LABEL: Record<NeedBasis, string> = {
@@ -1673,6 +1679,16 @@ export function buildPurchaseOrders(
    * antes dele quebraria todas em silêncio — o tipo de quebra que compila.
    */
   positions?: Map<string, FairSplitInput[]>,
+  /**
+   * Opcional: por produto, as lojas que o MIX tirou do rateio.
+   *
+   * Chega pronta do serviço porque o mix mora no banco e este arquivo não tem
+   * imports. E chega SEPARADA de `positions` — que já vem filtrada — porque a
+   * tela precisa dizer QUEM ficou de fora e por quê. Uma loja que some do
+   * rateio sem explicação é indistinguível de uma loja que não precisava de
+   * nada, e as duas exigem reações opostas do comprador.
+   */
+  excludedByMix?: Map<string, string[]>,
 ): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
@@ -1718,6 +1734,7 @@ export function buildPurchaseOrders(
     // média, e por isso aparece na tela AO LADO da quantidade, nunca no lugar.
     const posicoes = positions?.get(p.productId);
     const rateio = posicoes ? splitByNeed(posicoes, p.suggestedQty, days) : null;
+    const foraDoMix = excludedByMix?.get(p.productId);
 
     order.items.push({
       productId: p.productId,
@@ -1738,6 +1755,7 @@ export function buildPurchaseOrders(
               totalNeed: rateio.totalNeed,
               rows: rateio.rows.filter((r) => r.suggestedQty > 0),
               unassigned: rateio.unassigned,
+              ...(foraDoMix && foraDoMix.length > 0 ? { excludedByMix: foraDoMix } : {}),
             },
           }
         : {}),
@@ -3473,4 +3491,63 @@ export function storeCarriesBrand(
   const sn = normBrandKey(storeName ?? '');
   if (!sn) return true;
   return stores.some((s) => sn === s || sn.includes(s) || s.includes(sn));
+}
+
+// ─── O mix DECLARADO: grife → ids de loja ────────────────────────────────────
+//
+// A forma nova da mesma regra. `BrandCatalog` acima lê um arquivo JSON no disco
+// do servidor e casa a loja por NOME, com inclusão tolerante nas duas direções.
+// Isto aqui lê o que o cliente declarou pela tela e casa por ID.
+//
+// As duas convivem, e o `porteiroDeMix` do serviço escolhe entre elas: o
+// declarado manda quando existe, o arquivo continua valendo para quem já o
+// tinha. Não é indecisão — é que apagar o caminho do arquivo junto com esta
+// entrega transformaria uma correção de regra numa migração de dados, e as duas
+// falham por motivos diferentes.
+
+/** Mix declarado: grife NORMALIZADA → ids das lojas que a trabalham. */
+export type MixDeclarado = ReadonlyMap<string, ReadonlySet<string>>;
+
+/**
+ * A loja trabalha a grife, segundo o mix DECLARADO pelo cliente?
+ *
+ * Grife ausente do mapa → universal (true). Grife presente → só as lojas do
+ * conjunto. Sem grife reconhecível na descrição → permissivo, porque barrar uma
+ * peça por não sabermos ler o nome dela seria punir a peça pelo nosso erro.
+ *
+ * A LOJA VAZIA é `true` DE PROPÓSITO, e é o caso que decide o card de compra da
+ * rede: ele não tem loja de destino — a compra é da rede, e o destino sai depois
+ * no rateio. Um card sem loja não pode ser barrado por uma regra de loja; quem
+ * barra ali é o rateio, loja a loja, onde a pergunta faz sentido.
+ */
+export function lojaTrabalhaAGrife(
+  brand: string | null | undefined,
+  storeId: string | null | undefined,
+  mix: MixDeclarado | null,
+): boolean {
+  if (!mix || mix.size === 0 || !brand) return true;
+  const lojas = mix.get(normBrandKey(brand));
+  if (!lojas || lojas.size === 0) return true; // não declarada → corrente, universal
+  if (!storeId) return true;
+  return lojas.has(storeId);
+}
+
+/**
+ * As lojas que trabalham a grife, dentre as candidatas. Serve ao rateio, que
+ * precisa saber QUEM sobrou — e a quem devolver as unidades das excluídas.
+ * Devolve as duas listas porque a tela mostra as duas: quem entra na divisão e
+ * quem ficou de fora, com o motivo.
+ */
+export function separarPorMix<T extends { storeId: string; storeName?: string }>(
+  brand: string | null | undefined,
+  candidatas: readonly T[],
+  mix: MixDeclarado | null,
+): { elegiveis: T[]; excluidas: T[] } {
+  if (!mix || mix.size === 0 || !brand) return { elegiveis: [...candidatas], excluidas: [] };
+  const lojas = mix.get(normBrandKey(brand));
+  if (!lojas || lojas.size === 0) return { elegiveis: [...candidatas], excluidas: [] };
+  const elegiveis: T[] = [];
+  const excluidas: T[] = [];
+  for (const c of candidatas) (lojas.has(c.storeId) ? elegiveis : excluidas).push(c);
+  return { elegiveis, excluidas };
 }

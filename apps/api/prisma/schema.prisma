@@ -52,6 +52,7 @@ model Store {
   movementsFrom InventoryMovement[] @relation("MovementFromStore")
   movementsTo   InventoryMovement[] @relation("MovementToStore")
   decisions     DecisionRecord[]
+  brandMix      StoreBrandMix[]
 
   @@index([active])
   @@index([excludeFromPlanning])
@@ -386,6 +387,51 @@ model BrandMix {
   updatedAt DateTime @updatedAt
 
   @@index([discontinued])
+}
+
+/// QUAIS LOJAS TRABALHAM CADA GRIFE — o mix, por loja.
+///
+/// Existe porque a mesma regra já esteve escrita em um arquivo JSON no disco do
+/// servidor (`brand-catalog.json`, gitignorado por ser dado comercial), e o
+/// arquivo nunca chegou ao contêiner. O `/health` registrou o estado por meses:
+/// `mix.ativo: false`. A regra foi declarada entregue duas vezes e nas duas o
+/// cliente voltou com o MESMO exemplo — Dior sugerida para Guarabira — porque
+/// não havia nada barrando nada.
+///
+/// A lição não é "instalar o arquivo": é que uma regra COMERCIAL não pode morar
+/// num artefato que só o deploy sabe colocar no lugar. Quem decide o mix é o
+/// cliente, e ele precisa poder declarar, ver e corrigir a decisão pela tela —
+/// sem pedir deploy, sem depender de ninguém lembrar de copiar um arquivo.
+///
+/// SEMÂNTICA, e ela é assimétrica de propósito:
+///  · Grife SEM nenhuma linha aqui → universal, vendida em todas as lojas. É o
+///    caso das linhas correntes (Ray-Ban, Chilli Beans, Technos), que são a
+///    maioria do catálogo. O padrão precisa ser o permissivo: uma tabela vazia
+///    não pode travar a rede inteira.
+///  · Grife COM pelo menos uma linha → restrita: só nas lojas listadas. Declarar
+///    uma loja é declarar todas as outras como proibidas, e é isso que o cliente
+///    quer dizer com "Chanel só pode ser vendido no Iguatemi e Natal Shopping".
+///
+/// A loja entra por ID, não por nome. O arquivo casava por nome com inclusão
+/// tolerante nas duas direções, porque o nome da planilha não batia com o do
+/// ERP — tolerância que aceita "NATAL" casando com "NATAL SHOPPING" e com
+/// "A GRACIOSA NATAL". Aqui o cliente escolhe a loja de uma lista vinda do
+/// próprio ERP: a chave é exata e não há o que interpretar.
+model StoreBrandMix {
+  id String @id @default(cuid())
+
+  /// A GRIFE na forma NORMALIZADA por `normBrandKey` — a mesma chave de
+  /// `BrandMix`, pelo mesmo motivo: leitura e escrita têm que comparar igual.
+  brand String
+
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([brand, storeId])
+  @@index([brand])
+  @@index([storeId])
 }
 
 enum PurchaseOrderStatus {
