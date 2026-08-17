@@ -102,7 +102,7 @@ export function Loja() {
   const [msg, setMsg] = useState<Aviso | null>(null);
   const [visiveis, setVisiveis] = useState(PAGINA);
 
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
+  const stores = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis') });
   const products = useQuery({ queryKey: ['ar-products'], queryFn: getArProducts });
   const cart = useQuery({ queryKey: ['cart'], queryFn: getCart });
 

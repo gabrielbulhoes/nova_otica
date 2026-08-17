@@ -164,6 +164,17 @@ export interface Store {
   city: string | null;
   state: string | null;
   active: boolean;
+  /**
+   * Retaguarda: GMAIS (centro de distribuição), assistência, estoque de
+   * compras. Tem estoque real, não vende ao cliente. Fora do planejamento.
+   */
+  excludeFromPlanning?: boolean;
+  /**
+   * Opera em OUTRO ERP (ZEISS). O CDS devolve dados, desatualizados. Fora de
+   * todo número. Campo separado do de cima de propósito — juntar os dois faria
+   * uma loja de varejo aparecer como centro de distribuição.
+   */
+  externalErp?: boolean;
   _count?: { stockItems: number; sales: number };
 }
 
@@ -316,8 +327,26 @@ export interface StoresResponse extends Paged<Store> {
   sampled?: boolean;
   catalogSampled?: number;
   productCountNetwork?: number;
+  escopo?: EscopoDeLojas;
 }
-export const getStores = () => api.get<StoresResponse>('/stores').then((r) => r.data);
+
+/**
+ * Qual recorte do cadastro a tela quer.
+ *
+ * · `planejaveis` (PADRÃO) — as 16 lojas de varejo. Assistência, estoque de
+ *   compras, GMAIS e ZEISS ficam de fora, como já ficavam de toda conta.
+ * · `operacionais` — inclui a retaguarda, exclui ZEISS. Só para o lançamento
+ *   de movimentação, onde o CD é origem legítima da distribuição.
+ * · `todas` — o cadastro inteiro. Só para as telas que o administram.
+ *
+ * O padrão é o restritivo de propósito: a tela que não pensou no assunto
+ * acerta, e foi justamente o contrário disso que fez as quatro filiais
+ * continuarem aparecendo em dez seletores depois de saírem de toda a
+ * matemática.
+ */
+export type EscopoDeLojas = 'planejaveis' | 'operacionais' | 'todas';
+export const getStores = (escopo?: EscopoDeLojas) =>
+  api.get<StoresResponse>('/stores', { params: escopo ? { escopo } : undefined }).then((r) => r.data);
 export const getProducts = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Product>>('/products', { params }).then((r) => r.data);
 export const getCategories = (params?: Record<string, string | undefined>) =>
@@ -674,6 +703,12 @@ export interface PurchaseOrder {
   total: number;
   orderByInDays: number | null;
   stockoutInDays: number | null;
+  /**
+   * Confiança do pedido (0–100): média das confianças dos itens ponderada pelo
+   * capital. É a régua que ORDENA a lista de compras — da mais alta para a
+   * mais baixa, como o cliente pediu. A urgência virou desempate.
+   */
+  confidence: number;
 }
 
 export interface PurchaseOrdersPlan {

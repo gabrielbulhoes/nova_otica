@@ -535,6 +535,10 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
             )}
           </div>
         </div>
+        {/* A CONFIANÇA DO PEDIDO, que agora é o que ORDENA a lista (item 03).
+            Sem ela na linha, a nova ordem parece bagunça: os pedidos deixaram
+            de vir por urgência e nada na tela diz por qual régua vêm. */}
+        <Confidence value={order.confidence} />
         {urgency && (
           <Selo
             tom={order.orderByInDays === 0 ? 'red' : order.orderByInDays! <= 7 ? 'amber' : 'gray'}
@@ -1701,7 +1705,7 @@ export function Planning() {
   const ordersRef = useRef<HTMLDivElement>(null);
   const purchaseRef = useRef<HTMLDivElement>(null);
 
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
+  const stores = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis'), enabled: isAdmin });
   const params = { days, storeId: storeId || undefined, group };
 
   /*
@@ -1957,7 +1961,7 @@ export function Planning() {
       <AberturaDeSecao
         eyebrow="Comprar"
         titulo="Pedidos por fornecedor (rascunho)"
-        descricao="Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item mais urgente define o prazo do pedido. Exporte e envie."
+        descricao="Itens a comprar agrupados por fornecedor, da maior confiança para a menor — o que o motor tem mais base para afirmar vem primeiro. A urgência continua na linha e desempata dentro de cada faixa: todo item aqui já está no ponto de reposição. Exporte e envie."
         acoes={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {/* SÓ OS APROVADOS — item 10. Sai desligado por decisão explícita:

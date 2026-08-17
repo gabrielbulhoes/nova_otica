@@ -946,7 +946,7 @@ export function Decisions() {
       proximoPedido(ultima.pagina, ultima.cards[ultima.cards.length - 1]?.id),
     placeholderData: keepPreviousData,
   });
-  const lojas = useQuery({ queryKey: ['stores'], queryFn: getStores });
+  const lojas = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis') });
 
   const paginas = board.data?.pages;
   /** A resposta mais recente: é dela que saem o resumo e o tamanho da vista. */

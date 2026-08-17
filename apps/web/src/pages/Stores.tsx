@@ -4,7 +4,7 @@ import { PageHeader, Loading, Selo, Codigo } from '../components/ui';
 import { Icon } from '../brand/Icon';
 
 export function Stores() {
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
+  const stores = useQuery({ queryKey: ['stores', 'todas'], queryFn: () => getStores('todas') });
 
   const linhas = stores.data?.rows ?? [];
   const ativas = linhas.filter((s) => s.active).length;
@@ -64,7 +64,35 @@ export function Stores() {
                   <td>
                     <Codigo>{s.externalId}</Codigo>
                   </td>
-                  <td>{s.name}</td>
+                  <td>
+                    {s.name}{' '}
+                    {/* O ESCOPO, DITO NA LINHA — nova rodada · item 06.
+                        Estas quatro filiais já ficavam fora de toda a conta
+                        (planejamento, BI, relatórios, painel) e agora saíram
+                        também dos seletores das outras telas. Aqui elas
+                        continuam, porque esta É a tela do cadastro: esconder
+                        a filial esconderia a linha que precisa ser conferida.
+                        O que faltava era o rótulo — sem ele, a mesma lista
+                        servia de prova de que "elas continuam gerando
+                        informação". */}
+                    {s.externalErp ? (
+                      <Selo
+                        tom="gray"
+                        icone="atencao"
+                        title="Opera em outro ERP. O CDS devolve dados desta filial, mas desatualizados — ficam fora de todo número da plataforma."
+                      >
+                        outro ERP
+                      </Selo>
+                    ) : s.excludeFromPlanning ? (
+                      <Selo
+                        tom="gray"
+                        icone="informacao"
+                        title="Retaguarda: tem estoque de verdade, mas não vende ao cliente. Fora do planejamento, da compra e da ruptura."
+                      >
+                        retaguarda
+                      </Selo>
+                    ) : null}
+                  </td>
                   <td>{s.city ?? '—'}</td>
                   <td>{s.state ?? '—'}</td>
                   <td className="num">{(s._count?.stockItems ?? 0).toLocaleString('pt-BR')}</td>

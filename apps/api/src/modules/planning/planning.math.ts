@@ -1647,6 +1647,20 @@ export interface PurchaseOrder {
   orderByInDays: number | null;
   /** Menor previsão de ruptura entre os itens (dias) — urgência do pedido. */
   stockoutInDays: number | null;
+  /**
+   * Confiança do pedido (0–100): média das confianças dos itens PONDERADA PELO
+   * CAPITAL. É o que ordena a lista (nova rodada · item 03).
+   *
+   * Ponderada, e não a média simples nem o máximo, porque as três respondem
+   * perguntas diferentes e só uma é a útil aqui:
+   *  · o MÁXIMO deixaria um item de 3 mil reais com muito histórico carregar
+   *    um pedido de trinta itens adivinhados;
+   *  · a média SIMPLES daria a uma peça de R$ 80 o mesmo peso de uma de
+   *    R$ 4.000, e o que está em jogo na lista de compras é dinheiro;
+   *  · a ponderada responde "quanto do dinheiro deste pedido está apoiado em
+   *    histórico", que é a pergunta de quem vai assinar.
+   */
+  confidence: number;
 }
 
 export interface PurchaseOrdersPlan {
@@ -1706,6 +1720,7 @@ export function buildPurchaseOrders(
         total: 0,
         orderByInDays: null,
         stockoutInDays: null,
+        confidence: 0,
       } as PurchaseOrder);
 
     // Com a CATEGORIA. Sem ela, `extractBrand` extrai de tudo — e a lista de
@@ -1773,13 +1788,50 @@ export function buildPurchaseOrders(
     bySupplier.set(supplier, order);
   }
 
-  // Itens BUY estão sempre no/abaixo do ponto de reposição (prazo-limite
-  // "hoje"); quem desempata a urgência é a previsão de ruptura.
+  /*
+   * A ORDEM DA LISTA DE COMPRAS — nova rodada · item 03.
+   *
+   * "Na lista de compras a ordem deveria ser pelo grau de confiança mais alto
+   *  até o mais baixo."
+   *
+   * Era por previsão de ruptura, e a mudança tem uma consequência que precisa
+   * ficar escrita: o topo da lista deixa de ser "o que rompe primeiro" e passa
+   * a ser "o que o motor tem mais base para afirmar". São perguntas
+   * diferentes, e a segunda é a que o cliente pediu — faz sentido: numa lista
+   * de compras longa, o que trava a decisão não é a urgência (todo item BUY
+   * está no ponto de reposição), é não saber em quais números confiar.
+   *
+   * A URGÊNCIA NÃO SE PERDE: virou o primeiro critério de desempate, e
+   * continua visível item a item. Confianças empatam com frequência — ela vem
+   * em faixas —, então na prática a lista fica ordenada por confiança e, dentro
+   * de cada faixa, exatamente como estava antes.
+   */
   const orders = Array.from(bySupplier.values());
   for (const o of orders) {
-    o.items.sort((a, b) => (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) || b.total - a.total);
+    // Confiança do PEDIDO: média das confianças dos itens ponderada pelo
+    // capital. Pedido sem valor nenhum (tudo a custo zero) cai na média
+    // simples, para não virar 0 por divisão vazia e afundar na ordenação por
+    // um defeito de cadastro de custo.
+    const capital = o.items.reduce((a, i) => a + i.total, 0);
+    o.confidence =
+      capital > 0
+        ? Math.round(o.items.reduce((a, i) => a + i.confidence * i.total, 0) / capital)
+        : o.items.length > 0
+          ? Math.round(o.items.reduce((a, i) => a + i.confidence, 0) / o.items.length)
+          : 0;
+    o.items.sort(
+      (a, b) =>
+        b.confidence - a.confidence ||
+        (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) ||
+        b.total - a.total,
+    );
   }
-  orders.sort((a, b) => (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) || b.total - a.total);
+  orders.sort(
+    (a, b) =>
+      b.confidence - a.confidence ||
+      (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) ||
+      b.total - a.total,
+  );
 
   return {
     days,

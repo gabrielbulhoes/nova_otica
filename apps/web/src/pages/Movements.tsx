@@ -406,7 +406,19 @@ export function Movements() {
 
 function MovementModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
+  /*
+   * `operacionais`, e é a ÚNICA tela que pede isso.
+   *
+   * As demais passaram a listar só as 16 lojas de varejo (nova rodada · item
+   * 06). Aqui a retaguarda continua, porque o GMAIS é a ORIGEM legítima da
+   * distribuição do recebimento — o fluxo entregue no feedback 6.0 · item 06 —
+   * e uma transferência sem origem possível não é uma tela mais limpa, é uma
+   * tela quebrada.
+   *
+   * ZEISS fica de fora mesmo aqui: mexer no saldo de uma filial cujo número
+   * chega desatualizado de outro ERP é escrever ficção sobre estoque real.
+   */
+  const stores = useQuery({ queryKey: ['stores', 'operacionais'], queryFn: () => getStores('operacionais') });
   const products = useQuery({
     queryKey: ['products', 'modal'],
     queryFn: () => getProducts({ limit: 300 }),

@@ -47,7 +47,7 @@ export function Usuarios() {
   const { user: me } = useAuth();
   const qc = useQueryClient();
   const users = useQuery({ queryKey: ['users'], queryFn: getUsers });
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
+  const stores = useQuery({ queryKey: ['stores', 'todas'], queryFn: () => getStores('todas') });
   const [creating, setCreating] = useState(false);
   const invalidate = () => qc.invalidateQueries({ queryKey: ['users'] });
 
