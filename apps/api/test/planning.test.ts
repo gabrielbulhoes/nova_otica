@@ -441,16 +441,134 @@ describe('buildPurchaseOrders (pedidos por fornecedor)', () => {
     expect(po.orders[0].supplier).toBe('Sem fornecedor');
   });
 
-  it('ordena fornecedores pela ruptura mais próxima (itens BUY já estão no ponto)', () => {
+  it('empatada a confiança, ordena pela ruptura mais próxima (desempate)', () => {
+    // A régua principal virou a CONFIANÇA (nova rodada · item 03). Estes dois
+    // fornecedores têm a MESMA venda no MESMO período, logo a mesma confiança
+    // — e aí vale o critério antigo, que não se perdeu: virou desempate.
     const plans = [
       mkPlan('Oakley', 7, 90, 12), // 1/dia, ponto 14 → BUY, ruptura em ~12d
       mkPlan('Ray-Ban', 30, 90, 4), // 1/dia, ponto 37 → BUY, ruptura em ~4d — mais urgente
     ];
     const po = buildPurchaseOrders(plans, 90);
+    expect(po.orders[0].confidence).toBe(po.orders[1].confidence);
     expect(po.orders.map((o) => o.supplier)).toEqual(['Ray-Ban', 'Oakley']);
     expect(po.orders[0].stockoutInDays).toBe(4);
     // BUY implica estar no/abaixo do ponto de reposição → prazo-limite é hoje.
     expect(po.orders.every((o) => o.orderByInDays === 0)).toBe(true);
+  });
+
+  it('a CONFIANÇA manda — mesmo contra a ruptura mais próxima', () => {
+    /*
+     * O teste que define a mudança do item 03, e ele foi escrito para falhar
+     * com a ordenação antiga.
+     *
+     * `mkPlan(marca, prazo, vendidas, estoque)`: a Oakley vendeu 90 un. em 90
+     * dias (histórico cheio → confiança alta); a Ray-Ban vendeu 3 (quase nada
+     * → confiança baixa), mas está mais perto de romper.
+     *
+     * Pela régua antiga a Ray-Ban vinha primeiro. Pela nova, a Oakley — que é
+     * o pedido em que o comprador pode confiar. A urgência da Ray-Ban não
+     * some: continua na linha dela, em vermelho.
+     */
+    const plans = [
+      mkPlan('Ray-Ban', 30, 3, 0),
+      mkPlan('Oakley', 30, 90, 20),
+    ];
+    const po = buildPurchaseOrders(plans, 90);
+    const oakley = po.orders.find((o) => o.supplier === 'Oakley')!;
+    const rayban = po.orders.find((o) => o.supplier === 'Ray-Ban')!;
+    expect(oakley.confidence).toBeGreaterThan(rayban.confidence);
+    expect(po.orders.map((o) => o.supplier)).toEqual(['Oakley', 'Ray-Ban']);
+  });
+
+  it('quebra o pedido por grife — a pergunta que se faz antes de assinar', () => {
+    /*
+     * Nova rodada · item 04. O pedido é agrupado por FORNECEDOR, e um
+     * fornecedor traz várias grifes. Sem a quebra, "R$ X na Luxottica" não diz
+     * quanto é de Ray-Ban e quanto é de Oakley.
+     *
+     * O `resolveSupplier` fixo simula o catálogo: as duas grifes caem no mesmo
+     * fornecedor, que é exatamente a situação real.
+     */
+    const plans = [
+      mkPlan('Ray-Ban', 30, 90, 4, 200),
+      mkPlan('Oakley', 30, 90, 4, 500),
+    ];
+    const po = buildPurchaseOrders(plans, 90, () => 'Luxottica');
+    expect(po.orders).toHaveLength(1);
+    const pedido = po.orders[0];
+
+    // Duas grifes distintas dentro de um fornecedor só — o caso real.
+    expect(pedido.porGrife).toHaveLength(2);
+    // Ordenada por VALOR, não por unidades: são as duas leituras possíveis, e a
+    // que decide é a do dinheiro. A Oakley custa 500 contra 200, mesma
+    // quantidade, então vem primeiro.
+    expect(pedido.porGrife[0].brand).toContain('Oakley');
+    expect(pedido.porGrife[0].total).toBeGreaterThan(pedido.porGrife[1].total);
+    // A quebra FECHA contra o pedido: nenhuma unidade e nenhum real fora dela.
+    // É a invariante que impede a quebra de virar um número decorativo ao lado
+    // de um total que não bate com ele.
+    expect(pedido.porGrife.reduce((a, g) => a + g.units, 0)).toBe(pedido.units);
+    expect(pedido.porGrife.reduce((a, g) => a + g.total, 0)).toBeCloseTo(pedido.total, 2);
+    expect(pedido.porGrife.reduce((a, g) => a + g.items, 0)).toBe(pedido.items.length);
+  });
+
+  it('sem ficha do fornecedor, os tipos vêm VAZIOS — não vira balde "outros"', () => {
+    /*
+     * A borda que mais importa no item 04, porque hoje é o caso da maioria:
+     * 4.339 peças de 61 mil têm ficha, porque só o catálogo da Luxottica
+     * entrou. Um balde "outros" com metade do pedido dentro não informa nada e
+     * ainda passa a impressão de que o resto foi classificado. A tela declara
+     * a cobertura ao lado; a estrutura precisa contar a verdade.
+     */
+    const plans = [mkPlan('Ray-Ban', 30, 90, 4)];
+    const semFicha = buildPurchaseOrders(plans, 90);
+    expect(semFicha.orders[0].porFormato).toEqual([]);
+    expect(semFicha.orders[0].itensComFicha).toBe(0);
+    expect(semFicha.orders[0].items[0].atributos).toBeUndefined();
+
+    const id = semFicha.orders[0].items[0].productId;
+    const comFicha = buildPurchaseOrders(
+      plans,
+      90,
+      undefined,
+      undefined,
+      undefined,
+      new Map([
+        [id, { genero: 'Unisex', formato: 'Retangular', material: 'Acetato', tamanhoLente: 54, bestSeller: true }],
+      ]),
+    );
+    expect(comFicha.orders[0].itensComFicha).toBe(1);
+    expect(comFicha.orders[0].porFormato).toEqual([
+      { formato: 'Retangular', units: comFicha.orders[0].items[0].quantity },
+    ]);
+    expect(comFicha.orders[0].items[0].atributos?.genero).toBe('Unisex');
+  });
+
+  it('a confiança do pedido é ponderada pelo CAPITAL, não pela contagem', () => {
+    /*
+     * A escolha que mais muda a ordem, e a que erraria calada.
+     *
+     * Um pedido com uma peça cara e bem conhecida e dez peças baratas e
+     * adivinhadas: na média SIMPLES ele afunda, arrastado pelas dez; na
+     * ponderada ele sobe, porque quase todo o dinheiro está na que se conhece.
+     * O que está em jogo na lista de compras é dinheiro, então a régua é o
+     * dinheiro.
+     *
+     * A verificação é contra a média simples calculada aqui: se alguém trocar
+     * a ponderação por uma média de conveniência, esta linha acusa.
+     */
+    const plans = [
+      mkPlan('Kering', 30, 90, 20, 4000), // caro, histórico cheio
+      // Dez peças baratas e mal conhecidas. As vendas variam de 1 a 10 só para
+      // gerarem `productId` distintos — `mkPlan` deriva o id da venda e do
+      // estoque, e dez planos idênticos virariam dez linhas do mesmo produto.
+      ...Array.from({ length: 10 }, (_, i) => mkPlan('Kering', 30, i + 1, 0, 30)),
+    ];
+    const po = buildPurchaseOrders(plans, 90);
+    const pedido = po.orders[0];
+    const simples = pedido.items.reduce((a, i) => a + i.confidence, 0) / pedido.items.length;
+    expect(pedido.confidence).toBeGreaterThan(simples);
   });
 
   it('sem as posições por loja, o item sai SEM rateio — ausente é "não calculado"', () => {

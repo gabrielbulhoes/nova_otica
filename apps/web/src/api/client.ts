@@ -164,6 +164,17 @@ export interface Store {
   city: string | null;
   state: string | null;
   active: boolean;
+  /**
+   * Retaguarda: GMAIS (centro de distribuição), assistência, estoque de
+   * compras. Tem estoque real, não vende ao cliente. Fora do planejamento.
+   */
+  excludeFromPlanning?: boolean;
+  /**
+   * Opera em OUTRO ERP (ZEISS). O CDS devolve dados, desatualizados. Fora de
+   * todo número. Campo separado do de cima de propósito — juntar os dois faria
+   * uma loja de varejo aparecer como centro de distribuição.
+   */
+  externalErp?: boolean;
   _count?: { stockItems: number; sales: number };
 }
 
@@ -316,8 +327,26 @@ export interface StoresResponse extends Paged<Store> {
   sampled?: boolean;
   catalogSampled?: number;
   productCountNetwork?: number;
+  escopo?: EscopoDeLojas;
 }
-export const getStores = () => api.get<StoresResponse>('/stores').then((r) => r.data);
+
+/**
+ * Qual recorte do cadastro a tela quer.
+ *
+ * · `planejaveis` (PADRÃO) — as 16 lojas de varejo. Assistência, estoque de
+ *   compras, GMAIS e ZEISS ficam de fora, como já ficavam de toda conta.
+ * · `operacionais` — inclui a retaguarda, exclui ZEISS. Só para o lançamento
+ *   de movimentação, onde o CD é origem legítima da distribuição.
+ * · `todas` — o cadastro inteiro. Só para as telas que o administram.
+ *
+ * O padrão é o restritivo de propósito: a tela que não pensou no assunto
+ * acerta, e foi justamente o contrário disso que fez as quatro filiais
+ * continuarem aparecendo em dez seletores depois de saírem de toda a
+ * matemática.
+ */
+export type EscopoDeLojas = 'planejaveis' | 'operacionais' | 'todas';
+export const getStores = (escopo?: EscopoDeLojas) =>
+  api.get<StoresResponse>('/stores', { params: escopo ? { escopo } : undefined }).then((r) => r.data);
 export const getProducts = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Product>>('/products', { params }).then((r) => r.data);
 export const getCategories = (params?: Record<string, string | undefined>) =>
@@ -636,6 +665,12 @@ export interface ItemDistribution {
   rows: RateioLoja[];
   /** Unidades sem loja — declaradas, nunca evaporadas. */
   unassigned: number;
+  /**
+   * Lojas fora do rateio por não trabalharem a grife (mix por loja). Ausente
+   * quando não há mix valendo — nunca presente e vazia, para a tela poder ler
+   * a presença como "houve exclusão".
+   */
+  excludedByMix?: string[];
 }
 
 export interface PurchaseOrderItem {
@@ -656,6 +691,26 @@ export interface PurchaseOrderItem {
    * rateio expõe venda e estoque da rede inteira.
    */
   distribution?: ItemDistribution;
+  /**
+   * A ficha do fornecedor: tipo de armação, gênero, material. AUSENTE quando a
+   * peça não casou com o catálogo importado — e a tela precisa dizer isso, não
+   * escondê-lo: hoje só o catálogo da Luxottica entrou, então a maior parte do
+   * pedido de outros fornecedores vem sem ficha até Marcolin e Thélios
+   * chegarem.
+   */
+  atributos?: AtributosDaPeca;
+}
+
+export interface AtributosDaPeca {
+  /** Feminino · Masculino · Unisex · Menina · Menino */
+  genero: string | null;
+  /** Retangular, Quadrado, Gatinho, Phantos… — o "tipo de óculos" do feedback. */
+  formato: string | null;
+  material: string | null;
+  /** Em milímetros, como o fornecedor publica. */
+  tamanhoLente: number | null;
+  /** Marcação do FORNECEDOR. Contexto de compra, nunca decisão do motor. */
+  bestSeller: boolean;
 }
 
 export interface PurchaseOrder {
@@ -668,6 +723,18 @@ export interface PurchaseOrder {
   total: number;
   orderByInDays: number | null;
   stockoutInDays: number | null;
+  /**
+   * Confiança do pedido (0–100): média das confianças dos itens ponderada pelo
+   * capital. É a régua que ORDENA a lista de compras — da mais alta para a
+   * mais baixa, como o cliente pediu. A urgência virou desempate.
+   */
+  confidence: number;
+  /** Quanto deste pedido é de cada grife, por valor. */
+  porGrife: { brand: string; items: number; units: number; total: number }[];
+  /** Tipos de armação do pedido. Só as peças com ficha do fornecedor. */
+  porFormato: { formato: string; units: number }[];
+  /** Itens com ficha — o numerador da cobertura que a tela declara. */
+  itensComFicha: number;
 }
 
 export interface PurchaseOrdersPlan {
@@ -967,7 +1034,28 @@ export interface DistributionPlan {
   items: DistributionItem[];
   /** Unidades sem rateio possível — declaradas, nunca evaporadas. */
   unassigned: number;
+  /** Quando esta carga já foi repartida. `null` = ainda por distribuir. */
+  distributedAt: string | null;
 }
+
+/** Uma carga esperando para ser repartida entre as lojas. */
+export interface CargaParaDistribuir {
+  orderId: string;
+  supplier: string;
+  units: number;
+  items: number;
+  receivedAt: string | null;
+  distributedAt: string | null;
+  /** Dias parada desde o recebimento. É o que ordena a fila. */
+  paradaHaDias: number | null;
+}
+
+export const getFilaDeDistribuicao = () =>
+  api
+    .get<{ pendentes: CargaParaDistribuir[]; distribuidos: CargaParaDistribuir[] }>(
+      '/planning/fila-de-distribuicao',
+    )
+    .then((r) => r.data);
 
 export const getDistributionPlan = (id: string) =>
   api.get<DistributionPlan>(`/planning/purchase-orders/${id}/distribution`).then((r) => r.data);
@@ -990,6 +1078,28 @@ export const getMixDeGrifes = () =>
   api.get<{ rows: GrifeDoMix[] }>('/planning/brand-mix').then((r) => r.data);
 export const setGrifeForaDoMix = (brand: string, discontinued: boolean) =>
   api.put('/planning/brand-mix', { brand, discontinued }).then((r) => r.data);
+
+/**
+ * O mix POR LOJA: quais lojas trabalham cada grife.
+ *
+ * Pergunta diferente da de `GrifeDoMix`, e as duas precisam continuar
+ * separadas: lá é "a REDE parou de trabalhar esta grife" (corta a compra em
+ * toda parte), aqui é "estas LOJAS trabalham esta grife" (corta o destino).
+ * Chanel está viva na rede e proibida em catorze lojas.
+ */
+export interface GrifeComLojas {
+  brand: string;
+  storeIds: string[];
+  /** `name: null` = loja saiu do escopo planejável, mas a linha existe. */
+  stores: { id: string; name: string | null }[];
+}
+export const getMixPorLoja = () =>
+  api
+    .get<{ rows: GrifeComLojas[]; lojas: { id: string; name: string }[] }>('/planning/mix-por-loja')
+    .then((r) => r.data);
+/** A seleção INTEIRA, não um delta. Lista vazia = grife volta a ser corrente. */
+export const declararMixDaGrife = (brand: string, storeIds: string[]) =>
+  api.put('/planning/mix-por-loja', { brand, storeIds }).then((r) => r.data);
 
 // ─── BI ──────────────────────────────────────────────────────────────────────
 

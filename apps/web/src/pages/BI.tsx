@@ -115,7 +115,7 @@ export function BI() {
   };
   const chave = [chaveDePeriodo(periodo), storeId, scope, tipos.join(',')];
 
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
+  const stores = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis'), enabled: isAdmin });
   const kpis = useQuery({ queryKey: ['bi-kpis', ...chave], queryFn: () => getBiKpis(p) });
   const timeseries = useQuery({ queryKey: ['bi-ts', ...chave], queryFn: () => getBiTimeseries(p) });
   const byStore = useQuery({ queryKey: ['bi-store', ...chave], queryFn: () => getBiDimension('store', p) });

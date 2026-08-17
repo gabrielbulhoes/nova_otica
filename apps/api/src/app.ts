@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { env } from './config/env.js';
 import { getFrescor } from './sync/syncHealth.js';
 import { statusDoCatalogo } from './modules/planning/brandCatalog.js';
+import { statusDoMixDeclarado } from './modules/planning/mixDeLoja.js';
 import { statusDosAtributos } from './catalogo/status.js';
 import { prisma } from './lib/prisma.js';
 import { errorMiddleware } from './http/errorMiddleware.js';
@@ -91,6 +92,16 @@ export function createApp() {
       // engolido de propósito — ver acima
     }
 
+    // O mix DECLARADO pelo cliente, que substitui o arquivo. Mesma disciplina:
+    // vai ao banco, então vai dentro de um `try` — e `null` aqui é "não
+    // consegui apurar", distinto de zero grifes, que é "apurei e não tem".
+    let mixDeclarado: Awaited<ReturnType<typeof statusDoMixDeclarado>> | null = null;
+    try {
+      mixDeclarado = await statusDoMixDeclarado();
+    } catch {
+      // engolido de propósito — ver acima
+    }
+
     res.json({
       status: 'ok',
       service: 'nova-otica-api',
@@ -124,7 +135,16 @@ export function createApp() {
       // pergunta, que só aparece depois da primeira: valendo com QUAL catálogo
       // — já que atualizá-lo é trocar o arquivo e reiniciar, o que não muda a
       // versão da imagem.
-      mix: statusDoCatalogo(),
+      //
+      // `declarado` é a fonte NOVA, e ela manda quando tem alguma linha. O
+      // bloco antigo continua publicado ao lado porque as duas ainda podem
+      // valer, e "qual das duas está decidindo?" precisa ter resposta por
+      // `curl` — a pergunta que só surgiu porque a resposta faltou uma vez.
+      mix: {
+        ...statusDoCatalogo(),
+        declarado: mixDeclarado,
+        valendo: (mixDeclarado?.grifes ?? 0) > 0 ? 'declarado' : statusDoCatalogo().ativo ? 'arquivo' : 'nenhum',
+      },
       // OS ATRIBUTOS DE PEÇA ESTÃO CARREGADOS?
       //
       // Terceira armadilha da mesma família: gênero, formato, best-seller e o

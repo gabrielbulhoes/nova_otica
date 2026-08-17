@@ -32,7 +32,7 @@ export function Sales() {
   const [metric, setMetric] = useState<Metric>('units');
   const [days, setDays] = useState(() => periodoInicial(PERIODOS, 30));
 
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
+  const stores = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis') });
   const sales = useQuery({
     queryKey: ['sales', storeId, start, end],
     queryFn: () =>

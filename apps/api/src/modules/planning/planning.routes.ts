@@ -22,9 +22,11 @@ import {
   recordDecision,
 } from './decisions.service.js';
 import { batchHistory } from './batches.service.js';
+import { declararMixDaGrife, listarMixPorLoja } from './mixDeLoja.js';
 import {
   createDistributionMovements,
   distributionPlan,
+  filaDeDistribuicao,
   receivingUnits,
 } from './distribution.service.js';
 import {
@@ -273,6 +275,23 @@ planningRouter.get(
   }),
 );
 
+/**
+ * GET /api/planning/fila-de-distribuicao — o que chegou e ainda não foi
+ * repartido entre as lojas (nova rodada · item 05).
+ *
+ * O rateio já existia; o que não existia era a porta. Ele morava dentro de uma
+ * linha do histórico de pedidos, atrás de um botão, visível só para quem já
+ * tivesse rolado até lá. Quem chega de manhã perguntando "o que chegou e ainda
+ * está parado?" não tinha onde olhar.
+ */
+planningRouter.get(
+  '/fila-de-distribuicao',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    res.json(await filaDeDistribuicao());
+  }),
+);
+
 /** GET /api/planning/receiving-units — de onde a carga pode sair (retaguarda). */
 planningRouter.get(
   '/receiving-units',
@@ -364,6 +383,53 @@ planningRouter.put(
   asyncHandler(async (req, res) => {
     const input = brandMixSchema.parse(req.body);
     res.json(await setBrandMix(input.brand, input.discontinued));
+  }),
+);
+
+/**
+ * GET /api/planning/mix-por-loja — quais lojas trabalham cada grife.
+ *
+ * Distinta de `/brand-mix`, e as duas precisam continuar distintas: aquela diz
+ * "a REDE parou de trabalhar esta grife" (corta a compra em toda parte); esta
+ * diz "estas LOJAS trabalham esta grife" (corta o destino). Uma grife pode
+ * estar viva na rede e proibida em treze lojas, que é o caso da Chanel.
+ *
+ * ADMIN: é decisão comercial da rede, e a lista de lojas vem junto para a tela
+ * montar a seleção sem uma segunda chamada.
+ */
+planningRouter.get(
+  '/mix-por-loja',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    res.json(await listarMixPorLoja());
+  }),
+);
+
+const mixPorLojaSchema = z.object({
+  brand: z.string().min(1).max(120),
+  // A LISTA INTEIRA, sempre — não um delta. Ver `declararMixDaGrife`.
+  // Vazia é um valor legítimo e significa "volta a ser corrente, em todas as
+  // lojas": sem isso, desfazer uma restrição exigiria apagar linha a linha, e
+  // não haveria como dizer "esta grife não tem mais restrição".
+  storeIds: z.array(z.string().min(1).max(64)).max(200),
+});
+
+/**
+ * PUT /api/planning/mix-por-loja — declara as lojas de uma grife (ADMIN).
+ *
+ * Nenhum dado do ERP diz onde uma grife pode ser vendida: é contrato com o
+ * fornecedor, e precisa ser declarado. Ficou num arquivo JSON no servidor até
+ * esta rodada, e o arquivo nunca chegou lá — a regra esteve inerte o tempo
+ * todo, com o cliente reportando o mesmo defeito duas rodadas seguidas.
+ */
+planningRouter.put(
+  '/mix-por-loja',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const input = mixPorLojaSchema.parse(req.body);
+    const r = await declararMixDaGrife(input.brand, input.storeIds);
+    publish({ type: 'planning.settings.changed', setting: 'brand-mix', brand: r.brand });
+    res.json(r);
   }),
 );
 

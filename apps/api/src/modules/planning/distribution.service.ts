@@ -2,11 +2,10 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { badRequest } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql } from '../stores/store.scope.js';
-import { loadBrandCatalog } from './brandCatalog.js';
+import { porteiroDeMix } from './mixDeLoja.js';
 import {
   analysisBrand,
   splitByNeed,
-  storeCarriesBrand,
   type NeedSplitRow,
 } from './planning.math.js';
 import { createMovement, type Actor } from '../movements/movements.service.js';
@@ -107,6 +106,12 @@ export interface DistributionPlan {
   items: DistributionItem[];
   /** Unidades que não puderam ser rateadas (produto some do cadastro). */
   unassigned: number;
+  /**
+   * Quando esta carga já foi repartida. `null` = ainda por distribuir, que é o
+   * que a aba lista. A tela precisa do dado para não oferecer duas vezes o
+   * botão que cria transferências.
+   */
+  distributedAt: string | null;
 }
 
 interface ItemDoPedido {
@@ -211,7 +216,7 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
   ]);
 
   const produtoPor = new Map(produtos.map((p) => [p.id, p]));
-  const catalogo = loadBrandCatalog();
+  const mix = await porteiroDeMix();
   const items: DistributionItem[] = [];
   let unassigned = 0;
 
@@ -225,21 +230,21 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     }
     const marca = analysisBrand(prod.description, prod.category, prod.brand);
 
-    // Mix: grife premium não vai para loja que não a trabalha. Mesma regra do
-    // remanejamento — mandar uma peça para onde ela não pode ser vendida é
-    // criar o encalhe que a plataforma existe para evitar.
+    // Mix: grife não vai para loja que não a trabalha. Mesma regra do
+    // remanejamento e da compra, agora pelo MESMO porteiro — mandar uma peça
+    // para onde ela não pode ser vendida é criar o encalhe que a plataforma
+    // existe para evitar.
     //
     // O filtro vem ANTES do rateio, e é a ordem que importa: se o rateio
     // rodasse sobre a rede inteira e as linhas das lojas excluídas fossem
     // descartadas depois, as unidades delas sumiriam da conta sem aparecer nem
     // no rateio nem em `unassigned`. Aqui a carga inteira é sempre repartida
     // entre as lojas elegíveis, e a contabilidade fecha contra `it.quantity`.
-    const excluidas: string[] = [];
-    const elegiveis = lojas.filter((l) => {
-      const trabalha = storeCarriesBrand(marca, l.name, catalogo);
-      if (!trabalha) excluidas.push(l.name);
-      return trabalha;
-    });
+    const { elegiveis, excluidas: lojasForaDoMix } = mix.separar(
+      marca,
+      lojas.map((l) => ({ storeId: l.id, storeName: l.name })),
+    );
+    const excluidas = lojasForaDoMix.map((l) => l.storeName);
 
     // Degraus da RESERVA, na ordem. O primeiro com alguma venda ganha — e só é
     // consultado se a necessidade não souber responder.
@@ -254,14 +259,14 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
 
     const rateio = splitByNeed(
       elegiveis.map((l) => ({
-        storeId: l.id,
-        storeName: l.name,
+        storeId: l.storeId,
+        storeName: l.storeName,
         // A venda que entra na NECESSIDADE é a da própria peça: o alvo de
         // cobertura de um SKU não pode sair da venda da categoria inteira.
-        unitsSold: vendas.porSku.get(prod.id)?.get(l.id) ?? 0,
+        unitsSold: vendas.porSku.get(prod.id)?.get(l.storeId) ?? 0,
         // VENDÁVEL: a unidade reservada para outra loja não cobre a
         // demanda desta, e contá-la desvia a caixa de quem precisa.
-        stockUnits: saldos.get(`${l.id}:${prod.id}`)?.disponivel ?? 0,
+        stockUnits: saldos.get(`${l.storeId}:${prod.id}`)?.disponivel ?? 0,
       })),
       it.quantity,
       JANELA_DIAS,
@@ -300,6 +305,7 @@ export async function distributionPlan(orderId: string): Promise<DistributionPla
     units: pedido.units,
     items,
     unassigned,
+    distributedAt: pedido.distributedAt ? pedido.distributedAt.toISOString() : null,
   };
 }
 
@@ -345,6 +351,29 @@ export async function createDistributionMovements(
     throw badRequest('Distribua só depois de confirmar o recebimento da mercadoria.');
   }
 
+  /*
+   * UMA VEZ SÓ POR PEDIDO.
+   *
+   * A trava nasceu com a aba de distribuição (nova rodada · item 05). Enquanto
+   * o plano era uma gaveta dentro da linha de um pedido recebido, disparar de
+   * novo exigia procurar; uma aba própria põe a ação na frente de quem passa,
+   * e o segundo clique criaria um segundo conjunto de transferências sobre o
+   * mesmo saldo — o defeito que `createMovement` existe para impedir, entrando
+   * por cima dele.
+   *
+   * A mensagem diz o caminho de saída em vez de só recusar: as movimentações
+   * saem em PENDING, então desfazer é cancelá-las, e quem precisa refazer o
+   * rateio sabe por onde começar. Recusa sem saída é o mesmo defeito com outra
+   * cara.
+   */
+  if (plano.distributedAt) {
+    const quando = new Date(plano.distributedAt).toLocaleDateString('pt-BR');
+    throw badRequest(
+      `Este pedido já foi distribuído em ${quando}. Para refazer o rateio, cancele antes as ` +
+        'transferências pendentes geradas naquela distribuição.',
+    );
+  }
+
   const dados = plano.items.flatMap((item) =>
     item.rows
       .filter((r) => r.storeId !== fromStoreId && r.suggestedQty > 0)
@@ -375,6 +404,14 @@ export async function createDistributionMovements(
   const criadas = await prisma.$transaction(async (tx) => {
     const ids: string[] = [];
     for (const d of dados) ids.push((await createMovement(d, actor, tx)).id);
+    // O CARIMBO ENTRA NA MESMA TRANSAÇÃO das movimentações, e não depois.
+    // Gravado fora, uma falha entre as duas escritas deixaria transferências
+    // criadas e o pedido marcado como pendente — e a aba convidaria a criá-las
+    // de novo, que é exatamente o cenário que a trava acima quer evitar.
+    await tx.purchaseOrderRecord.update({
+      where: { id: orderId },
+      data: { distributedAt: new Date(), distributedBy: actor.id },
+    });
     return ids;
   });
 
@@ -382,6 +419,85 @@ export async function createDistributionMovements(
     created: criadas.length,
     units: dados.reduce((a, d) => a + d.quantity, 0),
     movementIds: criadas,
+  };
+}
+
+/** Uma carga esperando para ser repartida entre as lojas. */
+export interface CargaParaDistribuir {
+  orderId: string;
+  supplier: string;
+  units: number;
+  items: number;
+  receivedAt: string | null;
+  distributedAt: string | null;
+  /** Dias parada desde o recebimento. É o que ordena a fila. */
+  paradaHaDias: number | null;
+}
+
+/**
+ * A FILA DA DISTRIBUIÇÃO — nova rodada · item 05.
+ *
+ * "Ainda sem a aba de distribuição para as lojas."
+ *
+ * O rateio já existia desde o feedback 6.0, e funcionava. O que não existia
+ * era a PORTA: ele morava dentro de uma linha do histórico de pedidos, atrás
+ * de um botão "Como distribuir", visível só para quem já tivesse rolado até
+ * lá e só depois de confirmar o recebimento. Quem chega de manhã perguntando
+ * "o que chegou e ainda não foi repartido?" não tinha onde olhar.
+ *
+ * A fila responde essa pergunta e nada além dela. Ordenada pelo que está
+ * parado há mais tempo, porque mercadoria em retaguarda não vende — é o
+ * capital mais caro da rede, comprado e sem chegar à vitrine.
+ *
+ * Os já distribuídos vêm junto, na cauda: sem eles a aba esvazia ao terminar o
+ * trabalho, e uma tela vazia depois de um clique é indistinguível de uma tela
+ * quebrada para quem a abre.
+ */
+export async function filaDeDistribuicao(): Promise<{
+  pendentes: CargaParaDistribuir[];
+  distribuidos: CargaParaDistribuir[];
+}> {
+  const pedidos = await prisma.purchaseOrderRecord.findMany({
+    where: { status: 'RECEIVED' },
+    orderBy: { receivedAt: 'asc' },
+    select: {
+      id: true,
+      supplier: true,
+      units: true,
+      items: true,
+      receivedAt: true,
+      distributedAt: true,
+    },
+    // A cauda dos já distribuídos precisa de um teto, e a fila de pendentes na
+    // prática nunca é longa — a rede recebe alguns pedidos por semana.
+    take: 60,
+  });
+
+  const agora = Date.now();
+  const mapear = (p: (typeof pedidos)[number]): CargaParaDistribuir => ({
+    orderId: p.id,
+    supplier: p.supplier,
+    units: p.units,
+    items: Array.isArray(p.items) ? p.items.length : 0,
+    receivedAt: p.receivedAt ? p.receivedAt.toISOString() : null,
+    distributedAt: p.distributedAt ? p.distributedAt.toISOString() : null,
+    paradaHaDias: p.receivedAt
+      ? Math.floor((agora - p.receivedAt.getTime()) / 86_400_000)
+      : null,
+  });
+
+  const todos = pedidos.map(mapear);
+  return {
+    // Mais parado primeiro. `null` (recebimento sem data, base antiga) vai para
+    // o fim: sem data não há como afirmar urgência, e chutar uma ordenaria a
+    // fila por um número inventado.
+    pendentes: todos
+      .filter((p) => !p.distributedAt)
+      .sort((a, b) => (b.paradaHaDias ?? -1) - (a.paradaHaDias ?? -1)),
+    distribuidos: todos
+      .filter((p) => p.distributedAt)
+      .sort((a, b) => (b.distributedAt ?? '').localeCompare(a.distributedAt ?? ''))
+      .slice(0, 10),
   };
 }
 

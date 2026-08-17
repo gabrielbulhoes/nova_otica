@@ -32,6 +32,8 @@ import {
   grifesDoQuadro,
   paginar,
   recortePedido,
+  splitByNeed,
+  NEED_BASIS_LABEL,
   DECISION_PRIORITIES,
   DECISION_TYPES,
   DEFAULT_PLANNING_CONFIG,
@@ -258,6 +260,24 @@ const demoLeadTimes = new Map<string, number>([
  */
 const demoForaDoMix = new Set<string>();
 
+/**
+ * O MIX POR LOJA da demonstração: grife normalizada → ids das lojas que a
+ * trabalham (nova rodada · itens 01 e 02).
+ *
+ * Começa VAZIO, como o "fora do mix" logo acima e pelo mesmo motivo: é uma
+ * declaração comercial, e semear uma na demo mostraria ao cliente uma decisão
+ * que ele não tomou. Grife ausente = corrente, vendida em todas as lojas.
+ */
+const demoMixPorLoja = new Map<string, Set<string>>();
+
+/** A loja trabalha a grife? Mesma semântica de `lojaTrabalhaAGrife` da API. */
+const demoLojaTrabalhaAGrife = (grife: string | null, storeId: string) => {
+  if (!grife || demoMixPorLoja.size === 0) return true;
+  const lojas = demoMixPorLoja.get(normBrandKey(grife));
+  if (!lojas || lojas.size === 0) return true; // não declarada → corrente
+  return lojas.has(storeId);
+};
+
 /** A grife está fora do mix? Aceita qualquer forma do nome. */
 const foraDoMixDemo = (grife: string | null) =>
   grife != null && demoForaDoMix.has(normBrandKey(grife));
@@ -274,6 +294,8 @@ interface DemoOrderRecord {
   sentAt: string;
   expectedAt: string | null;
   receivedAt: string | null;
+  /** Quando a carga foi repartida entre as lojas. `null` = ainda na fila. */
+  distributedAt?: string | null;
 }
 const purchaseRecords: DemoOrderRecord[] = [];
 const onOrderQty = (productId: string) =>
@@ -1979,7 +2001,30 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
           ageDays: demoIdadeNaLoja(s.id, prod.id),
         });
       }
-    return buildRebalance(inputs, planDays, cfgForBrand);
+    const plano = buildRebalance(inputs, planDays, cfgForBrand);
+
+    // MIX POR LOJA (nova rodada · item 01) — o mesmo porteiro da produção.
+    //
+    // "Aquele exemplo que vimos de Dior para Guarabira ainda continua
+    //  aparecendo." A demonstração é onde o cliente confere o comportamento
+    //  antes de confiar nele; um porteiro que só existe de um lado faria a
+    //  demo mostrar exatamente a sugestão que a produção passou a barrar.
+    if (demoMixPorLoja.size > 0) {
+      plano.rows = plano.rows.filter((r) =>
+        demoLojaTrabalhaAGrife(analysisBrand(r.description, r.category, r.brand), r.toStoreId),
+      );
+      const envolvidas = new Set<string>();
+      for (const r of plano.rows) {
+        envolvidas.add(r.fromStoreId);
+        envolvidas.add(r.toStoreId);
+      }
+      plano.summary = {
+        suggestions: plano.rows.length,
+        units: plano.rows.reduce((a, r) => a + r.quantity, 0),
+        storesInvolved: envolvidas.size,
+      };
+    }
+    return plano;
   };
   // ─── Governança da decisão: trilha em memória, na sessão do navegador ─────
   if (url === '/planning/decisions' && m === 'POST') {
@@ -2238,6 +2283,140 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     if (body.discontinued === true) demoForaDoMix.add(chave);
     else demoForaDoMix.delete(chave);
     return { brand: chave, discontinued: demoForaDoMix.has(chave) };
+  }
+
+  // ─── Mix POR LOJA: onde cada grife pode ser vendida (nova rodada · 01+02) ──
+  //
+  // Pergunta distinta da de cima, e as duas precisam continuar distintas: lá é
+  // "a REDE parou de trabalhar esta grife", aqui é "estas LOJAS trabalham esta
+  // grife". Na demo o estado vive em memória, como o "fora do mix".
+  if (url === '/planning/mix-por-loja' && m === 'GET') {
+    return {
+      rows: [...demoMixPorLoja.entries()]
+        .map(([brand, ids]) => ({
+          brand,
+          storeIds: [...ids],
+          stores: [...ids].map((id) => ({ id, name: stores.find((s) => s.id === id)?.name ?? null })),
+        }))
+        .sort((a, b) => a.brand.localeCompare(b.brand, 'pt-BR')),
+      lojas: stores.map((s) => ({ id: s.id, name: s.name })),
+    };
+  }
+  if (url === '/planning/mix-por-loja' && m === 'PUT') {
+    const chave = normBrandKey(String(body.brand ?? ''));
+    const ids: string[] = Array.isArray(body.storeIds) ? (body.storeIds as string[]) : [];
+    // Lista vazia APAGA a restrição — a grife volta a ser corrente. Guardar um
+    // conjunto vazio a deixaria "declarada em lugar nenhum", que a leitura
+    // trata como universal de qualquer forma, mas a tela mostraria uma linha
+    // de restrição que não restringe nada.
+    if (ids.length === 0) demoMixPorLoja.delete(chave);
+    else demoMixPorLoja.set(chave, new Set(ids));
+    return { brand: chave, storeIds: ids };
+  }
+
+  // ─── A fila da distribuição (nova rodada · item 05) ───────────────────────
+  if (url === '/planning/fila-de-distribuicao') {
+    const agora = Date.now();
+    const mapear = (r: DemoOrderRecord) => ({
+      orderId: r.id,
+      supplier: r.supplier,
+      units: r.units,
+      items: r.items.length,
+      receivedAt: r.receivedAt,
+      distributedAt: r.distributedAt ?? null,
+      paradaHaDias: r.receivedAt
+        ? Math.floor((agora - new Date(r.receivedAt).getTime()) / 86_400_000)
+        : null,
+    });
+    const recebidos = purchaseRecords.filter((r) => r.status === 'RECEIVED').map(mapear);
+    return {
+      pendentes: recebidos
+        .filter((c) => !c.distributedAt)
+        .sort((a, b) => (b.paradaHaDias ?? -1) - (a.paradaHaDias ?? -1)),
+      distribuidos: recebidos
+        .filter((c) => c.distributedAt)
+        .sort((a, b) => (b.distributedAt ?? '').localeCompare(a.distributedAt ?? ''))
+        .slice(0, 10),
+    };
+  }
+
+  // As unidades de retaguarda. `allStores` e não `stores`: a lista de cima é
+  // justamente a que EXCLUI a retaguarda, e é dela que a carga sai.
+  if (url === '/planning/receiving-units') {
+    return {
+      rows: allStores
+        .filter(
+          (s) => PLANNING_EXCLUDED_STORE_PATTERN.test(s.name) && !EXTERNAL_ERP_STORE_PATTERN.test(s.name),
+        )
+        .map((s) => ({ id: s.id, name: s.name })),
+    };
+  }
+
+  mm = p(/^\/planning\/purchase-orders\/(.+)\/distribution$/);
+  if (mm && m === 'GET') {
+    const rec = purchaseRecords.find((x) => x.id === mm![1]);
+    if (!rec) return { __status: 404, error: 'Pedido não encontrado' };
+    const JANELA = 365;
+    let unassigned = 0;
+    const items = rec.items.map((it) => {
+      const prod = products.find((x) => x.id === it.productId);
+      const marca = prod ? analysisBrand(prod.description, prod.category, prod.brand) : null;
+      // O MESMO porteiro de mix da produção, com a mesma ordem: filtra ANTES
+      // de ratear, senão as unidades das lojas excluídas evaporam.
+      const permitidas = stores.filter((s) => demoLojaTrabalhaAGrife(marca, s.id));
+      const excluidas = stores.filter((s) => !demoLojaTrabalhaAGrife(marca, s.id)).map((s) => s.name);
+      const rateio = splitByNeed(
+        permitidas.map((s) => ({
+          storeId: s.id,
+          storeName: s.name,
+          unitsSold: soldQty.get(key(s.id, it.productId)) ?? 0,
+          stockUnits: stockQty.get(key(s.id, it.productId)) ?? 0,
+        })),
+        it.quantity,
+        JANELA,
+      );
+      unassigned += it.quantity - rateio.rows.reduce((a, r) => a + r.suggestedQty, 0);
+      return {
+        productId: it.productId,
+        description: it.description,
+        quantity: it.quantity,
+        basis: rateio.basis,
+        basisLabel: NEED_BASIS_LABEL[rateio.basis],
+        totalNeed: rateio.totalNeed,
+        rows: rateio.rows.filter((r) => r.suggestedQty > 0),
+        ...(excluidas.length > 0 ? { excludedByMix: excluidas } : {}),
+      };
+    });
+    return {
+      orderId: rec.id,
+      supplier: rec.supplier,
+      status: rec.status,
+      units: rec.units,
+      items,
+      unassigned,
+      distributedAt: rec.distributedAt ?? null,
+    };
+  }
+
+  mm = p(/^\/planning\/purchase-orders\/(.+)\/distribute$/);
+  if (mm && m === 'POST') {
+    const rec = purchaseRecords.find((x) => x.id === mm![1]);
+    if (!rec) return { __status: 404, error: 'Pedido não encontrado' };
+    if (rec.status !== 'RECEIVED') {
+      return { __status: 400, error: 'Distribua só depois de confirmar o recebimento da mercadoria.' };
+    }
+    // A MESMA trava da produção: uma carga se reparte uma vez. A demo é
+    // espelho da API, e uma trava que só existe de um lado é a segunda verdade
+    // que este arquivo passou rodadas inteiras tentando não ser.
+    if (rec.distributedAt) {
+      return {
+        __status: 400,
+        error: `Este pedido já foi distribuído em ${new Date(rec.distributedAt).toLocaleDateString('pt-BR')}.`,
+      };
+    }
+    rec.distributedAt = new Date().toISOString();
+    const criadas = rec.items.reduce((a, it) => a + (it.quantity > 0 ? 1 : 0), 0);
+    return { created: criadas, units: rec.units, movementIds: [] };
   }
 
   // Mix de marcas por bandeira (feedback 04 fase 2)

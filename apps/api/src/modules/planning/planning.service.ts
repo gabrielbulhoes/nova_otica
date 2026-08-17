@@ -5,6 +5,7 @@ import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stores/store.scope.js';
 import { computeLiveStock, liveDeltas, saldosAoVivo } from '../stock/stock.service.js';
 import { loadBrandCatalog } from './brandCatalog.js';
+import { porteiroDeMix, type PorteiroDeMix } from './mixDeLoja.js';
 import { maloteEmTexto, previsaoDeMalote } from './malotes.js';
 import { currentDecisions, DECISION_SLA_DAYS, produtosComCompraAprovada } from './decisions.service.js';
 import { cardHistories, latestBatch, recordGenerationBatch } from './batches.service.js';
@@ -25,12 +26,12 @@ import {
   grifesDoQuadro,
   paginar,
   supplierFor,
-  storeCarriesBrand,
   CARDS_POR_PAGINA,
   DEFAULT_PLANNING_CONFIG,
   LINHAS_POR_PAGINA,
   matchesProductGroup,
   normBrandKey,
+  type AtributosDaPeca,
   type FairSplitInput,
   type FiltroDeVista,
   type PlanningConfig,
@@ -452,9 +453,28 @@ export async function purchaseOrders(
    * `buildPurchaseOrders`, que precisa deles para os totais de contexto.
    */
   const aprovados = somenteAprovados ? await produtosComCompraAprovada() : null;
-  const productPlans = aprovados
+  const comAprovacao = aprovados
     ? todosOsPlanos.filter((p) => p.recommendation !== 'BUY' || aprovados.has(p.productId))
     : todosOsPlanos;
+
+  /*
+   * MIX NA LISTA DE COMPRAS (nova rodada · item 02).
+   *
+   * O mesmo porteiro dos cards, pelo mesmo motivo, e com o mesmo recorte: só
+   * `BUY`, só com loja no filtro. Sem loja é a lista da REDE, e a rede compra
+   * a grife — o que o mix decide ali é para ONDE ela vai, e essa pergunta é
+   * respondida no rateio, algumas linhas abaixo.
+   */
+  const mix = await porteiroDeMix();
+  const loja = storeId ? await prisma.store.findUnique({ where: { id: storeId }, select: { name: true } }) : null;
+  const productPlans =
+    storeId && mix.ativo
+      ? comAprovacao.filter(
+          (p) =>
+            p.recommendation !== 'BUY' ||
+            mix.permite(analysisBrand(p.description, p.category, p.brand), storeId, loja?.name),
+        )
+      : comAprovacao;
   // Com catálogo, agrupa pelo fornecedor canônico da grife (Kering, Marcolin…);
   // sem ele, cai no campo "marca" do ERP (comportamento anterior).
   // `analysisBrand` e não `extractBrand(...) ?? p.brand`: é a mesma regra,
@@ -485,7 +505,89 @@ export async function purchaseOrders(
           days,
         )
       : undefined;
-  return buildPurchaseOrders(productPlans, days, resolve, posicoes);
+
+  /*
+   * O MIX ENTRA NO RATEIO — e é aqui que "Chanel só no Iguatemi e Natal
+   * Shopping" vira comportamento na lista da rede.
+   *
+   * A compra continua acontecendo (a rede trabalha a grife). O que muda é o
+   * destino: a caixa é repartida SÓ entre as lojas que a vendem, e as demais
+   * saem nomeadas para a tela.
+   *
+   * A ORDEM IMPORTA, e é a mesma do plano de recebimento: filtra ANTES de
+   * ratear. Ratear sobre a rede inteira e descartar as linhas das excluídas
+   * depois faria as unidades delas evaporarem — nem no rateio, nem em
+   * `unassigned`, e a soma da tela deixaria de fechar contra a quantidade
+   * comprada.
+   *
+   * Rede inteira excluída (grife declarada só em loja de retaguarda, por
+   * exemplo) deixa `elegiveis` vazio: `splitByNeed` devolve tudo em
+   * `unassigned`, que é a resposta honesta — a compra não tem para onde ir, e
+   * quem olha precisa ver isso, não um rateio inventado.
+   */
+  const foraDoMix = new Map<string, string[]>();
+  if (posicoes && mix.ativo) {
+    const marcaPor = new Map(
+      productPlans.map((p) => [p.productId, analysisBrand(p.description, p.category, p.brand)]),
+    );
+    for (const [productId, lista] of posicoes) {
+      const { elegiveis, excluidas } = mix.separar(marcaPor.get(productId) ?? null, lista);
+      if (excluidas.length === 0) continue;
+      posicoes.set(productId, elegiveis);
+      foraDoMix.set(productId, excluidas.map((e) => e.storeName));
+    }
+  }
+
+  return buildPurchaseOrders(
+    productPlans,
+    days,
+    resolve,
+    posicoes,
+    foraDoMix,
+    await fichasDoFornecedor(productPlans),
+  );
+}
+
+/**
+ * A ficha do fornecedor das peças que vão virar item de pedido (nova rodada ·
+ * item 04).
+ *
+ * A tabela `ProductAttribute` é escrita por um importador manual desde a
+ * rodada passada — 4.339 peças com gênero, formato e material, e 8.901 com
+ * teto de desconto — e até aqui NINGUÉM a lia. Estava tudo no banco e nada na
+ * tela; o `/health` contava as linhas e era o único lugar onde elas existiam.
+ *
+ * SÓ OS SKUs DE COMPRA entram na consulta. O recorte pode ter dezenas de
+ * milhares de peças e a lista de compras tem centenas — buscar a tabela
+ * inteira para descartar 99% dela é o tipo de custo que não erra a saída e
+ * derruba a rota, e esta rota já foi derrubada uma vez aqui por isso.
+ */
+async function fichasDoFornecedor(planos: ProductPlan[]): Promise<Map<string, AtributosDaPeca>> {
+  const ids = planos.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId);
+  const fichas = new Map<string, AtributosDaPeca>();
+  if (ids.length === 0) return fichas;
+
+  const linhas = await prisma.productAttribute.findMany({
+    where: { productId: { in: ids }, cadastroEm: { not: null } },
+    select: {
+      productId: true,
+      genero: true,
+      formato: true,
+      material: true,
+      tamanhoLente: true,
+      bestSeller: true,
+    },
+  });
+  for (const l of linhas) {
+    fichas.set(l.productId, {
+      genero: l.genero,
+      formato: l.formato,
+      material: l.material,
+      tamanhoLente: l.tamanhoLente,
+      bestSeller: l.bestSeller,
+    });
+  }
+  return fichas;
 }
 
 /** Recorte da resposta do quadro: página + filtros de vista. */
@@ -564,10 +666,48 @@ export async function decisionBoard(
  * completa, senão um card decidido sumiria do histórico de aparições.
  */
 export async function generateCards(days: number, storeId?: string, group: ProductGroup = 'principal') {
-  const [productPlans, reb] = await Promise.all([
+  // UM porteiro para toda a montagem: o remanejamento e os cards de compra
+  // aplicam a MESMA regra de mix, e aplicá-la com duas leituras diferentes do
+  // banco é como o remanejamento e a compra passaram a discordar sobre saldo
+  // ao vivo — divergência que ninguém vê até o cliente ver.
+  const mix = await porteiroDeMix();
+  const [todosOsPlanos, reb] = await Promise.all([
     plans(days, storeId, group),
-    rebalancePlan(days, group),
+    rebalancePlan(days, group, mix),
   ]);
+
+  /*
+   * MIX NA COMPRA (nova rodada · item 02).
+   *
+   * "Chanel só pode ser vendido no Iguatemi e Natal Shopping" — e o quadro de
+   * uma loja que não trabalha Chanel mandava comprar Chanel. O remanejamento
+   * tinha porteiro desde a rodada passada; a compra nunca teve nenhum.
+   *
+   * O corte é só sobre `BUY`, e a assimetria é deliberada:
+   *  · COMPRAR uma grife que a loja não vende é criar encalhe com dinheiro
+   *    novo. É o que se barra.
+   *  · LIQUIDAR uma grife que a loja não vende é exatamente o que se quer —
+   *    a peça está lá, fora do mix, e precisa sair. Barrar aqui prenderia o
+   *    encalhe que a plataforma existe para escoar.
+   *
+   * Vale APENAS com loja no filtro. Sem loja, o quadro é da rede, e a rede
+   * trabalha Chanel — em duas lojas. Quem responde "para quais lojas" naquele
+   * caso é o rateio do pedido, e é lá que o mesmo porteiro entra.
+   */
+  const productPlans =
+    storeId && mix.ativo
+      ? await (async () => {
+          const loja = await prisma.store.findUnique({
+            where: { id: storeId },
+            select: { name: true },
+          });
+          return todosOsPlanos.filter(
+            (p) =>
+              p.recommendation !== 'BUY' ||
+              mix.permite(analysisBrand(p.description, p.category, p.brand), storeId, loja?.name),
+          );
+        })()
+      : todosOsPlanos;
   // Posições por loja: alimentam o destino de escoamento dos cards de
   // liquidação ("remanejar para onde?"). Vêm do mesmo plano de remanejamento,
   // então não custam consulta nova.
@@ -690,7 +830,7 @@ export async function publishPlanningAlert(days = 90): Promise<void> {
  * Redistribuição entre lojas: cruza vendas do período × estoque atual por
  * loja e sugere transferências de onde sobra/está parado para onde vende.
  */
-export async function rebalancePlan(days: number, group: ProductGroup = 'todos') {
+export async function rebalancePlan(days: number, group: ProductGroup = 'todos', mix?: PorteiroDeMix) {
   const [sold, stock, stores, cfgFor] = await Promise.all([
     prisma.saleItem.findMany({
       where: {
@@ -865,14 +1005,20 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos')
 
   const plan = buildRebalance(inputs, days, cfgFor);
 
-  // Regra de mix: não transferir uma grife premium para uma loja que não a
-  // trabalha (catálogo). Marcas correntes (fora do catálogo) valem para todas.
-  const catalog = loadBrandCatalog();
-  if (catalog) {
+  // Regra de mix: não transferir uma grife para uma loja que não a trabalha.
+  // Grifes correntes (não declaradas) valem para todas.
+  //
+  // O porteiro chega pelo argumento porque `rebalancePlan` é chamado de dentro
+  // da montagem do quadro, que já o carregou. Buscá-lo de novo aqui seria uma
+  // segunda consulta na rota mais quente da plataforma — e, pior, abriria a
+  // possibilidade de as duas metades da mesma requisição decidirem com mixes
+  // diferentes, se o cliente salvasse a tela no meio.
+  const porteiro = mix ?? (await porteiroDeMix());
+  if (porteiro.ativo) {
     // `analysisBrand` com a categoria, como no resto do motor. O campo
     // `category` existe em `RebalanceSuggestion` exatamente para isto.
     plan.rows = plan.rows.filter((r) =>
-      storeCarriesBrand(analysisBrand(r.description, r.category, r.brand), r.toStoreName, catalog),
+      porteiro.permite(analysisBrand(r.description, r.category, r.brand), r.toStoreId, r.toStoreName),
     );
     const involved = new Set<string>();
     for (const r of plan.rows) {

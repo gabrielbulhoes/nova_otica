@@ -48,7 +48,7 @@ export function Alerts() {
   const [storeId, setStoreId] = useState('');
   const [category, setCategory] = useState('');
 
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
+  const stores = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis'), enabled: isAdmin });
   const categories = useQuery({
     queryKey: ['categories', scope],
     queryFn: () => getCategories({ group: scope }),

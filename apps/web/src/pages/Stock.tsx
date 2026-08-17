@@ -78,7 +78,7 @@ export function Stock() {
   // lista de zeros não é um estado neutro, é um estado errado.
   const [onlyAvailable, setOnlyAvailable] = useState(true);
 
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores });
+  const stores = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis') });
   const categoryList = useQuery({ queryKey: ['categories', scope], queryFn: () => getCategories({ group: scope }) });
   const stock = useQuery({
     queryKey: ['stock', search, storeIds, categories, onlyAvailable, scope],

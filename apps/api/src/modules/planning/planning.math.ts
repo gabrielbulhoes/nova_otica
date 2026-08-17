@@ -1600,11 +1600,62 @@ export interface PurchaseOrderItem {
   /** Confiabilidade da sugestão de compra deste item (0–100). */
   confidence: number;
   /**
+   * A ficha do fornecedor: tipo de armação, gênero, material (nova rodada ·
+   * item 04). Ausente quando a peça não casou com o catálogo do fornecedor —
+   * e ausente é uma informação, não um buraco a esconder: hoje 4.339 das 61
+   * mil peças têm ficha, porque só o catálogo da Luxottica foi importado.
+   */
+  atributos?: AtributosDaPeca;
+  /**
    * Como dividir esta compra entre as lojas. Ausente quando o chamador não
    * passou as posições por loja — e ausente NÃO é "dividir igual": é "esta
    * resposta não foi calculada", que a tela precisa poder dizer.
    */
   distribution?: ItemDistribution;
+}
+
+/**
+ * O que o catálogo do FORNECEDOR sabe de uma peça — e que o ERP não sabe.
+ *
+ * O CDS devolve descrição, preço e saldo. Gênero, formato de aro e material
+ * vêm da planilha do fornecedor, importada à parte, e até esta rodada a tabela
+ * era escrita e NUNCA lida: 4.339 peças com ficha completa no banco, e nenhuma
+ * linha do sistema consultando.
+ *
+ * "O módulo compras ainda sem o enriquecimento dos tipos de óculos a serem
+ *  comprados, quantidades por grife, etc."
+ *
+ * Chega ao motor por um Map vindo do serviço, como `excludedByMix`, porque
+ * este arquivo não tem imports e a fonte é uma tabela.
+ */
+export interface AtributosDaPeca {
+  /** Feminino · Masculino · Unisex · Menina · Menino */
+  genero: string | null;
+  /** Retangular, Quadrado, Gatinho, Phantos… — o "tipo de óculos" do feedback. */
+  formato: string | null;
+  material: string | null;
+  /** Em milímetros, como o fornecedor publica. */
+  tamanhoLente: number | null;
+  /**
+   * Marcação de best-seller DO FORNECEDOR. Vale como contexto na hora de
+   * comprar e NADA além disso: quem diz o que gira nesta rede é o histórico
+   * de venda dela, não a campanha de quem vende para ela.
+   */
+  bestSeller: boolean;
+}
+
+/** Quanto deste pedido é de cada grife (nova rodada · item 04). */
+export interface QuantidadePorGrife {
+  brand: string;
+  items: number;
+  units: number;
+  total: number;
+}
+
+/** Quantas unidades de cada tipo de armação este pedido traz. */
+export interface QuantidadePorFormato {
+  formato: string;
+  units: number;
 }
 
 /** Rateio de um item de pedido entre as lojas, pronto para a tela. */
@@ -1617,6 +1668,12 @@ export interface ItemDistribution {
   rows: NeedSplitRow[];
   /** Unidades que nenhuma loja reclamou — ficam para divisão manual. */
   unassigned: number;
+  /**
+   * Lojas fora do rateio por não trabalharem a grife. Ausente quando não há
+   * mix valendo; presente e vazia nunca — a tela lê a presença como "houve
+   * exclusão", e uma lista vazia diria isso mentindo.
+   */
+  excludedByMix?: string[];
 }
 
 export const NEED_BASIS_LABEL: Record<NeedBasis, string> = {
@@ -1641,6 +1698,43 @@ export interface PurchaseOrder {
   orderByInDays: number | null;
   /** Menor previsão de ruptura entre os itens (dias) — urgência do pedido. */
   stockoutInDays: number | null;
+  /**
+   * Confiança do pedido (0–100): média das confianças dos itens PONDERADA PELO
+   * CAPITAL. É o que ordena a lista (nova rodada · item 03).
+   *
+   * Ponderada, e não a média simples nem o máximo, porque as três respondem
+   * perguntas diferentes e só uma é a útil aqui:
+   *  · o MÁXIMO deixaria um item de 3 mil reais com muito histórico carregar
+   *    um pedido de trinta itens adivinhados;
+   *  · a média SIMPLES daria a uma peça de R$ 80 o mesmo peso de uma de
+   *    R$ 4.000, e o que está em jogo na lista de compras é dinheiro;
+   *  · a ponderada responde "quanto do dinheiro deste pedido está apoiado em
+   *    histórico", que é a pergunta de quem vai assinar.
+   */
+  confidence: number;
+  /**
+   * QUANTO DESTE PEDIDO É DE CADA GRIFE (nova rodada · item 04).
+   *
+   * O pedido é agrupado por FORNECEDOR, e um fornecedor traz várias grifes —
+   * a Luxottica manda Ray-Ban, Oakley, Arnette e Vogue no mesmo pedido. Sem
+   * esta quebra, "R$ 82 mil na Luxottica" não responde a pergunta que o
+   * comprador faz antes de assinar, que é quanto disso é de cada grife.
+   *
+   * Ordenado por valor, não por unidades: são as duas leituras possíveis, e a
+   * que decide é a do dinheiro.
+   */
+  porGrife: QuantidadePorGrife[];
+  /**
+   * OS TIPOS DE ÓCULOS DO PEDIDO — a outra metade do item 04.
+   *
+   * Sai da ficha do fornecedor, então cobre só as peças que casaram com o
+   * catálogo importado. Peças sem ficha NÃO entram como "outros": um balde
+   * com metade do pedido dentro não informa nada e ainda passa a impressão de
+   * que o resto foi classificado. A tela declara a cobertura ao lado.
+   */
+  porFormato: QuantidadePorFormato[];
+  /** Itens deste pedido com ficha do fornecedor — o denominador da cobertura. */
+  itensComFicha: number;
 }
 
 export interface PurchaseOrdersPlan {
@@ -1673,6 +1767,23 @@ export function buildPurchaseOrders(
    * antes dele quebraria todas em silêncio — o tipo de quebra que compila.
    */
   positions?: Map<string, FairSplitInput[]>,
+  /**
+   * Opcional: por produto, as lojas que o MIX tirou do rateio.
+   *
+   * Chega pronta do serviço porque o mix mora no banco e este arquivo não tem
+   * imports. E chega SEPARADA de `positions` — que já vem filtrada — porque a
+   * tela precisa dizer QUEM ficou de fora e por quê. Uma loja que some do
+   * rateio sem explicação é indistinguível de uma loja que não precisava de
+   * nada, e as duas exigem reações opostas do comprador.
+   */
+  excludedByMix?: Map<string, string[]>,
+  /**
+   * Opcional: a ficha do fornecedor por produto (nova rodada · item 04). Chega
+   * do serviço pelo mesmo motivo de `excludedByMix` — é uma tabela, e este
+   * arquivo não tem imports. Ausente = o chamador não pediu enriquecimento,
+   * distinto de "a peça não tem ficha", que é a chave faltando no Map.
+   */
+  atributos?: Map<string, AtributosDaPeca>,
 ): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
@@ -1690,6 +1801,10 @@ export function buildPurchaseOrders(
         total: 0,
         orderByInDays: null,
         stockoutInDays: null,
+        confidence: 0,
+        porGrife: [],
+        porFormato: [],
+        itensComFicha: 0,
       } as PurchaseOrder);
 
     // Com a CATEGORIA. Sem ela, `extractBrand` extrai de tudo — e a lista de
@@ -1718,6 +1833,7 @@ export function buildPurchaseOrders(
     // média, e por isso aparece na tela AO LADO da quantidade, nunca no lugar.
     const posicoes = positions?.get(p.productId);
     const rateio = posicoes ? splitByNeed(posicoes, p.suggestedQty, days) : null;
+    const foraDoMix = excludedByMix?.get(p.productId);
 
     order.items.push({
       productId: p.productId,
@@ -1730,6 +1846,7 @@ export function buildPurchaseOrders(
       orderByInDays: p.orderByInDays,
       stockoutInDays: p.stockoutInDays,
       confidence: p.confidence,
+      ...(atributos?.has(p.productId) ? { atributos: atributos.get(p.productId)! } : {}),
       ...(rateio
         ? {
             distribution: {
@@ -1738,6 +1855,7 @@ export function buildPurchaseOrders(
               totalNeed: rateio.totalNeed,
               rows: rateio.rows.filter((r) => r.suggestedQty > 0),
               unassigned: rateio.unassigned,
+              ...(foraDoMix && foraDoMix.length > 0 ? { excludedByMix: foraDoMix } : {}),
             },
           }
         : {}),
@@ -1755,13 +1873,84 @@ export function buildPurchaseOrders(
     bySupplier.set(supplier, order);
   }
 
-  // Itens BUY estão sempre no/abaixo do ponto de reposição (prazo-limite
-  // "hoje"); quem desempata a urgência é a previsão de ruptura.
+  /*
+   * A ORDEM DA LISTA DE COMPRAS — nova rodada · item 03.
+   *
+   * "Na lista de compras a ordem deveria ser pelo grau de confiança mais alto
+   *  até o mais baixo."
+   *
+   * Era por previsão de ruptura, e a mudança tem uma consequência que precisa
+   * ficar escrita: o topo da lista deixa de ser "o que rompe primeiro" e passa
+   * a ser "o que o motor tem mais base para afirmar". São perguntas
+   * diferentes, e a segunda é a que o cliente pediu — faz sentido: numa lista
+   * de compras longa, o que trava a decisão não é a urgência (todo item BUY
+   * está no ponto de reposição), é não saber em quais números confiar.
+   *
+   * A URGÊNCIA NÃO SE PERDE: virou o primeiro critério de desempate, e
+   * continua visível item a item. Confianças empatam com frequência — ela vem
+   * em faixas —, então na prática a lista fica ordenada por confiança e, dentro
+   * de cada faixa, exatamente como estava antes.
+   */
   const orders = Array.from(bySupplier.values());
   for (const o of orders) {
-    o.items.sort((a, b) => (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) || b.total - a.total);
+    /*
+     * O ENRIQUECIMENTO DO PEDIDO — nova rodada · item 04.
+     *
+     * Duas quebras, e as duas saem dos itens que já estão na mão: nenhuma
+     * consulta nova, nenhum laço a mais sobre os planos.
+     */
+    const grifes = new Map<string, QuantidadePorGrife>();
+    const formatos = new Map<string, number>();
+    for (const i of o.items) {
+      // `SEM GRIFE` e não o fornecedor: o pedido JÁ está agrupado por
+      // fornecedor, e repetir o cabeçalho aqui faria "Luxottica" aparecer como
+      // se fosse uma grife ao lado de Ray-Ban e Oakley.
+      const chave = i.brand ?? 'Sem grife';
+      const g = grifes.get(chave) ?? { brand: chave, items: 0, units: 0, total: 0 };
+      g.items += 1;
+      g.units += i.quantity;
+      g.total = round2(g.total + i.total);
+      grifes.set(chave, g);
+
+      if (i.atributos) o.itensComFicha += 1;
+      // Só quem TEM formato entra. Peça sem ficha não vira "outros": um balde
+      // com metade do pedido dentro não informa e ainda sugere que o resto foi
+      // classificado.
+      if (i.atributos?.formato) {
+        formatos.set(i.atributos.formato, (formatos.get(i.atributos.formato) ?? 0) + i.quantity);
+      }
+    }
+    o.porGrife = [...grifes.values()].sort(
+      (a, b) => b.total - a.total || a.brand.localeCompare(b.brand, 'pt-BR'),
+    );
+    o.porFormato = [...formatos.entries()]
+      .map(([formato, units]) => ({ formato, units }))
+      .sort((a, b) => b.units - a.units || a.formato.localeCompare(b.formato, 'pt-BR'));
+
+    // Confiança do PEDIDO: média das confianças dos itens ponderada pelo
+    // capital. Pedido sem valor nenhum (tudo a custo zero) cai na média
+    // simples, para não virar 0 por divisão vazia e afundar na ordenação por
+    // um defeito de cadastro de custo.
+    const capital = o.items.reduce((a, i) => a + i.total, 0);
+    o.confidence =
+      capital > 0
+        ? Math.round(o.items.reduce((a, i) => a + i.confidence * i.total, 0) / capital)
+        : o.items.length > 0
+          ? Math.round(o.items.reduce((a, i) => a + i.confidence, 0) / o.items.length)
+          : 0;
+    o.items.sort(
+      (a, b) =>
+        b.confidence - a.confidence ||
+        (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) ||
+        b.total - a.total,
+    );
   }
-  orders.sort((a, b) => (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) || b.total - a.total);
+  orders.sort(
+    (a, b) =>
+      b.confidence - a.confidence ||
+      (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) ||
+      b.total - a.total,
+  );
 
   return {
     days,
@@ -3473,4 +3662,63 @@ export function storeCarriesBrand(
   const sn = normBrandKey(storeName ?? '');
   if (!sn) return true;
   return stores.some((s) => sn === s || sn.includes(s) || s.includes(sn));
+}
+
+// ─── O mix DECLARADO: grife → ids de loja ────────────────────────────────────
+//
+// A forma nova da mesma regra. `BrandCatalog` acima lê um arquivo JSON no disco
+// do servidor e casa a loja por NOME, com inclusão tolerante nas duas direções.
+// Isto aqui lê o que o cliente declarou pela tela e casa por ID.
+//
+// As duas convivem, e o `porteiroDeMix` do serviço escolhe entre elas: o
+// declarado manda quando existe, o arquivo continua valendo para quem já o
+// tinha. Não é indecisão — é que apagar o caminho do arquivo junto com esta
+// entrega transformaria uma correção de regra numa migração de dados, e as duas
+// falham por motivos diferentes.
+
+/** Mix declarado: grife NORMALIZADA → ids das lojas que a trabalham. */
+export type MixDeclarado = ReadonlyMap<string, ReadonlySet<string>>;
+
+/**
+ * A loja trabalha a grife, segundo o mix DECLARADO pelo cliente?
+ *
+ * Grife ausente do mapa → universal (true). Grife presente → só as lojas do
+ * conjunto. Sem grife reconhecível na descrição → permissivo, porque barrar uma
+ * peça por não sabermos ler o nome dela seria punir a peça pelo nosso erro.
+ *
+ * A LOJA VAZIA é `true` DE PROPÓSITO, e é o caso que decide o card de compra da
+ * rede: ele não tem loja de destino — a compra é da rede, e o destino sai depois
+ * no rateio. Um card sem loja não pode ser barrado por uma regra de loja; quem
+ * barra ali é o rateio, loja a loja, onde a pergunta faz sentido.
+ */
+export function lojaTrabalhaAGrife(
+  brand: string | null | undefined,
+  storeId: string | null | undefined,
+  mix: MixDeclarado | null,
+): boolean {
+  if (!mix || mix.size === 0 || !brand) return true;
+  const lojas = mix.get(normBrandKey(brand));
+  if (!lojas || lojas.size === 0) return true; // não declarada → corrente, universal
+  if (!storeId) return true;
+  return lojas.has(storeId);
+}
+
+/**
+ * As lojas que trabalham a grife, dentre as candidatas. Serve ao rateio, que
+ * precisa saber QUEM sobrou — e a quem devolver as unidades das excluídas.
+ * Devolve as duas listas porque a tela mostra as duas: quem entra na divisão e
+ * quem ficou de fora, com o motivo.
+ */
+export function separarPorMix<T extends { storeId: string; storeName?: string }>(
+  brand: string | null | undefined,
+  candidatas: readonly T[],
+  mix: MixDeclarado | null,
+): { elegiveis: T[]; excluidas: T[] } {
+  if (!mix || mix.size === 0 || !brand) return { elegiveis: [...candidatas], excluidas: [] };
+  const lojas = mix.get(normBrandKey(brand));
+  if (!lojas || lojas.size === 0) return { elegiveis: [...candidatas], excluidas: [] };
+  const elegiveis: T[] = [];
+  const excluidas: T[] = [];
+  for (const c of candidatas) (lojas.has(c.storeId) ? elegiveis : excluidas).push(c);
+  return { elegiveis, excluidas };
 }

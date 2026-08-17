@@ -13,6 +13,7 @@ import {
   getPlanningOverview,
   getPurchaseOrderHistory,
   getDistributionPlan,
+  getFilaDeDistribuicao,
   getReceivingUnits,
   distributeOrder,
   getPurchaseOrders,
@@ -24,6 +25,8 @@ import {
   setSupplierLeadTime,
   getMixDeGrifes,
   setGrifeForaDoMix,
+  getMixPorLoja,
+  declararMixDaGrife,
   settlePurchaseOrder,
   type MovementClass,
   type PurchaseOrder,
@@ -465,6 +468,74 @@ export function RateioPorLoja({
    outro dono nesta onda e a regra .action-card .action-count não o traz. */
 const contadorHeroi = { marginTop: 6 } as const;
 
+/**
+ * A COMPOSIÇÃO DO PEDIDO — nova rodada · item 04.
+ *
+ * "O módulo compras ainda sem o enriquecimento dos tipos de óculos a serem
+ *  comprados, quantidades por grife, etc."
+ *
+ * O pedido é agrupado por FORNECEDOR, e um fornecedor traz várias grifes: a
+ * Luxottica manda Ray-Ban, Oakley, Arnette e Vogue no mesmo pedido. "R$ 82 mil
+ * na Luxottica" não responde a pergunta que o comprador faz antes de assinar,
+ * que é quanto disso é de cada grife — e essa quebra existia nos dados desde
+ * sempre, só não tinha sido escrita em lugar nenhum.
+ *
+ * A COBERTURA VEM DECLARADA. Os tipos saem da ficha do fornecedor, e hoje só o
+ * catálogo da Luxottica foi importado: 4.339 peças de 61 mil. Sem a linha de
+ * cobertura, um pedido da Marcolin apareceria sem nenhum tipo e pareceria
+ * defeito, quando é catálogo que ainda não chegou.
+ */
+function ComposicaoDoPedido({ order }: { order: PurchaseOrder }) {
+  const semFicha = order.items.length - order.itensComFicha;
+  // Uma grife só é o caso comum dos fornecedores pequenos: a quebra repetiria
+  // o cabeçalho do card e não diria nada. A cobertura ainda vale sozinha.
+  const valeQuebrar = order.porGrife.length > 1;
+  if (!valeQuebrar && order.porFormato.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        padding: '12px 18px',
+        borderTop: '1px solid var(--line)',
+        background: 'var(--panel-2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      {valeQuebrar && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <span className="label">Por grife</span>
+          {order.porGrife.map((g) => (
+            <Selo key={g.brand} tom="gray" icone="etiqueta" title={`${g.items} ${g.items === 1 ? 'item' : 'itens'} desta grife`}>
+              {g.brand}: {g.units}<Unidade>un.</Unidade> · {formatBRL(g.total)}
+            </Selo>
+          ))}
+        </div>
+      )}
+
+      {order.porFormato.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <span className="label">Tipos</span>
+          {order.porFormato.map((f) => (
+            <Selo key={f.formato} tom="blue" icone="produtos">
+              {f.formato}: {f.units}<Unidade>un.</Unidade>
+            </Selo>
+          ))}
+        </div>
+      )}
+
+      {semFicha > 0 && (
+        <p className="hint" style={{ margin: 0 }}>
+          {semFicha} {semFicha === 1 ? 'item sem ficha' : 'itens sem ficha'} do fornecedor — tipo,
+          gênero e material aparecem em branco nessas linhas, e a quebra por tipo acima não os conta.
+          É catálogo que ainda não foi importado, não falha de leitura.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Rascunho de ordem de compra de um fornecedor, com export CSV e envio. */
 function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number }) {
   const qc = useQueryClient();
@@ -533,6 +604,10 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
             )}
           </div>
         </div>
+        {/* A CONFIANÇA DO PEDIDO, que agora é o que ORDENA a lista (item 03).
+            Sem ela na linha, a nova ordem parece bagunça: os pedidos deixaram
+            de vir por urgência e nada na tela diz por qual régua vêm. */}
+        <Confidence value={order.confidence} />
         {urgency && (
           <Selo
             tom={order.orderByInDays === 0 ? 'red' : order.orderByInDays! <= 7 ? 'amber' : 'gray'}
@@ -565,13 +640,21 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
           />
         </span>
       </div>
+      {open && <ComposicaoDoPedido order={order} />}
       {open && (
         <table>
           <thead>
             <tr>
               <th>Produto</th>
               <th>Marca</th>
-              <th>Categoria</th>
+              {/* A ficha do fornecedor (nova rodada · item 04). Substitui a
+                  coluna "Categoria", que dizia "Armação" em quase toda linha:
+                  informação constante não é informação. O tipo, o gênero e o
+                  material são o que diferencia uma armação de outra na hora de
+                  montar o pedido, e estavam no banco sem chegar a lugar nenhum. */}
+              <th>Tipo</th>
+              <th>Gênero</th>
+              <th>Material</th>
               <th className="num">Qtde</th>
               <th className="num">Custo unit.</th>
               <th className="num">Total</th>
@@ -584,9 +667,30 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
             {order.items.map((it) => (
               <Fragment key={it.productId}>
                 <tr>
-                  <td>{it.description}</td>
+                  <td>
+                    {it.description}{' '}
+                    {/* Marcação do FORNECEDOR, e o título diz isso em voz alta.
+                        Quem decide o que gira nesta rede é o histórico dela,
+                        não a campanha de quem vende para ela — o selo é
+                        contexto de negociação, nunca recomendação do motor. */}
+                    {it.atributos?.bestSeller && (
+                      <Selo
+                        tom="gray"
+                        icone="tendencia"
+                        title="Best-seller segundo o catálogo do fornecedor. É a marcação dele, não uma leitura do giro desta rede."
+                      >
+                        best-seller do fornecedor
+                      </Selo>
+                    )}
+                  </td>
                   <td>{it.brand ?? '—'}</td>
-                  <td>{it.category ?? '—'}</td>
+                  {/* Traço quando a peça não casou com o catálogo do
+                      fornecedor. Não é falha de leitura: é catálogo que ainda
+                      não chegou, e o rodapé do pedido declara quantos itens
+                      estão nessa situação para o traço não virar suspeita. */}
+                  <td>{it.atributos?.formato ?? <span className="muted">—</span>}</td>
+                  <td>{it.atributos?.genero ?? <span className="muted">—</span>}</td>
+                  <td>{it.atributos?.material ?? <span className="muted">—</span>}</td>
                   <td className="num">{it.quantity}</td>
                   <td className="num">{formatBRL(it.unitCost)}</td>
                   <td className="num">{formatBRL(it.total)}</td>
@@ -627,7 +731,9 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                     {/* `--panel-2` é o fundo de segundo nível do tema; a linha
                         expandida precisa se destacar da linha do item sem virar
                         um bloco de outra tela. */}
-                    <td colSpan={9} style={{ background: 'var(--panel-2)' }}>
+                    {/* 11 colunas desde que a ficha do fornecedor entrou
+                        (Tipo, Gênero, Material no lugar de Categoria). */}
+                    <td colSpan={11} style={{ background: 'var(--panel-2)' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
                         <Selo tom="blue" icone="ideia" title={it.distribution.basisLabel}>
                           por {it.distribution.basis}
@@ -654,6 +760,11 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                         rows={it.distribution.rows}
                         pesoLabel={rotuloDoPeso(it.distribution.basis, `${dias} dias`)}
                         porNecessidade={it.distribution.basis === 'necessidade'}
+                        // As lojas que o mix tirou da divisão. Sem esta linha,
+                        // uma loja que some do rateio é indistinguível de uma
+                        // loja que não precisava de nada — e as duas pedem
+                        // reações opostas de quem compra.
+                        excludedByMix={it.distribution.excludedByMix}
                       />
                       {it.distribution.unassigned > 0 && (
                         <p className="muted" style={{ fontSize: 11.5, margin: '4px 0 0' }}>
@@ -715,6 +826,11 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
       setEstado('done');
       qc.invalidateQueries({ queryKey: ['movements'] });
       qc.invalidateQueries({ queryKey: ['stock'] });
+      // A fila da aba de distribuição precisa perder esta carga — senão ela
+      // continua listada como parada logo depois de ter sido repartida, e o
+      // próximo clique bate na trava do servidor em vez de na tela.
+      qc.invalidateQueries({ queryKey: ['fila-distribuicao'] });
+      qc.invalidateQueries({ queryKey: ['distribution', orderId] });
     } catch (e) {
       setEstado('error');
       const ex = e as { response?: { data?: { error?: string } } };
@@ -781,6 +897,22 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
           <Selo tom="green" icone="aprovar">
             {criadas} transferência{criadas > 1 ? 's' : ''} criada{criadas > 1 ? 's' : ''}
           </Selo>
+        ) : plano.data.distributedAt ? (
+          /* JÁ REPARTIDA — o botão nem chega a aparecer.
+             O servidor recusa a segunda distribuição de qualquer jeito, mas
+             oferecer um botão que só existe para dar erro é desenhar a
+             armadilha e depois avisar que ela está lá. Antes da aba própria
+             este caso era raro (o plano vivia escondido numa linha); agora a
+             ação está na frente de quem passa. */
+          <>
+            <Selo tom="gray" icone="check" title="Esta carga já foi repartida entre as lojas.">
+              distribuída em {shortDate(plano.data.distributedAt)}
+            </Selo>
+            <span className="hint">
+              Para refazer o rateio, cancele antes as transferências pendentes desta carga em
+              Movimentações.
+            </span>
+          </>
         ) : (
           <>
             {/* A origem é PERGUNTADA: o pedido não registra onde a carga
@@ -822,6 +954,153 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A FILA DA DISTRIBUIÇÃO — nova rodada · item 05.
+ *
+ * "Ainda sem a aba de distribuição para as lojas."
+ *
+ * O rateio existia desde o feedback 6.0 e funcionava. O que não existia era a
+ * PORTA: ele morava dentro de uma linha do histórico de pedidos, atrás de um
+ * botão "Como distribuir", visível só para quem já tivesse rolado até lá e só
+ * depois de confirmar o recebimento. Quem chega de manhã perguntando "o que
+ * chegou e ainda não foi repartido?" não tinha onde olhar.
+ *
+ * A fila responde essa pergunta e nada além dela, ordenada pelo que está
+ * parado há mais tempo — mercadoria na retaguarda não vende, e é o capital
+ * mais caro da rede: comprado, pago e sem chegar à vitrine.
+ *
+ * OS JÁ DISTRIBUÍDOS APARECEM NA CAUDA. Sem eles a aba esvaziaria justamente
+ * ao terminar o trabalho, e tela vazia depois de um clique é indistinguível de
+ * tela quebrada para quem a abre — a mesma razão pela qual "só os aprovados"
+ * nasceu desligado.
+ */
+function FilaDeDistribuicao() {
+  const fila = useQuery({ queryKey: ['fila-distribuicao'], queryFn: getFilaDeDistribuicao });
+  // Um plano aberto por vez: cada um abre uma tabela de 16 linhas por item.
+  // Mesmo critério do histórico de pedidos e do rateio na aba de compras.
+  const [aberto, setAberto] = useState<string | null>(null);
+
+  const pendentes = fila.data?.pendentes ?? [];
+  const feitos = fila.data?.distribuidos ?? [];
+
+  return (
+    <>
+      <AberturaDeSecao
+        eyebrow="Distribuir"
+        titulo="O que chegou e ainda não foi repartido"
+        descricao="Cada carga recebida é dividida pela falta de cada loja até a cobertura-alvo — quem vende mais tem alvo maior, e o que a loja já tem é descontado antes. As grifes restritas só entram nas lojas que as trabalham. Confirmar cria as transferências em aberto; quem despacha confirma a saída."
+        acoes={
+          pendentes.length > 0 ? (
+            <Selo
+              tom={pendentes.some((p) => (p.paradaHaDias ?? 0) >= 7) ? 'amber' : 'blue'}
+              icone="entrega"
+              title="Cargas recebidas sem rateio executado."
+            >
+              {pendentes.length} {pendentes.length === 1 ? 'carga parada' : 'cargas paradas'}
+            </Selo>
+          ) : undefined
+        }
+      />
+      <div className="card">
+        {fila.isLoading ? (
+          <Loading />
+        ) : pendentes.length === 0 ? (
+          <div className="empty">
+            Nenhuma carga esperando. Toda mercadoria recebida já foi repartida entre as lojas.
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Fornecedor</th>
+                <th className="num">Itens</th>
+                <th className="num">Un.</th>
+                <th>Recebido em</th>
+                <th>Parada há</th>
+                <th className="right">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendentes.map((c) => (
+                <Fragment key={c.orderId}>
+                  <tr>
+                    <td>{c.supplier}</td>
+                    <td className="num">{c.items}</td>
+                    <td className="num">{c.units}</td>
+                    <td>{c.receivedAt ? shortDate(c.receivedAt) : '—'}</td>
+                    <td>
+                      {/* Uma semana é o limiar do aviso, e não é arbitrário: o
+                          malote entre praças leva de 1 a 4 dias, então uma
+                          carga parada há mais de sete já perdeu um ciclo
+                          inteiro de logística dentro da retaguarda. */}
+                      {c.paradaHaDias === null ? (
+                        <span className="muted">—</span>
+                      ) : c.paradaHaDias >= 7 ? (
+                        <Selo tom="amber" icone="atencao" title="Mais de uma semana na retaguarda, sem vender.">
+                          {c.paradaHaDias} dias
+                        </Selo>
+                      ) : (
+                        <span>{c.paradaHaDias} {c.paradaHaDias === 1 ? 'dia' : 'dias'}</span>
+                      )}
+                    </td>
+                    <td className="right">
+                      <Botao
+                        variante="discreto"
+                        pequeno
+                        icone="transferencias"
+                        aria-expanded={aberto === c.orderId}
+                        onClick={() => setAberto((v) => (v === c.orderId ? null : c.orderId))}
+                      >
+                        {aberto === c.orderId ? 'Fechar' : 'Como distribuir'}
+                      </Botao>
+                    </td>
+                  </tr>
+                  {aberto === c.orderId && (
+                    <tr>
+                      <td colSpan={6} style={{ background: 'var(--panel-2)' }}>
+                        <DistributionPanel orderId={c.orderId} supplier={c.supplier} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {feitos.length > 0 && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <span className="label">Repartidas recentemente</span>
+          <table style={{ marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>Fornecedor</th>
+                <th className="num">Un.</th>
+                <th>Distribuída em</th>
+              </tr>
+            </thead>
+            <tbody>
+              {feitos.map((c) => (
+                <tr key={c.orderId}>
+                  <td>{c.supplier}</td>
+                  <td className="num">{c.units}</td>
+                  <td>{c.distributedAt ? shortDate(c.distributedAt) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="hint" style={{ marginTop: 8 }}>
+            As transferências dessas cargas saíram <strong>em aberto</strong>: elas reservam o saldo,
+            e quem despacha confirma a saída na tela de Movimentações. Uma carga só é repartida uma
+            vez — para refazer o rateio, cancele antes as transferências pendentes dela.
+          </p>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1282,6 +1561,259 @@ function MixDeGrifes({ canEdit }: { canEdit: boolean }) {
 }
 
 /**
+ * MIX POR LOJA — quais lojas trabalham cada grife.
+ *
+ * A tela existe por causa de um defeito que o cliente reportou DUAS rodadas
+ * seguidas, com o mesmo exemplo: "Dior para Guarabira ainda continua
+ * aparecendo". A regra sempre esteve no motor. A LISTA morava num arquivo JSON
+ * no disco do servidor, e o arquivo nunca chegou ao contêiner — `/health` dizia
+ * `mix.ativo: false` desde sempre, e nada mais dizia.
+ *
+ * Consertar seria copiar o arquivo. O que se fez foi outra coisa: uma regra
+ * COMERCIAL não pode morar em artefato que só o deploy sabe colocar no lugar.
+ * Quem sabe onde a Chanel pode ser vendida é o cliente, e agora ele declara,
+ * vê e corrige aqui — sem intermediário e sem publicação no meio.
+ *
+ * A SEMÂNTICA É ASSIMÉTRICA, e a tela precisa dizer isso em voz alta: grife sem
+ * nenhuma loja marcada é CORRENTE (vendida em todas), não proibida. É o estado
+ * da esmagadora maioria do catálogo, e trocar os dois sentidos travaria a rede
+ * inteira no dia em que alguém salvasse a primeira grife.
+ */
+function MixPorLoja({ canEdit }: { canEdit: boolean }) {
+  const mix = useQuery({ queryKey: ['planning-mix-por-loja'], queryFn: getMixPorLoja });
+  const grifes = useQuery({ queryKey: ['planning-brand-mix'], queryFn: getMixDeGrifes });
+  const [busca, setBusca] = useState('');
+  const [editando, setEditando] = useState<string | null>(null);
+
+  const declaradoPor = new Map((mix.data?.rows ?? []).map((r) => [r.brand, r]));
+
+  // As grifes ofertadas são as que o MOTOR conhece (`analysisBrand`), a mesma
+  // lista da tabela de cima — e não os fornecedores do ERP. Marcar "Chanel"
+  // numa lista que só tem "LUXOTTICA BRASIL PRODUTOS OTICOS LTDA" foi
+  // exatamente o defeito da rodada passada, e não vale a pena repeti-lo aqui.
+  //
+  // Uma grife declarada que sumiu do catálogo continua na lista, com o aviso:
+  // escondê-la deixaria a restrição valendo no banco sem tela para desfazê-la.
+  const doCatalogo = (grifes.data?.rows ?? []).map((g) => g.brand);
+  const orfas = [...declaradoPor.keys()].filter((b) => !doCatalogo.includes(b));
+  const todas = [...doCatalogo, ...orfas];
+
+  const filtro = busca.trim().toLowerCase();
+  const linhas = todas
+    .filter((b) => (filtro === '' ? true : b.toLowerCase().includes(filtro)))
+    // As restritas primeiro: são as decisões tomadas, e é o que se volta a
+    // conferir. As correntes são o padrão e não precisam ser lidas.
+    .sort((a, b) => {
+      const da = declaradoPor.has(a) ? 0 : 1;
+      const db = declaradoPor.has(b) ? 0 : 1;
+      return da - db || a.localeCompare(b, 'pt-BR');
+    })
+    // Sem busca, mostra só as restritas: a lista completa tem centenas de
+    // grifes correntes, e rolar por elas para achar as quatro que importam é
+    // o contrário do que esta tela serve.
+    .slice(0, filtro === '' ? declaradoPor.size : 60);
+
+  return (
+    <>
+      <AberturaDeSecao
+        eyebrow="Mix"
+        titulo="Quais lojas trabalham cada grife"
+        descricao="Grife sem loja marcada é corrente: vendida em todas. Marcar lojas restringe a grife a elas — o motor deixa de sugerir compra, remanejamento e distribuição da grife para as demais. Nenhum dado do ERP diz isso; é contrato com o fornecedor e precisa ser declarado aqui."
+        acoes={
+          declaradoPor.size > 0 ? (
+            <Selo tom="blue" icone="lojas" title="Grifes com lojas declaradas.">
+              {declaradoPor.size} grifes restritas
+            </Selo>
+          ) : undefined
+        }
+      />
+      <div className="card">
+        {mix.isLoading || grifes.isLoading || !mix.data ? (
+          <Loading />
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <input
+                type="search"
+                value={busca}
+                placeholder="Buscar grife para restringir…"
+                onChange={(e) => setBusca(e.target.value)}
+                aria-label="Buscar grife"
+                style={{ maxWidth: 280 }}
+              />
+              <span className="muted" style={{ fontSize: 12 }}>
+                {filtro === ''
+                  ? `${declaradoPor.size} restritas · busque para restringir outra`
+                  : `${linhas.length} de ${todas.length} grifes`}
+              </span>
+            </div>
+
+            {linhas.length === 0 ? (
+              <p className="muted">
+                {filtro === ''
+                  ? 'Nenhuma grife restrita. Todas são vendidas em todas as lojas — busque uma grife acima para restringi-la.'
+                  : 'Nenhuma grife com esse nome.'}
+              </p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Grife</th>
+                    <th>Lojas que trabalham</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {linhas.map((brand) => (
+                    <LinhaDoMixPorLoja
+                      key={brand}
+                      brand={brand}
+                      declarado={declaradoPor.get(brand) ?? null}
+                      lojas={mix.data.lojas}
+                      canEdit={canEdit}
+                      aberto={editando === brand}
+                      abrir={() => setEditando(editando === brand ? null : brand)}
+                      fechar={() => setEditando(null)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function LinhaDoMixPorLoja({
+  brand,
+  declarado,
+  lojas,
+  canEdit,
+  aberto,
+  abrir,
+  fechar,
+}: {
+  brand: string;
+  declarado: { storeIds: string[]; stores: { id: string; name: string | null }[] } | null;
+  lojas: { id: string; name: string }[];
+  canEdit: boolean;
+  aberto: boolean;
+  abrir: () => void;
+  fechar: () => void;
+}) {
+  const qc = useQueryClient();
+  const [state, setState] = useState<'idle' | 'saving' | 'error'>('idle');
+  // A seleção em edição é local: só vai ao servidor no "Salvar". Salvar a cada
+  // clique mandaria a grife para um estado intermediário real — a Chanel
+  // restrita a uma loja só, entre o primeiro e o segundo clique — e nesse
+  // intervalo o motor decidiria com ele.
+  const [sel, setSel] = useState<Set<string>>(new Set(declarado?.storeIds ?? []));
+
+  const salvar = async (ids: string[]) => {
+    setState('saving');
+    try {
+      await declararMixDaGrife(brand, ids);
+      await qc.invalidateQueries({ queryKey: ['planning-mix-por-loja'] });
+      // As mesmas quatro consultas do "fora do mix": compra, quadro, pedidos e
+      // remanejamento mudam TODOS com esta decisão. Deixar qualquer uma de
+      // fora faz a tela ao lado seguir mostrando a sugestão que acabou de ser
+      // proibida — e o cliente já viu essa cena.
+      recarregarDoTopo(qc, 'purchase-suggestions');
+      recarregarDoTopo(qc, 'decisions');
+      await qc.invalidateQueries({ queryKey: ['planning-orders'] });
+      await qc.invalidateQueries({ queryKey: ['planning-rebalance'] });
+      setState('idle');
+      fechar();
+    } catch {
+      setState('error');
+    }
+  };
+
+  const nomes = (declarado?.stores ?? []).map((s) => s.name ?? '(loja fora do escopo)');
+
+  return (
+    <>
+      <tr>
+        <td>{brand}</td>
+        <td>
+          {declarado && declarado.storeIds.length > 0 ? (
+            <span>{nomes.join(', ')}</span>
+          ) : (
+            <span className="muted">Todas as lojas (grife corrente)</span>
+          )}
+        </td>
+        <td className="num">
+          {canEdit && (
+            <Botao
+              onClick={() => {
+                setSel(new Set(declarado?.storeIds ?? []));
+                abrir();
+              }}
+              aria-expanded={aberto}
+            >
+              {aberto ? 'Fechar' : declarado ? 'Alterar' : 'Restringir'}
+            </Botao>
+          )}
+        </td>
+      </tr>
+      {aberto && canEdit && (
+        <tr>
+          <td colSpan={3}>
+            <div style={{ padding: '10px 0' }}>
+              <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                Marque as lojas que trabalham <strong>{brand}</strong>. Sem nenhuma marcada, a grife
+                volta a ser vendida em todas.
+              </p>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))',
+                  gap: 6,
+                }}
+              >
+                {lojas.map((l) => (
+                  <label key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={sel.has(l.id)}
+                      onChange={(e) => {
+                        const s = new Set(sel);
+                        if (e.target.checked) s.add(l.id);
+                        else s.delete(l.id);
+                        setSel(s);
+                      }}
+                    />
+                    {l.name}
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+                <BotaoPrimario onClick={() => salvar([...sel])} disabled={state === 'saving'}>
+                  {state === 'saving' ? 'Salvando…' : `Salvar (${sel.size} lojas)`}
+                </BotaoPrimario>
+                <Botao onClick={fechar}>Cancelar</Botao>
+                {declarado && (
+                  <Botao onClick={() => salvar([])} disabled={state === 'saving'}>
+                    Voltar a ser corrente
+                  </Botao>
+                )}
+                {state === 'error' && (
+                  <span className="muted" style={{ color: 'var(--nf-danger, crimson)', fontSize: 12 }}>
+                    Não foi possível salvar. Tente de novo.
+                  </span>
+                )}
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/**
  * Modo Feira (feedback 08): lançamentos comprados em feira não têm histórico
  * próprio. Escolhida a marca ou o grupo e a quantidade total, rateia a compra
  * entre as lojas pela participação de cada uma nas vendas daquele recorte.
@@ -1441,7 +1973,7 @@ export function Planning() {
   const ordersRef = useRef<HTMLDivElement>(null);
   const purchaseRef = useRef<HTMLDivElement>(null);
 
-  const stores = useQuery({ queryKey: ['stores'], queryFn: getStores, enabled: isAdmin });
+  const stores = useQuery({ queryKey: ['stores', 'planejaveis'], queryFn: () => getStores('planejaveis'), enabled: isAdmin });
   const params = { days, storeId: storeId || undefined, group };
 
   /*
@@ -1455,8 +1987,18 @@ export function Planning() {
    *
    * Abre em "Transferir" de propósito: é a decisão que não gasta dinheiro, e o
    * título da seção sempre disse "antes de comprar".
+   *
+   * A TERCEIRA FRENTE veio na rodada seguinte — "ainda sem a aba de
+   * distribuição para as lojas". O rateio existia desde o feedback 6.0 e
+   * funcionava; o que não existia era a PORTA. Ele morava dentro de uma linha
+   * do histórico de pedidos, atrás de um botão "Como distribuir", visível só
+   * para quem já tivesse rolado até lá e só depois de confirmar o recebimento.
+   *
+   * As três frentes são o ciclo inteiro na ordem em que ele acontece:
+   * redistribuir o que já existe → comprar o que falta → repartir o que
+   * chegou. A terceira era a única sem entrada própria.
    */
-  const [frente, setFrente] = useState<'transferir' | 'comprar'>('transferir');
+  const [frente, setFrente] = useState<'transferir' | 'comprar' | 'distribuir'>('transferir');
 
   /*
    * Feedback 6.0 · item 10 — "adicionar ao planejamento de pedido apenas as
@@ -1633,9 +2175,11 @@ export function Planning() {
           seta como pontuação até funciona ("De → Para"), mas invertida ela
           obriga a ler a linha de trás para frente. Reescrita no sentido da
           leitura, sem glifo nenhum. */}
-      {/* As duas frentes, com o mesmo peso (item 05). */}
+      {/* As TRÊS frentes, com o mesmo peso — o ciclo na ordem em que acontece:
+          redistribuir o que já existe → comprar o que falta → repartir o que
+          chegou. A terceira era a única sem entrada própria. */}
       <div className="segmented" role="group" aria-label="Frente de trabalho" style={{ marginTop: 18 }}>
-        {(['transferir', 'comprar'] as const).map((f) => (
+        {(['transferir', 'comprar', 'distribuir'] as const).map((f) => (
           <button
             key={f}
             type="button"
@@ -1643,7 +2187,11 @@ export function Planning() {
             onClick={() => setFrente(f)}
             aria-pressed={frente === f}
           >
-            {f === 'transferir' ? 'Transferir entre lojas' : 'Comprar de fornecedor'}
+            {f === 'transferir'
+              ? 'Transferir entre lojas'
+              : f === 'comprar'
+                ? 'Comprar de fornecedor'
+                : 'Distribuir para as lojas'}
           </button>
         ))}
       </div>
@@ -1697,7 +2245,7 @@ export function Planning() {
       <AberturaDeSecao
         eyebrow="Comprar"
         titulo="Pedidos por fornecedor (rascunho)"
-        descricao="Itens a comprar já agrupados por fornecedor, com quantidade, total e a data-limite de envio — o item mais urgente define o prazo do pedido. Exporte e envie."
+        descricao="Itens a comprar agrupados por fornecedor, da maior confiança para a menor — o que o motor tem mais base para afirmar vem primeiro. A urgência continua na linha e desempata dentro de cada faixa: todo item aqui já está no ponto de reposição. Exporte e envie."
         acoes={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {/* SÓ OS APROVADOS — item 10. Sai desligado por decisão explícita:
@@ -1767,6 +2315,8 @@ export function Planning() {
       <OrderHistory />
       </>
       )}
+
+      {frente === 'distribuir' && <FilaDeDistribuicao />}
 
       {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>
@@ -1994,6 +2544,12 @@ export function Planning() {
           catálogo inteiro a cada abertura — custo de rede pago por quem não
           tem decisão a tomar com a lista. Marcar sempre foi ADMIN. */}
       {isAdmin && <MixDeGrifes canEdit={isAdmin} />}
+
+      {/* ── Mix POR LOJA: onde cada grife pode ser vendida (ADMIN) ──
+          Vem logo depois da tabela acima porque as duas se leem juntas e são
+          fáceis de confundir: aquela tira a grife da REDE, esta tira a grife
+          de ALGUMAS LOJAS. Separadas por um título, na mesma dobra. */}
+      {isAdmin && <MixPorLoja canEdit={isAdmin} />}
 
       {/* ── Modo Feira: distribuir uma compra nova entre as lojas (ADMIN) ── */}
       {isAdmin && <FairSplit />}
