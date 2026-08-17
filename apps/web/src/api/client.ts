@@ -691,6 +691,26 @@ export interface PurchaseOrderItem {
    * rateio expõe venda e estoque da rede inteira.
    */
   distribution?: ItemDistribution;
+  /**
+   * A ficha do fornecedor: tipo de armação, gênero, material. AUSENTE quando a
+   * peça não casou com o catálogo importado — e a tela precisa dizer isso, não
+   * escondê-lo: hoje só o catálogo da Luxottica entrou, então a maior parte do
+   * pedido de outros fornecedores vem sem ficha até Marcolin e Thélios
+   * chegarem.
+   */
+  atributos?: AtributosDaPeca;
+}
+
+export interface AtributosDaPeca {
+  /** Feminino · Masculino · Unisex · Menina · Menino */
+  genero: string | null;
+  /** Retangular, Quadrado, Gatinho, Phantos… — o "tipo de óculos" do feedback. */
+  formato: string | null;
+  material: string | null;
+  /** Em milímetros, como o fornecedor publica. */
+  tamanhoLente: number | null;
+  /** Marcação do FORNECEDOR. Contexto de compra, nunca decisão do motor. */
+  bestSeller: boolean;
 }
 
 export interface PurchaseOrder {
@@ -709,6 +729,12 @@ export interface PurchaseOrder {
    * mais baixa, como o cliente pediu. A urgência virou desempate.
    */
   confidence: number;
+  /** Quanto deste pedido é de cada grife, por valor. */
+  porGrife: { brand: string; items: number; units: number; total: number }[];
+  /** Tipos de armação do pedido. Só as peças com ficha do fornecedor. */
+  porFormato: { formato: string; units: number }[];
+  /** Itens com ficha — o numerador da cobertura que a tela declara. */
+  itensComFicha: number;
 }
 
 export interface PurchaseOrdersPlan {

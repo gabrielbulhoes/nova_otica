@@ -1600,11 +1600,62 @@ export interface PurchaseOrderItem {
   /** Confiabilidade da sugestão de compra deste item (0–100). */
   confidence: number;
   /**
+   * A ficha do fornecedor: tipo de armação, gênero, material (nova rodada ·
+   * item 04). Ausente quando a peça não casou com o catálogo do fornecedor —
+   * e ausente é uma informação, não um buraco a esconder: hoje 4.339 das 61
+   * mil peças têm ficha, porque só o catálogo da Luxottica foi importado.
+   */
+  atributos?: AtributosDaPeca;
+  /**
    * Como dividir esta compra entre as lojas. Ausente quando o chamador não
    * passou as posições por loja — e ausente NÃO é "dividir igual": é "esta
    * resposta não foi calculada", que a tela precisa poder dizer.
    */
   distribution?: ItemDistribution;
+}
+
+/**
+ * O que o catálogo do FORNECEDOR sabe de uma peça — e que o ERP não sabe.
+ *
+ * O CDS devolve descrição, preço e saldo. Gênero, formato de aro e material
+ * vêm da planilha do fornecedor, importada à parte, e até esta rodada a tabela
+ * era escrita e NUNCA lida: 4.339 peças com ficha completa no banco, e nenhuma
+ * linha do sistema consultando.
+ *
+ * "O módulo compras ainda sem o enriquecimento dos tipos de óculos a serem
+ *  comprados, quantidades por grife, etc."
+ *
+ * Chega ao motor por um Map vindo do serviço, como `excludedByMix`, porque
+ * este arquivo não tem imports e a fonte é uma tabela.
+ */
+export interface AtributosDaPeca {
+  /** Feminino · Masculino · Unisex · Menina · Menino */
+  genero: string | null;
+  /** Retangular, Quadrado, Gatinho, Phantos… — o "tipo de óculos" do feedback. */
+  formato: string | null;
+  material: string | null;
+  /** Em milímetros, como o fornecedor publica. */
+  tamanhoLente: number | null;
+  /**
+   * Marcação de best-seller DO FORNECEDOR. Vale como contexto na hora de
+   * comprar e NADA além disso: quem diz o que gira nesta rede é o histórico
+   * de venda dela, não a campanha de quem vende para ela.
+   */
+  bestSeller: boolean;
+}
+
+/** Quanto deste pedido é de cada grife (nova rodada · item 04). */
+export interface QuantidadePorGrife {
+  brand: string;
+  items: number;
+  units: number;
+  total: number;
+}
+
+/** Quantas unidades de cada tipo de armação este pedido traz. */
+export interface QuantidadePorFormato {
+  formato: string;
+  units: number;
 }
 
 /** Rateio de um item de pedido entre as lojas, pronto para a tela. */
@@ -1661,6 +1712,29 @@ export interface PurchaseOrder {
    *    histórico", que é a pergunta de quem vai assinar.
    */
   confidence: number;
+  /**
+   * QUANTO DESTE PEDIDO É DE CADA GRIFE (nova rodada · item 04).
+   *
+   * O pedido é agrupado por FORNECEDOR, e um fornecedor traz várias grifes —
+   * a Luxottica manda Ray-Ban, Oakley, Arnette e Vogue no mesmo pedido. Sem
+   * esta quebra, "R$ 82 mil na Luxottica" não responde a pergunta que o
+   * comprador faz antes de assinar, que é quanto disso é de cada grife.
+   *
+   * Ordenado por valor, não por unidades: são as duas leituras possíveis, e a
+   * que decide é a do dinheiro.
+   */
+  porGrife: QuantidadePorGrife[];
+  /**
+   * OS TIPOS DE ÓCULOS DO PEDIDO — a outra metade do item 04.
+   *
+   * Sai da ficha do fornecedor, então cobre só as peças que casaram com o
+   * catálogo importado. Peças sem ficha NÃO entram como "outros": um balde
+   * com metade do pedido dentro não informa nada e ainda passa a impressão de
+   * que o resto foi classificado. A tela declara a cobertura ao lado.
+   */
+  porFormato: QuantidadePorFormato[];
+  /** Itens deste pedido com ficha do fornecedor — o denominador da cobertura. */
+  itensComFicha: number;
 }
 
 export interface PurchaseOrdersPlan {
@@ -1703,6 +1777,13 @@ export function buildPurchaseOrders(
    * nada, e as duas exigem reações opostas do comprador.
    */
   excludedByMix?: Map<string, string[]>,
+  /**
+   * Opcional: a ficha do fornecedor por produto (nova rodada · item 04). Chega
+   * do serviço pelo mesmo motivo de `excludedByMix` — é uma tabela, e este
+   * arquivo não tem imports. Ausente = o chamador não pediu enriquecimento,
+   * distinto de "a peça não tem ficha", que é a chave faltando no Map.
+   */
+  atributos?: Map<string, AtributosDaPeca>,
 ): PurchaseOrdersPlan {
   const bySupplier = new Map<string, PurchaseOrder>();
 
@@ -1721,6 +1802,9 @@ export function buildPurchaseOrders(
         orderByInDays: null,
         stockoutInDays: null,
         confidence: 0,
+        porGrife: [],
+        porFormato: [],
+        itensComFicha: 0,
       } as PurchaseOrder);
 
     // Com a CATEGORIA. Sem ela, `extractBrand` extrai de tudo — e a lista de
@@ -1762,6 +1846,7 @@ export function buildPurchaseOrders(
       orderByInDays: p.orderByInDays,
       stockoutInDays: p.stockoutInDays,
       confidence: p.confidence,
+      ...(atributos?.has(p.productId) ? { atributos: atributos.get(p.productId)! } : {}),
       ...(rateio
         ? {
             distribution: {
@@ -1808,6 +1893,40 @@ export function buildPurchaseOrders(
    */
   const orders = Array.from(bySupplier.values());
   for (const o of orders) {
+    /*
+     * O ENRIQUECIMENTO DO PEDIDO — nova rodada · item 04.
+     *
+     * Duas quebras, e as duas saem dos itens que já estão na mão: nenhuma
+     * consulta nova, nenhum laço a mais sobre os planos.
+     */
+    const grifes = new Map<string, QuantidadePorGrife>();
+    const formatos = new Map<string, number>();
+    for (const i of o.items) {
+      // `SEM GRIFE` e não o fornecedor: o pedido JÁ está agrupado por
+      // fornecedor, e repetir o cabeçalho aqui faria "Luxottica" aparecer como
+      // se fosse uma grife ao lado de Ray-Ban e Oakley.
+      const chave = i.brand ?? 'Sem grife';
+      const g = grifes.get(chave) ?? { brand: chave, items: 0, units: 0, total: 0 };
+      g.items += 1;
+      g.units += i.quantity;
+      g.total = round2(g.total + i.total);
+      grifes.set(chave, g);
+
+      if (i.atributos) o.itensComFicha += 1;
+      // Só quem TEM formato entra. Peça sem ficha não vira "outros": um balde
+      // com metade do pedido dentro não informa e ainda sugere que o resto foi
+      // classificado.
+      if (i.atributos?.formato) {
+        formatos.set(i.atributos.formato, (formatos.get(i.atributos.formato) ?? 0) + i.quantity);
+      }
+    }
+    o.porGrife = [...grifes.values()].sort(
+      (a, b) => b.total - a.total || a.brand.localeCompare(b.brand, 'pt-BR'),
+    );
+    o.porFormato = [...formatos.entries()]
+      .map(([formato, units]) => ({ formato, units }))
+      .sort((a, b) => b.units - a.units || a.formato.localeCompare(b.formato, 'pt-BR'));
+
     // Confiança do PEDIDO: média das confianças dos itens ponderada pelo
     // capital. Pedido sem valor nenhum (tudo a custo zero) cai na média
     // simples, para não virar 0 por divisão vazia e afundar na ordenação por

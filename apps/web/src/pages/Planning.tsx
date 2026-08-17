@@ -467,6 +467,74 @@ export function RateioPorLoja({
    outro dono nesta onda e a regra .action-card .action-count não o traz. */
 const contadorHeroi = { marginTop: 6 } as const;
 
+/**
+ * A COMPOSIÇÃO DO PEDIDO — nova rodada · item 04.
+ *
+ * "O módulo compras ainda sem o enriquecimento dos tipos de óculos a serem
+ *  comprados, quantidades por grife, etc."
+ *
+ * O pedido é agrupado por FORNECEDOR, e um fornecedor traz várias grifes: a
+ * Luxottica manda Ray-Ban, Oakley, Arnette e Vogue no mesmo pedido. "R$ 82 mil
+ * na Luxottica" não responde a pergunta que o comprador faz antes de assinar,
+ * que é quanto disso é de cada grife — e essa quebra existia nos dados desde
+ * sempre, só não tinha sido escrita em lugar nenhum.
+ *
+ * A COBERTURA VEM DECLARADA. Os tipos saem da ficha do fornecedor, e hoje só o
+ * catálogo da Luxottica foi importado: 4.339 peças de 61 mil. Sem a linha de
+ * cobertura, um pedido da Marcolin apareceria sem nenhum tipo e pareceria
+ * defeito, quando é catálogo que ainda não chegou.
+ */
+function ComposicaoDoPedido({ order }: { order: PurchaseOrder }) {
+  const semFicha = order.items.length - order.itensComFicha;
+  // Uma grife só é o caso comum dos fornecedores pequenos: a quebra repetiria
+  // o cabeçalho do card e não diria nada. A cobertura ainda vale sozinha.
+  const valeQuebrar = order.porGrife.length > 1;
+  if (!valeQuebrar && order.porFormato.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        padding: '12px 18px',
+        borderTop: '1px solid var(--line)',
+        background: 'var(--panel-2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      {valeQuebrar && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <span className="label">Por grife</span>
+          {order.porGrife.map((g) => (
+            <Selo key={g.brand} tom="gray" icone="etiqueta" title={`${g.items} ${g.items === 1 ? 'item' : 'itens'} desta grife`}>
+              {g.brand}: {g.units}<Unidade>un.</Unidade> · {formatBRL(g.total)}
+            </Selo>
+          ))}
+        </div>
+      )}
+
+      {order.porFormato.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <span className="label">Tipos</span>
+          {order.porFormato.map((f) => (
+            <Selo key={f.formato} tom="blue" icone="produtos">
+              {f.formato}: {f.units}<Unidade>un.</Unidade>
+            </Selo>
+          ))}
+        </div>
+      )}
+
+      {semFicha > 0 && (
+        <p className="hint" style={{ margin: 0 }}>
+          {semFicha} {semFicha === 1 ? 'item sem ficha' : 'itens sem ficha'} do fornecedor — tipo,
+          gênero e material aparecem em branco nessas linhas, e a quebra por tipo acima não os conta.
+          É catálogo que ainda não foi importado, não falha de leitura.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Rascunho de ordem de compra de um fornecedor, com export CSV e envio. */
 function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number }) {
   const qc = useQueryClient();
@@ -571,13 +639,21 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
           />
         </span>
       </div>
+      {open && <ComposicaoDoPedido order={order} />}
       {open && (
         <table>
           <thead>
             <tr>
               <th>Produto</th>
               <th>Marca</th>
-              <th>Categoria</th>
+              {/* A ficha do fornecedor (nova rodada · item 04). Substitui a
+                  coluna "Categoria", que dizia "Armação" em quase toda linha:
+                  informação constante não é informação. O tipo, o gênero e o
+                  material são o que diferencia uma armação de outra na hora de
+                  montar o pedido, e estavam no banco sem chegar a lugar nenhum. */}
+              <th>Tipo</th>
+              <th>Gênero</th>
+              <th>Material</th>
               <th className="num">Qtde</th>
               <th className="num">Custo unit.</th>
               <th className="num">Total</th>
@@ -590,9 +666,30 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
             {order.items.map((it) => (
               <Fragment key={it.productId}>
                 <tr>
-                  <td>{it.description}</td>
+                  <td>
+                    {it.description}{' '}
+                    {/* Marcação do FORNECEDOR, e o título diz isso em voz alta.
+                        Quem decide o que gira nesta rede é o histórico dela,
+                        não a campanha de quem vende para ela — o selo é
+                        contexto de negociação, nunca recomendação do motor. */}
+                    {it.atributos?.bestSeller && (
+                      <Selo
+                        tom="gray"
+                        icone="tendencia"
+                        title="Best-seller segundo o catálogo do fornecedor. É a marcação dele, não uma leitura do giro desta rede."
+                      >
+                        best-seller do fornecedor
+                      </Selo>
+                    )}
+                  </td>
                   <td>{it.brand ?? '—'}</td>
-                  <td>{it.category ?? '—'}</td>
+                  {/* Traço quando a peça não casou com o catálogo do
+                      fornecedor. Não é falha de leitura: é catálogo que ainda
+                      não chegou, e o rodapé do pedido declara quantos itens
+                      estão nessa situação para o traço não virar suspeita. */}
+                  <td>{it.atributos?.formato ?? <span className="muted">—</span>}</td>
+                  <td>{it.atributos?.genero ?? <span className="muted">—</span>}</td>
+                  <td>{it.atributos?.material ?? <span className="muted">—</span>}</td>
                   <td className="num">{it.quantity}</td>
                   <td className="num">{formatBRL(it.unitCost)}</td>
                   <td className="num">{formatBRL(it.total)}</td>
@@ -633,7 +730,9 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                     {/* `--panel-2` é o fundo de segundo nível do tema; a linha
                         expandida precisa se destacar da linha do item sem virar
                         um bloco de outra tela. */}
-                    <td colSpan={9} style={{ background: 'var(--panel-2)' }}>
+                    {/* 11 colunas desde que a ficha do fornecedor entrou
+                        (Tipo, Gênero, Material no lugar de Categoria). */}
+                    <td colSpan={11} style={{ background: 'var(--panel-2)' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
                         <Selo tom="blue" icone="ideia" title={it.distribution.basisLabel}>
                           por {it.distribution.basis}

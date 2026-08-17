@@ -31,6 +31,7 @@ import {
   LINHAS_POR_PAGINA,
   matchesProductGroup,
   normBrandKey,
+  type AtributosDaPeca,
   type FairSplitInput,
   type FiltroDeVista,
   type PlanningConfig,
@@ -537,7 +538,56 @@ export async function purchaseOrders(
     }
   }
 
-  return buildPurchaseOrders(productPlans, days, resolve, posicoes, foraDoMix);
+  return buildPurchaseOrders(
+    productPlans,
+    days,
+    resolve,
+    posicoes,
+    foraDoMix,
+    await fichasDoFornecedor(productPlans),
+  );
+}
+
+/**
+ * A ficha do fornecedor das peças que vão virar item de pedido (nova rodada ·
+ * item 04).
+ *
+ * A tabela `ProductAttribute` é escrita por um importador manual desde a
+ * rodada passada — 4.339 peças com gênero, formato e material, e 8.901 com
+ * teto de desconto — e até aqui NINGUÉM a lia. Estava tudo no banco e nada na
+ * tela; o `/health` contava as linhas e era o único lugar onde elas existiam.
+ *
+ * SÓ OS SKUs DE COMPRA entram na consulta. O recorte pode ter dezenas de
+ * milhares de peças e a lista de compras tem centenas — buscar a tabela
+ * inteira para descartar 99% dela é o tipo de custo que não erra a saída e
+ * derruba a rota, e esta rota já foi derrubada uma vez aqui por isso.
+ */
+async function fichasDoFornecedor(planos: ProductPlan[]): Promise<Map<string, AtributosDaPeca>> {
+  const ids = planos.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId);
+  const fichas = new Map<string, AtributosDaPeca>();
+  if (ids.length === 0) return fichas;
+
+  const linhas = await prisma.productAttribute.findMany({
+    where: { productId: { in: ids }, cadastroEm: { not: null } },
+    select: {
+      productId: true,
+      genero: true,
+      formato: true,
+      material: true,
+      tamanhoLente: true,
+      bestSeller: true,
+    },
+  });
+  for (const l of linhas) {
+    fichas.set(l.productId, {
+      genero: l.genero,
+      formato: l.formato,
+      material: l.material,
+      tamanhoLente: l.tamanhoLente,
+      bestSeller: l.bestSeller,
+    });
+  }
+  return fichas;
 }
 
 /** Recorte da resposta do quadro: página + filtros de vista. */

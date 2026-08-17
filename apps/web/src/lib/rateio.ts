@@ -79,6 +79,13 @@ export function orderCsv(order: PurchaseOrder): string {
     marca: it.brand ?? '',
     produto: it.description,
     categoria: it.category ?? '',
+    // A ficha do fornecedor também no CSV (nova rodada · item 04): é o arquivo
+    // que vai para o fornecedor, e tipo/gênero/material são exatamente o que
+    // se confere do outro lado. Vazio quando a peça não tem ficha — nunca um
+    // valor inventado.
+    tipo: it.atributos?.formato ?? '',
+    genero: it.atributos?.genero ?? '',
+    material: it.atributos?.material ?? '',
     quantidade: it.quantity,
     custoUnit: it.unitCost.toFixed(2).replace('.', ','),
     total: it.total.toFixed(2).replace('.', ','),
