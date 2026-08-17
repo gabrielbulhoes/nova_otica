@@ -1188,3 +1188,91 @@ describe('demo: o mix de grifes chega ao motor, não só à tabela', () => {
     expect(marcada()).toBe(false);
   });
 });
+
+/**
+ * O MIX POR LOJA na demo — nova rodada · itens 01, 02 e 05.
+ *
+ * A demonstração é onde o cliente confere o comportamento antes de confiar
+ * nele. Um porteiro que existe só na produção faria a demo mostrar exatamente
+ * a sugestão que a produção passou a barrar — e foi com o exemplo da demo
+ * ("Dior para Guarabira") que o defeito voltou duas rodadas seguidas.
+ */
+describe('demo: mix por loja e a fila de distribuição', () => {
+  const put = (url: string, body: Record<string, unknown>) =>
+    demoHandle({ method: 'PUT', url, body }) as Record<string, any>;
+
+  const remanejamentos = () =>
+    (get('/planning/rebalance').rows ?? []) as {
+      description: string;
+      brand: string | null;
+      category: string | null;
+      toStoreId: string;
+      toStoreName: string;
+    }[];
+
+  it('grife sem loja declarada é corrente — nenhuma sugestão desaparece', () => {
+    const { rows, lojas } = get('/planning/mix-por-loja');
+    expect(rows).toEqual([]);
+    expect(lojas.length).toBeGreaterThan(1);
+    expect(remanejamentos().length).toBeGreaterThan(0);
+  });
+
+  it('declarar uma loja tira a grife das demais — e desfazer devolve tudo', () => {
+    const antes = remanejamentos();
+    const alvo = antes.find((r) => analysisBrand(r.description, r.category, r.brand));
+    expect(alvo, 'nenhuma linha de remanejamento com grife identificável').toBeTruthy();
+    const grife = analysisBrand(alvo!.description, alvo!.category, alvo!.brand)!;
+
+    const daGrife = (rs: typeof antes) =>
+      rs.filter((r) => normBrandKey(analysisBrand(r.description, r.category, r.brand) ?? '') === normBrandKey(grife));
+    expect(daGrife(antes).length).toBeGreaterThan(0);
+
+    try {
+      // Restringe a grife a UMA loja: a de destino da própria linha alvo.
+      put('/planning/mix-por-loja', { brand: grife, storeIds: [alvo!.toStoreId] });
+      const depois = daGrife(remanejamentos());
+      // Toda sugestão remanescente da grife tem que ir para a loja declarada.
+      for (const r of depois) {
+        expect(r.toStoreId, `${r.description} foi para uma loja que não trabalha ${grife}`).toBe(
+          alvo!.toStoreId,
+        );
+      }
+      // E a declaração aparece na tela, com o nome da loja resolvido.
+      const { rows } = get('/planning/mix-por-loja');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].storeIds).toEqual([alvo!.toStoreId]);
+      expect(rows[0].stores[0].name).toBeTruthy();
+    } finally {
+      // Lista VAZIA apaga a restrição — a grife volta a ser corrente.
+      put('/planning/mix-por-loja', { brand: grife, storeIds: [] });
+    }
+
+    expect(get('/planning/mix-por-loja').rows).toEqual([]);
+    // Sem a limpeza, o teste deixaria a demo alterada para quem rodasse depois.
+    expect(daGrife(remanejamentos()).length).toBe(daGrife(antes).length);
+  });
+
+  it('a fila de distribuição existe e separa pendentes de repartidas', () => {
+    // A aba nova (item 05) abriria em erro se a rota não existisse na demo —
+    // e era esse o estado do plano de distribuição, que nunca foi espelhado
+    // aqui porque vivia escondido atrás de um botão numa linha de tabela.
+    const fila = get('/planning/fila-de-distribuicao');
+    expect(Array.isArray(fila.pendentes)).toBe(true);
+    expect(Array.isArray(fila.distribuidos)).toBe(true);
+    // As duas listas são disjuntas por construção: o que já foi repartido sai
+    // da fila. Se um pedido aparecesse nas duas, a aba ofereceria repartir
+    // uma carga que já saiu.
+    const ids = new Set(fila.pendentes.map((c: { orderId: string }) => c.orderId));
+    for (const c of fila.distribuidos) expect(ids.has(c.orderId)).toBe(false);
+  });
+
+  it('as unidades de recebimento são a RETAGUARDA, que não está na lista de lojas', () => {
+    // `stores` da demo exclui GMAIS, assistência e estoque de compras. A carga
+    // sai justamente de uma delas — se esta rota lesse a mesma lista das
+    // outras telas, viria vazia e a distribuição não teria origem possível.
+    const { rows } = get('/planning/receiving-units');
+    const lojas = get('/planning/mix-por-loja').lojas as { id: string }[];
+    const idsDeVarejo = new Set(lojas.map((l) => l.id));
+    for (const u of rows) expect(idsDeVarejo.has(u.id)).toBe(false);
+  });
+});

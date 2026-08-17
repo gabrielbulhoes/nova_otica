@@ -457,11 +457,27 @@ model PurchaseOrderRecord {
   expectedAt   DateTime? // sentAt + leadTimeDays
   receivedBy   String?
   receivedAt   DateTime?
+
+  /// QUANDO A CARGA FOI REPARTIDA ENTRE AS LOJAS, e por quem.
+  ///
+  /// Nasceu junto com a aba de distribuição (nova rodada · item 05), e não por
+  /// completude: enquanto o plano era uma gaveta escondida dentro da linha de
+  /// um pedido recebido, disparar duas vezes exigia procurar. Uma aba própria
+  /// põe a ação na frente de quem passa, e sem esta marca a segunda visita
+  /// criaria um segundo conjunto de transferências — o mesmo saldo prometido
+  /// duas vezes, que é justamente o que `createMovement` existe para impedir.
+  ///
+  /// `null` = recebida e ainda por repartir. É o que a aba lista.
+  distributedAt DateTime?
+  distributedBy String?
+
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
 
   @@index([status])
   @@index([supplier])
+  /// A consulta da aba: recebidos e ainda não distribuídos.
+  @@index([status, distributedAt])
 }
 
 // ─── Auditoria de sincronização ──────────────────────────────────────────────

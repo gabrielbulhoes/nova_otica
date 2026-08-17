@@ -3,6 +3,7 @@ import { prisma } from '../src/lib/prisma.js';
 import {
   createDistributionMovements,
   distributionPlan,
+  filaDeDistribuicao,
   receivingUnits,
 } from '../src/modules/planning/distribution.service.js';
 import { PLANNED_STORE_WHERE } from '../src/modules/stores/store.scope.js';
@@ -291,6 +292,52 @@ d('distribuição do recebimento (integração com Postgres)', () => {
       where: { storeId_productId: { storeId: retaguardaId, productId } },
     });
     expect(pos?.reserved ?? 0).toBeGreaterThan(0);
+  });
+
+  it('carimba a distribuição e RECUSA a segunda — uma carga se reparte uma vez', async () => {
+    /*
+     * A trava nasceu com a aba de distribuição (nova rodada · item 05).
+     *
+     * Enquanto o plano era uma gaveta dentro da linha de um pedido recebido,
+     * disparar de novo exigia procurar. Uma aba própria põe a ação na frente
+     * de quem passa — e o segundo clique criaria um SEGUNDO conjunto de
+     * transferências sobre o mesmo saldo, entrando por cima da proteção que
+     * `createMovement` existe para dar.
+     *
+     * Roda depois do teste acima, que já distribuiu este pedido.
+     */
+    const pedido = await prisma.purchaseOrderRecord.findUniqueOrThrow({ where: { id: orderId } });
+    expect(pedido.distributedAt).not.toBeNull();
+    expect(pedido.distributedBy).not.toBeNull();
+
+    const antes = await prisma.inventoryMovement.count({
+      where: { fromStoreId: retaguardaId, reason: { contains: 'Distribuição do pedido' } },
+    });
+
+    const admin = await prisma.user.findFirstOrThrow({ where: { role: 'ADMIN' } });
+    await expect(
+      createDistributionMovements(orderId, retaguardaId, { id: admin.id, role: 'ADMIN', storeId: null }),
+    ).rejects.toThrow(/já foi distribuído/i);
+
+    // A recusa não pode ter deixado meia distribuição para trás: nem uma
+    // movimentação a mais. É o que separa "recusou" de "recusou depois de
+    // gravar", que é o pior dos dois mundos.
+    const depois = await prisma.inventoryMovement.count({
+      where: { fromStoreId: retaguardaId, reason: { contains: 'Distribuição do pedido' } },
+    });
+    expect(depois).toBe(antes);
+  });
+
+  it('a fila lista o que está parado, e tira o que já foi repartido', async () => {
+    const { pendentes, distribuidos } = await filaDeDistribuicao();
+    // Este pedido acabou de ser distribuído pelos testes acima.
+    expect(distribuidos.map((c) => c.orderId)).toContain(orderId);
+    expect(pendentes.map((c) => c.orderId)).not.toContain(orderId);
+    // Ordenada pelo que está parado há mais tempo: mercadoria na retaguarda
+    // não vende, e é o capital mais caro da rede.
+    for (let i = 1; i < pendentes.length; i += 1) {
+      expect(pendentes[i - 1].paradaHaDias ?? -1).toBeGreaterThanOrEqual(pendentes[i].paradaHaDias ?? -1);
+    }
   });
 
   it('as unidades de recebimento são só as de retaguarda, nunca as em outro ERP', async () => {

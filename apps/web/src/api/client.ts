@@ -1034,7 +1034,28 @@ export interface DistributionPlan {
   items: DistributionItem[];
   /** Unidades sem rateio possível — declaradas, nunca evaporadas. */
   unassigned: number;
+  /** Quando esta carga já foi repartida. `null` = ainda por distribuir. */
+  distributedAt: string | null;
 }
+
+/** Uma carga esperando para ser repartida entre as lojas. */
+export interface CargaParaDistribuir {
+  orderId: string;
+  supplier: string;
+  units: number;
+  items: number;
+  receivedAt: string | null;
+  distributedAt: string | null;
+  /** Dias parada desde o recebimento. É o que ordena a fila. */
+  paradaHaDias: number | null;
+}
+
+export const getFilaDeDistribuicao = () =>
+  api
+    .get<{ pendentes: CargaParaDistribuir[]; distribuidos: CargaParaDistribuir[] }>(
+      '/planning/fila-de-distribuicao',
+    )
+    .then((r) => r.data);
 
 export const getDistributionPlan = (id: string) =>
   api.get<DistributionPlan>(`/planning/purchase-orders/${id}/distribution`).then((r) => r.data);

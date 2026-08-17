@@ -13,6 +13,7 @@ import {
   getPlanningOverview,
   getPurchaseOrderHistory,
   getDistributionPlan,
+  getFilaDeDistribuicao,
   getReceivingUnits,
   distributeOrder,
   getPurchaseOrders,
@@ -825,6 +826,11 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
       setEstado('done');
       qc.invalidateQueries({ queryKey: ['movements'] });
       qc.invalidateQueries({ queryKey: ['stock'] });
+      // A fila da aba de distribuição precisa perder esta carga — senão ela
+      // continua listada como parada logo depois de ter sido repartida, e o
+      // próximo clique bate na trava do servidor em vez de na tela.
+      qc.invalidateQueries({ queryKey: ['fila-distribuicao'] });
+      qc.invalidateQueries({ queryKey: ['distribution', orderId] });
     } catch (e) {
       setEstado('error');
       const ex = e as { response?: { data?: { error?: string } } };
@@ -891,6 +897,22 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
           <Selo tom="green" icone="aprovar">
             {criadas} transferência{criadas > 1 ? 's' : ''} criada{criadas > 1 ? 's' : ''}
           </Selo>
+        ) : plano.data.distributedAt ? (
+          /* JÁ REPARTIDA — o botão nem chega a aparecer.
+             O servidor recusa a segunda distribuição de qualquer jeito, mas
+             oferecer um botão que só existe para dar erro é desenhar a
+             armadilha e depois avisar que ela está lá. Antes da aba própria
+             este caso era raro (o plano vivia escondido numa linha); agora a
+             ação está na frente de quem passa. */
+          <>
+            <Selo tom="gray" icone="check" title="Esta carga já foi repartida entre as lojas.">
+              distribuída em {shortDate(plano.data.distributedAt)}
+            </Selo>
+            <span className="hint">
+              Para refazer o rateio, cancele antes as transferências pendentes desta carga em
+              Movimentações.
+            </span>
+          </>
         ) : (
           <>
             {/* A origem é PERGUNTADA: o pedido não registra onde a carga
@@ -932,6 +954,153 @@ function DistributionPanel({ orderId, supplier }: { orderId: string; supplier: s
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A FILA DA DISTRIBUIÇÃO — nova rodada · item 05.
+ *
+ * "Ainda sem a aba de distribuição para as lojas."
+ *
+ * O rateio existia desde o feedback 6.0 e funcionava. O que não existia era a
+ * PORTA: ele morava dentro de uma linha do histórico de pedidos, atrás de um
+ * botão "Como distribuir", visível só para quem já tivesse rolado até lá e só
+ * depois de confirmar o recebimento. Quem chega de manhã perguntando "o que
+ * chegou e ainda não foi repartido?" não tinha onde olhar.
+ *
+ * A fila responde essa pergunta e nada além dela, ordenada pelo que está
+ * parado há mais tempo — mercadoria na retaguarda não vende, e é o capital
+ * mais caro da rede: comprado, pago e sem chegar à vitrine.
+ *
+ * OS JÁ DISTRIBUÍDOS APARECEM NA CAUDA. Sem eles a aba esvaziaria justamente
+ * ao terminar o trabalho, e tela vazia depois de um clique é indistinguível de
+ * tela quebrada para quem a abre — a mesma razão pela qual "só os aprovados"
+ * nasceu desligado.
+ */
+function FilaDeDistribuicao() {
+  const fila = useQuery({ queryKey: ['fila-distribuicao'], queryFn: getFilaDeDistribuicao });
+  // Um plano aberto por vez: cada um abre uma tabela de 16 linhas por item.
+  // Mesmo critério do histórico de pedidos e do rateio na aba de compras.
+  const [aberto, setAberto] = useState<string | null>(null);
+
+  const pendentes = fila.data?.pendentes ?? [];
+  const feitos = fila.data?.distribuidos ?? [];
+
+  return (
+    <>
+      <AberturaDeSecao
+        eyebrow="Distribuir"
+        titulo="O que chegou e ainda não foi repartido"
+        descricao="Cada carga recebida é dividida pela falta de cada loja até a cobertura-alvo — quem vende mais tem alvo maior, e o que a loja já tem é descontado antes. As grifes restritas só entram nas lojas que as trabalham. Confirmar cria as transferências em aberto; quem despacha confirma a saída."
+        acoes={
+          pendentes.length > 0 ? (
+            <Selo
+              tom={pendentes.some((p) => (p.paradaHaDias ?? 0) >= 7) ? 'amber' : 'blue'}
+              icone="entrega"
+              title="Cargas recebidas sem rateio executado."
+            >
+              {pendentes.length} {pendentes.length === 1 ? 'carga parada' : 'cargas paradas'}
+            </Selo>
+          ) : undefined
+        }
+      />
+      <div className="card">
+        {fila.isLoading ? (
+          <Loading />
+        ) : pendentes.length === 0 ? (
+          <div className="empty">
+            Nenhuma carga esperando. Toda mercadoria recebida já foi repartida entre as lojas.
+          </div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Fornecedor</th>
+                <th className="num">Itens</th>
+                <th className="num">Un.</th>
+                <th>Recebido em</th>
+                <th>Parada há</th>
+                <th className="right">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendentes.map((c) => (
+                <Fragment key={c.orderId}>
+                  <tr>
+                    <td>{c.supplier}</td>
+                    <td className="num">{c.items}</td>
+                    <td className="num">{c.units}</td>
+                    <td>{c.receivedAt ? shortDate(c.receivedAt) : '—'}</td>
+                    <td>
+                      {/* Uma semana é o limiar do aviso, e não é arbitrário: o
+                          malote entre praças leva de 1 a 4 dias, então uma
+                          carga parada há mais de sete já perdeu um ciclo
+                          inteiro de logística dentro da retaguarda. */}
+                      {c.paradaHaDias === null ? (
+                        <span className="muted">—</span>
+                      ) : c.paradaHaDias >= 7 ? (
+                        <Selo tom="amber" icone="atencao" title="Mais de uma semana na retaguarda, sem vender.">
+                          {c.paradaHaDias} dias
+                        </Selo>
+                      ) : (
+                        <span>{c.paradaHaDias} {c.paradaHaDias === 1 ? 'dia' : 'dias'}</span>
+                      )}
+                    </td>
+                    <td className="right">
+                      <Botao
+                        variante="discreto"
+                        pequeno
+                        icone="transferencias"
+                        aria-expanded={aberto === c.orderId}
+                        onClick={() => setAberto((v) => (v === c.orderId ? null : c.orderId))}
+                      >
+                        {aberto === c.orderId ? 'Fechar' : 'Como distribuir'}
+                      </Botao>
+                    </td>
+                  </tr>
+                  {aberto === c.orderId && (
+                    <tr>
+                      <td colSpan={6} style={{ background: 'var(--panel-2)' }}>
+                        <DistributionPanel orderId={c.orderId} supplier={c.supplier} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {feitos.length > 0 && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <span className="label">Repartidas recentemente</span>
+          <table style={{ marginTop: 8 }}>
+            <thead>
+              <tr>
+                <th>Fornecedor</th>
+                <th className="num">Un.</th>
+                <th>Distribuída em</th>
+              </tr>
+            </thead>
+            <tbody>
+              {feitos.map((c) => (
+                <tr key={c.orderId}>
+                  <td>{c.supplier}</td>
+                  <td className="num">{c.units}</td>
+                  <td>{c.distributedAt ? shortDate(c.distributedAt) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="hint" style={{ marginTop: 8 }}>
+            As transferências dessas cargas saíram <strong>em aberto</strong>: elas reservam o saldo,
+            e quem despacha confirma a saída na tela de Movimentações. Uma carga só é repartida uma
+            vez — para refazer o rateio, cancele antes as transferências pendentes dela.
+          </p>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1818,8 +1987,18 @@ export function Planning() {
    *
    * Abre em "Transferir" de propósito: é a decisão que não gasta dinheiro, e o
    * título da seção sempre disse "antes de comprar".
+   *
+   * A TERCEIRA FRENTE veio na rodada seguinte — "ainda sem a aba de
+   * distribuição para as lojas". O rateio existia desde o feedback 6.0 e
+   * funcionava; o que não existia era a PORTA. Ele morava dentro de uma linha
+   * do histórico de pedidos, atrás de um botão "Como distribuir", visível só
+   * para quem já tivesse rolado até lá e só depois de confirmar o recebimento.
+   *
+   * As três frentes são o ciclo inteiro na ordem em que ele acontece:
+   * redistribuir o que já existe → comprar o que falta → repartir o que
+   * chegou. A terceira era a única sem entrada própria.
    */
-  const [frente, setFrente] = useState<'transferir' | 'comprar'>('transferir');
+  const [frente, setFrente] = useState<'transferir' | 'comprar' | 'distribuir'>('transferir');
 
   /*
    * Feedback 6.0 · item 10 — "adicionar ao planejamento de pedido apenas as
@@ -1996,9 +2175,11 @@ export function Planning() {
           seta como pontuação até funciona ("De → Para"), mas invertida ela
           obriga a ler a linha de trás para frente. Reescrita no sentido da
           leitura, sem glifo nenhum. */}
-      {/* As duas frentes, com o mesmo peso (item 05). */}
+      {/* As TRÊS frentes, com o mesmo peso — o ciclo na ordem em que acontece:
+          redistribuir o que já existe → comprar o que falta → repartir o que
+          chegou. A terceira era a única sem entrada própria. */}
       <div className="segmented" role="group" aria-label="Frente de trabalho" style={{ marginTop: 18 }}>
-        {(['transferir', 'comprar'] as const).map((f) => (
+        {(['transferir', 'comprar', 'distribuir'] as const).map((f) => (
           <button
             key={f}
             type="button"
@@ -2006,7 +2187,11 @@ export function Planning() {
             onClick={() => setFrente(f)}
             aria-pressed={frente === f}
           >
-            {f === 'transferir' ? 'Transferir entre lojas' : 'Comprar de fornecedor'}
+            {f === 'transferir'
+              ? 'Transferir entre lojas'
+              : f === 'comprar'
+                ? 'Comprar de fornecedor'
+                : 'Distribuir para as lojas'}
           </button>
         ))}
       </div>
@@ -2130,6 +2315,8 @@ export function Planning() {
       <OrderHistory />
       </>
       )}
+
+      {frente === 'distribuir' && <FilaDeDistribuicao />}
 
       {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>

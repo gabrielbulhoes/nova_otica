@@ -26,6 +26,7 @@ import { declararMixDaGrife, listarMixPorLoja } from './mixDeLoja.js';
 import {
   createDistributionMovements,
   distributionPlan,
+  filaDeDistribuicao,
   receivingUnits,
 } from './distribution.service.js';
 import {
@@ -271,6 +272,23 @@ planningRouter.get(
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     res.json(await distributionPlan(req.params.id));
+  }),
+);
+
+/**
+ * GET /api/planning/fila-de-distribuicao — o que chegou e ainda não foi
+ * repartido entre as lojas (nova rodada · item 05).
+ *
+ * O rateio já existia; o que não existia era a porta. Ele morava dentro de uma
+ * linha do histórico de pedidos, atrás de um botão, visível só para quem já
+ * tivesse rolado até lá. Quem chega de manhã perguntando "o que chegou e ainda
+ * está parado?" não tinha onde olhar.
+ */
+planningRouter.get(
+  '/fila-de-distribuicao',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    res.json(await filaDeDistribuicao());
   }),
 );
 
