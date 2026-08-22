@@ -34,8 +34,11 @@ import {
   recortePedido,
   splitByNeed,
   NEED_BASIS_LABEL,
+  classificarCandidato,
   chaveDePerfil,
   explicarLinha,
+  familiaDePeca,
+  familiasComGiro,
   margemPct,
   montarPlanoDetalhado,
   DECISION_PRIORITIES,
@@ -46,12 +49,15 @@ import {
   LINHAS_POR_PAGINA,
   TETO_DE_CARDS,
   TETO_DE_LINHAS,
+  TETO_POR_LINHA_PCT,
   type CandidatoDeCompra,
   type AbcItem,
   type BrandBannerInput,
   type FairSplitInput,
   type StoreCoverageInput,
   type ProductGroup,
+  type ProductPlan,
+  type PerfilQueVende,
   type StoreProductInput,
 } from '@planning';
 
@@ -286,6 +292,346 @@ const demoLojaTrabalhaAGrife = (grife: string | null, storeId: string) => {
 /** A grife está fora do mix? Aceita qualquer forma do nome. */
 const foraDoMixDemo = (grife: string | null) =>
   grife != null && demoForaDoMix.has(normBrandKey(grife));
+
+/*
+ * ─── A FEIRA DA DEMONSTRAÇÃO ───────────────────────────────────────────────
+ *
+ * Uma coleção que a rede nunca vendeu, que é a premissa inteira do modo: giro
+ * próprio zero, estoque zero, e a decisão saindo do PERFIL da peça contra o
+ * histórico. Sem uma feira semeada a tela abriria vazia na demo, e tela que
+ * abre vazia é lida como recurso quebrado — foi o que aconteceu três rodadas
+ * seguidas com a aba de distribuição, que existia e funcionava.
+ *
+ * A oferta fala o VOCABULÁRIO DO FORNECEDOR de propósito: "Solar" e "Armação",
+ * enquanto a rede da demo registra "Óculos de Sol". São os dois lados que o
+ * `familiaDePeca` concilia, e foi essa divergência que fez a coleção inteira
+ * cair em "aposta" antes da correção. A demo exercita a ponte em vez de
+ * escondê-la atrás de um vocabulário arrumado.
+ */
+const FEIRA_DEMO = {
+  id: 'feira-demo-1',
+  supplier: 'Distribuidora Nordeste Óptica',
+  collection: 'Coleção Verão 2027',
+  floorUnits: 1500,
+  risk: 'equilibrado' as const,
+  status: 'ABERTA',
+  arrivesAt: '2026-10-01T00:00:00.000Z',
+  targetAt: '2027-03-31T00:00:00.000Z',
+  createdAt: '2026-08-10T00:00:00.000Z',
+};
+
+/** O que já foi lançado no balcão. Em memória na demo; no banco na produção. */
+const demoCompraDaFeira = new Map<string, number>();
+
+const FORMATOS_FEIRA = ['Piloto', 'Quadrado', 'Gatinho', 'Redondo', 'Hexagonal'];
+const GENEROS_FEIRA = ['Masculino', 'Feminino', 'Unissex'];
+
+/**
+ * AS REFERÊNCIAS DE CONTINUIDADE.
+ *
+ * Nenhum fornecedor leva à feira uma coleção 100% nova: parte dela é o que
+ * continua em linha, e essa parte a rede já vende. Sem isso na demo, o balde de
+ * best-seller aparece sempre vazio — não porque o motor recusou alguma peça,
+ * mas porque não havia nenhuma para repor —, e o cliente leria como defeito o
+ * que é a natureza de uma coleção nova.
+ *
+ * São SKUs do próprio catálogo carregado, para o casamento exato por SKU rodar
+ * de verdade em vez de ficar como um caminho que só a produção executa.
+ */
+const SKUS_DE_CONTINUIDADE = (() => {
+  const vendidoPor = new Map<string, number>();
+  for (const [chave, qtd] of soldQty) {
+    const productId = chave.slice(chave.indexOf(':') + 1);
+    vendidoPor.set(productId, (vendidoPor.get(productId) ?? 0) + qtd);
+  }
+  return products
+    .filter((p) => p.sku && /ARMACAO|OCULOS/i.test(p.category ?? '') && (vendidoPor.get(p.id) ?? 0) > 0)
+    .sort((a, b) => (vendidoPor.get(b.id) ?? 0) - (vendidoPor.get(a.id) ?? 0))
+    .slice(0, 14)
+    .map((p) => p.sku as string);
+})();
+
+/** A oferta do fornecedor: determinística, para a demo não mudar a cada visita. */
+const OFERTA_FEIRA = Array.from({ length: 96 }, (_, i) => {
+  const marca = MARCAS[i % MARCAS.length];
+  const solar = i % 3 !== 2;
+  const h = hash01(`feira-${i}`);
+  const unitPrice = Math.round((solar ? 420 + h * 680 : 320 + h * 520) * 100) / 100;
+  const continuidade = i % 7 === 0 ? SKUS_DE_CONTINUIDADE[Math.floor(i / 7)] : undefined;
+  return {
+    id: `of-${String(i + 1).padStart(3, '0')}`,
+    sku: continuidade ?? `${marca.slice(0, 3).toUpperCase()}-27-${String(i + 1).padStart(3, '0')}`,
+    description: `${marca} ${solar ? 'Solar' : 'Armação'} ${FORMATOS_FEIRA[i % FORMATOS_FEIRA.length]} ${CORES[i % CORES.length]}`,
+    brand: marca,
+    tipo: solar ? 'Solar' : 'Armação',
+    genero: GENEROS_FEIRA[i % GENEROS_FEIRA.length],
+    formato: FORMATOS_FEIRA[i % FORMATOS_FEIRA.length],
+    cor: CORES[i % CORES.length],
+    unitPrice,
+    // O custo que o fornecedor tabela na feira — a margem é o par que o
+    // comprador lê junto com a quantidade.
+    unitCost: Math.round(unitPrice * (0.42 + hash01(`custo-${i}`) * 0.16) * 100) / 100,
+  };
+});
+
+const resumoDaFeiraDemo = () => ({
+  ...FEIRA_DEMO,
+  ofertas: OFERTA_FEIRA.length,
+});
+
+/** A janela entre a chegada e o alvo, para o rateio. Igual à da produção. */
+const JANELA_DA_FEIRA_DIAS = 180;
+
+/**
+ * O plano da feira na demo, pela MESMA matemática da produção.
+ *
+ * O que muda em relação ao contínuo é só a origem da evidência: as peças da
+ * oferta não existem na rede, então o giro próprio é zero e quem classifica é
+ * o perfil (tipo + gênero) medido no histórico. O rateio por loja também não
+ * pode sair da falta DELAS — sai da participação de cada loja nas vendas da
+ * GRIFE.
+ */
+function planoDaFeiraDemo(ps: ProductPlan[]) {
+  // O PERFIL da rede, com AS DUAS CHAVES — com gênero e sem. O histórico da
+  // demo não tem ficha de fornecedor, então só a chave sem gênero recebe peso;
+  // gravar apenas a completa faria os dois lados nunca casarem.
+  const porTipoGenero = new Map<string, number>();
+  const porFormato = new Map<string, number>();
+  for (const p of ps) {
+    if (p.unitsSold <= 0) continue;
+    const k = chaveDePerfil(p.category, null);
+    porTipoGenero.set(k, (porTipoGenero.get(k) ?? 0) + p.unitsSold);
+  }
+  const perfil = { porTipoGenero, porFormato, porCor: new Map<string, number>() };
+
+  const meses = Math.max(
+    1,
+    Math.round(
+      (new Date(FEIRA_DEMO.targetAt).getTime() - new Date(FEIRA_DEMO.arrivesAt).getTime()) /
+        (30 * 86_400_000),
+    ),
+  );
+  const estrategia = buildCommercialStrategy(ps, {
+    floorUnits: FEIRA_DEMO.floorUnits,
+    windowMonths: meses,
+    risk: FEIRA_DEMO.risk,
+  });
+
+  /*
+   * A REPOSIÇÃO DENTRO DA FEIRA, como na produção: o fornecedor leva à feira as
+   * referências que continuam em linha, e essas a rede JÁ VENDE. O casamento é
+   * EXATO por SKU — aproximar por descrição inventaria best-seller, que é o
+   * erro caro desta tela.
+   */
+  const conhecidaPorSku = new Map<string, ProductPlan>();
+  for (const p of ps) {
+    const prod = products.find((x) => x.id === p.productId);
+    for (const chave of [prod?.sku, prod?.externalId]) {
+      if (chave) conhecidaPorSku.set(chave.trim().toUpperCase(), p);
+    }
+  }
+
+  const candidatos: CandidatoDeCompra[] = OFERTA_FEIRA.map((o) => {
+    const conhecida = conhecidaPorSku.get(o.sku.trim().toUpperCase());
+    return {
+      id: o.id,
+      sku: o.sku,
+      description: o.description,
+      brand: o.brand,
+      tipo: o.tipo,
+      genero: o.genero,
+      formato: o.formato,
+      cor: o.cor,
+      unitCost: o.unitCost,
+      unitPrice: o.unitPrice,
+      // A peça que a rede já vende entra com o giro DELA; a novidade entra
+      // zerada, e é isso que joga a decisão para o perfil.
+      unitsSold: conhecida?.unitsSold ?? 0,
+      currentStock: conhecida?.currentStock ?? 0,
+      coberturaDaGrifeMeses:
+        conhecida?.coverageDays == null ? null : Math.round((conhecida.coverageDays / 30) * 10) / 10,
+      absorcao: conhecida ? Math.max(0, Math.round(conhecida.targetStock - conhecida.currentStock)) : null,
+    };
+  });
+  const jaVendidas = candidatos.filter((c) => c.unitsSold > 0).length;
+  const comEspaco = candidatos.filter((c) => c.unitsSold > 0 && (c.absorcao ?? 0) > 0).length;
+
+  const metas = Object.fromEntries(estrategia.segments.map((s) => [s.key, s.units])) as Record<
+    'best-seller' | 'lancamento' | 'aposta',
+    number
+  >;
+  const margemMedia =
+    Math.round(
+      (candidatos.reduce((a, c) => a + margemPct(c.unitPrice, c.unitCost), 0) / candidatos.length) * 10,
+    ) / 10;
+
+  const plano = montarPlanoDetalhado(candidatos, metas, perfil, (c, seg, units) =>
+    explicarLinha(c, seg, units, { margemMedia }),
+  );
+
+  /*
+   * A DIVISÃO POR LOJA pela força de cada loja NA GRIFE.
+   *
+   * A peça não existe na rede, então `unitsSold`/`stockUnits` de cada loja saem
+   * do agregado da grife inteira — é o mesmo caminho de `posicoesPorGrife` na
+   * produção. E passa pelo porteiro de mix, como todo o resto.
+   */
+  const porGrife = new Map<string, { storeId: string; storeName: string; unitsSold: number; stockUnits: number }[]>();
+  for (const marca of new Set(OFERTA_FEIRA.map((o) => o.brand))) {
+    const daGrife = ps.filter((p) => normBrandKey(analysisBrand(p.description, p.category, p.brand) ?? '') === normBrandKey(marca));
+    porGrife.set(
+      normBrandKey(marca),
+      stores.map((st) => ({
+        storeId: st.id,
+        storeName: st.name,
+        unitsSold: daGrife.reduce((a, p) => a + (soldQty.get(key(st.id, p.productId)) ?? 0), 0),
+        stockUnits: daGrife.reduce((a, p) => a + (stockQty.get(key(st.id, p.productId)) ?? 0), 0),
+      })),
+    );
+  }
+
+  const porLoja = new Map<string, { storeId: string; storeName: string; units: number }>();
+  const comDestino = new Map<string, unknown>();
+  let compradoNoPlano = 0;
+  for (const seg of plano.segmentos) {
+    for (const l of seg.linhas) {
+      const candidatas = porGrife.get(normBrandKey(l.candidato.brand)) ?? [];
+      const elegiveis = candidatas.filter((x) => demoLojaTrabalhaAGrife(l.candidato.brand, x.storeId));
+      const excluidas = candidatas.filter((x) => !demoLojaTrabalhaAGrife(l.candidato.brand, x.storeId));
+      const rateio = splitByNeed(elegiveis, l.units, JANELA_DA_FEIRA_DIAS);
+      const linhas = rateio.rows.filter((rr) => rr.suggestedQty > 0);
+      for (const rr of linhas) {
+        const atual = porLoja.get(rr.storeId) ?? { storeId: rr.storeId, storeName: rr.storeName, units: 0 };
+        atual.units += rr.suggestedQty;
+        porLoja.set(rr.storeId, atual);
+      }
+      const comprado = demoCompraDaFeira.get(l.candidato.id) ?? 0;
+      compradoNoPlano += comprado;
+      comDestino.set(`${seg.segmento}:${l.candidato.id}`, {
+        ...l,
+        lojas: linhas,
+        semLoja: l.units - linhas.reduce((a, rr) => a + rr.suggestedQty, 0),
+        comprado,
+        ...(excluidas.length > 0 ? { excludedByMix: excluidas.map((e) => e.storeName) } : {}),
+      });
+    }
+  }
+
+  let comprado = 0;
+  for (const v of demoCompraDaFeira.values()) comprado += v;
+
+  // O lastro do perfil, para a explicação de quem não achou comparação.
+  const pecasComGiro = ps.filter((p) => p.unitsSold > 0).length;
+
+  return {
+    feira: { ...resumoDaFeiraDemo(), comprado, compradoNoPlano },
+    ...estrategia,
+    detalhe: {
+      ...plano,
+      segmentos: plano.segmentos.map((s) => ({
+        ...s,
+        linhas: s.linhas.map((l) => comDestino.get(`${s.segmento}:${l.candidato.id}`) ?? l),
+      })),
+      porLoja: [...porLoja.values()].sort((a, b) => b.units - a.units),
+      days: JANELA_DA_FEIRA_DIAS,
+      candidatosExaminados: candidatos.length,
+      universo: candidatos.length,
+      truncado: false,
+      motivo: [
+        // O MESMO alarme da produção: quando o tipo da oferta não casa com o
+        // vocabulário do cadastro, o plano diz — em vez de deixar a coleção
+        // inteira cair em aposta parecendo avaliação.
+        avisoDeVocabularioDemo(candidatos, perfil),
+        // Cada fatia que não fecha explica a SUA razão — numa feira duas delas
+        // ficam vazias por natureza, não por cálculo. Ver `motivoDoPlano`.
+        motivoDoPlanoDemo(plano, candidatos, perfil, { pecasComGiro, jaVendidas, comEspaco }),
+      ]
+        .filter(Boolean)
+        .join(' '),
+      jaVendidas,
+    },
+  };
+}
+
+/** Espelho de `motivoDoPlano` da API — ver o comentário de lá. */
+function motivoDoPlanoDemo(
+  plano: { segmentos: { segmento: string; meta: number; alocado: number }[]; naoAlocado: number },
+  candidatos: CandidatoDeCompra[],
+  perfil: PerfilQueVende,
+  ctx: { pecasComGiro: number; jaVendidas: number; comEspaco: number },
+): string {
+  if (plano.naoAlocado <= 0) return '';
+  const rotulo: Record<string, string> = {
+    'best-seller': 'best-seller',
+    lancamento: 'lançamento',
+    aposta: 'aposta',
+  };
+  const candidatosPor = new Map<string, number>();
+  for (const c of candidatos) {
+    const s = classificarCandidato(c, perfil);
+    candidatosPor.set(s, (candidatosPor.get(s) ?? 0) + 1);
+  }
+  const partes: string[] = [];
+  for (const seg of plano.segmentos) {
+    const falta = seg.meta - seg.alocado;
+    if (falta <= 0) continue;
+    const quantas = candidatosPor.get(seg.segmento) ?? 0;
+    let razao: string;
+    if (quantas === 0 && seg.segmento === 'best-seller') {
+      razao =
+        'nenhuma peça desta oferta tem giro na rede — é coleção nova, e não há o que repor. Se o ' +
+        'fornecedor traz referências que você já vende, elas entram por aqui assim que o SKU da planilha ' +
+        'for o mesmo do cadastro';
+    } else if (quantas === 0 && seg.segmento === 'aposta') {
+      razao = 'toda peça da oferta encontrou lastro no histórico da rede — não sobrou especulação a fazer';
+    } else if (quantas === 0) {
+      razao = `nenhuma peça da oferta tem perfil que já rode na rede (o lastro vem de ${ctx.pecasComGiro} peças com giro)`;
+    } else if (seg.segmento === 'best-seller' && ctx.comEspaco === 0) {
+      razao =
+        `${ctx.jaVendidas === 1 ? 'a única peça' : `as ${ctx.jaVendidas} peças`} desta oferta que a rede já ` +
+        `vende ${ctx.jaVendidas === 1 ? 'está' : 'estão'} com estoque acima do alvo de cobertura — comprar ` +
+        'mais na feira aumentaria o excesso em vez de repor';
+    } else {
+      razao =
+        `as ${quantas} ${quantas === 1 ? 'peça elegível chegou' : 'peças elegíveis chegaram'} ao teto de ` +
+        `${TETO_POR_LINHA_PCT}% por linha — o resto concentraria a compra em poucos modelos`;
+    }
+    partes.push(`${falta} un. de ${rotulo[seg.segmento] ?? seg.segmento}: ${razao}`);
+  }
+  if (partes.length === 0) return '';
+  return (
+    `${plano.naoAlocado} un. do piso ficaram sem destino. ${partes.join('; ')}. ` +
+    'Um perfil de risco diferente redistribui essas fatias entre os três cenários.'
+  );
+}
+
+/** Espelho de `avisoDeVocabulario` da API — ver o comentário de lá. */
+function avisoDeVocabularioDemo(
+  candidatos: CandidatoDeCompra[],
+  perfil: { porTipoGenero: ReadonlyMap<string, number> },
+): string {
+  const comGiro = familiasComGiro({
+    porTipoGenero: perfil.porTipoGenero,
+    porFormato: new Map(),
+    porCor: new Map(),
+  });
+  if (comGiro.size === 0) return '';
+  const pecasPorFamilia = new Map<string, number>();
+  for (const c of candidatos) {
+    const f = familiaDePeca(c.tipo);
+    if (f) pecasPorFamilia.set(f, (pecasPorFamilia.get(f) ?? 0) + 1);
+  }
+  const orfas = [...pecasPorFamilia.entries()].filter(([f]) => !comGiro.has(f));
+  if (orfas.length === 0) return '';
+  const pecas = orfas.reduce((a, [, n]) => a + n, 0);
+  const nomes = orfas.map(([f]) => `“${f}”`).join(', ');
+  return (
+    `${pecas} ${pecas === 1 ? 'peça da oferta pertence a uma família' : 'peças da oferta pertencem a famílias'} ` +
+    `sem histórico na rede (${nomes}) — ${pecas === 1 ? 'ela cai' : 'elas caem'} em aposta por falta de lastro, ` +
+    'não por avaliação. Se essas peças deveriam ter comparação, o tipo da planilha está escrito de um jeito ' +
+    'que o cadastro da rede não usa; me diga o termo exato e a ponte passa a reconhecê-lo.'
+  );
+}
 
 // Histórico de pedidos de compra (enviado/recebido) da demo
 interface DemoOrderRecord {
@@ -2332,6 +2678,19 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
             : '',
       },
     };
+  }
+  // ─── Feira de compra: uma coleção que a rede nunca vendeu ─────────────────
+  if (url === '/planning/feiras' && m === 'GET') {
+    return { rows: [resumoDaFeiraDemo()] };
+  }
+  if (url.startsWith('/planning/feiras/ofertas/') && m === 'PUT') {
+    const offerId = decodeURIComponent(url.slice('/planning/feiras/ofertas/'.length));
+    const bought = Math.max(0, Math.trunc(Number(body.bought) || 0));
+    demoCompraDaFeira.set(offerId, bought);
+    return { id: offerId, sku: offerId, bought, fairId: FEIRA_DEMO.id };
+  }
+  if (url.startsWith('/planning/feiras/') && m === 'GET') {
+    return planoDaFeiraDemo(planningPlans(JANELA_DA_FEIRA_DIAS, undefined, 'principal'));
   }
   if (url === '/planning/rebalance') {
     return rebalanceRows();

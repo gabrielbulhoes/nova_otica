@@ -20,6 +20,7 @@ import { Reports } from './pages/Reports';
 import { Planning } from './pages/Planning';
 import { Decisions } from './pages/Decisions';
 import { Strategy } from './pages/Strategy';
+import { Feira } from './pages/Feira';
 import { History } from './pages/History';
 import { Alerts } from './pages/Alerts';
 import { Loja } from './pages/Loja';
@@ -73,6 +74,7 @@ export function App() {
         <Route path="relatorios" element={<Reports />} />
         <Route path="decisoes" element={<Decisions />} />
         <Route path="estrategia" element={<Strategy />} />
+        <Route path="feira" element={<Feira />} />
         <Route path="historico" element={<History />} />
         <Route path="planejamento" element={<Planning />} />
         <Route path="vendas" element={<Sales />} />

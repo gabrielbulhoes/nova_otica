@@ -269,6 +269,66 @@ export function Strategy() {
 
 type Agrupado = { chave: string; units: number; linhas: LinhaDoPlano[]; filhos?: Agrupado[] };
 
+/**
+ * O BALCÃO — só o modo feira usa.
+ *
+ * O plano é igual nos dois modos; o que a feira acrescenta é lançar, ali de
+ * pé, o que se decidiu levar. Entra como um controle opcional em vez de uma
+ * segunda árvore copiada: duas hierarquias com a mesma regra divergem, e esta
+ * base já pagou esse preço três vezes com vocabulário duplicado.
+ */
+export interface ControleDeCompra {
+  /** O que mostrar no contador — com o lançamento otimista por cima. */
+  valorDe: (offerId: string) => number;
+  lancar: (offerId: string, unidades: number) => void;
+  salvando: ReadonlySet<string>;
+  falhou: ReadonlySet<string>;
+}
+
+/** O contador de balcão de uma linha: menos, quanto, mais. */
+function ContadorDeCompra({ offerId, controle }: { offerId: string; controle: ControleDeCompra }) {
+  const valor = controle.valorDe(offerId);
+  const salvando = controle.salvando.has(offerId);
+  const falhou = controle.falhou.has(offerId);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+      <Botao
+        variante="discreto"
+        pequeno
+        onClick={() => controle.lancar(offerId, Math.max(0, valor - 1))}
+        disabled={valor === 0}
+        aria-label="Levar uma a menos"
+      >
+        −
+      </Botao>
+      <input
+        type="number"
+        min={0}
+        value={valor}
+        onChange={(e) => controle.lancar(offerId, Math.max(0, Math.trunc(Number(e.target.value) || 0)))}
+        aria-label="Unidades levadas"
+        style={{
+          width: 62,
+          textAlign: 'right',
+          // O estado de falha não pode viver só na cor: vem com o título e com
+          // o aviso escrito abaixo da tabela.
+          borderColor: falhou ? 'var(--amber)' : undefined,
+          opacity: salvando ? 0.6 : 1,
+        }}
+        title={falhou ? 'Não foi possível gravar este lançamento.' : undefined}
+      />
+      <Botao
+        variante="discreto"
+        pequeno
+        onClick={() => controle.lancar(offerId, valor + 1)}
+        aria-label="Levar uma a mais"
+      >
+        +
+      </Botao>
+    </span>
+  );
+}
+
 /** Agrupa linhas por uma chave, somando unidades e ordenando por volume. */
 function agrupar(linhas: LinhaDoPlano[], chave: (l: LinhaDoPlano) => string): Agrupado[] {
   const m = new Map<string, LinhaDoPlano[]>();
@@ -282,9 +342,10 @@ function agrupar(linhas: LinhaDoPlano[], chave: (l: LinhaDoPlano) => string): Ag
 }
 
 /** Uma peça do plano, com o porquê que abre ao clicar. */
-function LinhaDeSku({ linha }: { linha: LinhaDoPlano }) {
+function LinhaDeSku({ linha, compra }: { linha: LinhaDoPlano; compra?: ControleDeCompra }) {
   const [aberto, setAberto] = useState(false);
   const c = linha.candidato;
+  const colunas = compra ? 5 : 4;
   return (
     <>
       <tr>
@@ -303,6 +364,13 @@ function LinhaDeSku({ linha }: { linha: LinhaDoPlano }) {
           <strong>{linha.units}</strong>
           <Unidade>un.</Unidade>
         </td>
+        {/* NA FEIRA o contador fica colado na sugestão, porque a comparação que
+            o comprador faz de pé é essa: sugeri 16, estou levando 20. */}
+        {compra && (
+          <td className="num">
+            <ContadorDeCompra offerId={c.id} controle={compra} />
+          </td>
+        )}
         {/* A margem fica ao lado da quantidade porque é o par que o comprador
             lê junto — quanto levar e quanto sobra. */}
         <td className="num">{linha.margemPct.toLocaleString('pt-BR')}%</td>
@@ -318,7 +386,7 @@ function LinhaDeSku({ linha }: { linha: LinhaDoPlano }) {
       </tr>
       {aberto && (
         <tr>
-          <td colSpan={4} style={{ background: 'var(--panel-2)' }}>
+          <td colSpan={colunas} style={{ background: 'var(--panel-2)' }}>
             {/* O PORQUÊ. É a diferença entre um número e uma decisão — e é
                 onde o concorrente entrega log de máquina ao comprador. */}
             <p style={{ margin: '4px 0 10px', lineHeight: 1.55 }}>{linha.porque}</p>
@@ -405,7 +473,7 @@ function Nivel({
 }
 
 /** O plano de um segmento, na hierarquia Marca → Tipo → Gênero → SKU. */
-function SegmentoDoPlano({ linhas }: { linhas: LinhaDoPlano[] }) {
+function SegmentoDoPlano({ linhas, compra }: { linhas: LinhaDoPlano[]; compra?: ControleDeCompra }) {
   if (linhas.length === 0) {
     return (
       <div className="empty">
@@ -430,14 +498,15 @@ function SegmentoDoPlano({ linhas }: { linhas: LinhaDoPlano[] }) {
                     <thead>
                       <tr>
                         <th>Peça</th>
-                        <th className="num">Comprar</th>
+                        <th className="num">{compra ? 'Sugerido' : 'Comprar'}</th>
+                        {compra && <th className="num">Levando</th>}
                         <th className="num">Margem</th>
                         <th>Destino</th>
                       </tr>
                     </thead>
                     <tbody>
                       {gen.linhas.map((l) => (
-                        <LinhaDeSku key={`${l.segmento}-${l.candidato.id}`} linha={l} />
+                        <LinhaDeSku key={`${l.segmento}-${l.candidato.id}`} linha={l} compra={compra} />
                       ))}
                     </tbody>
                   </table>
@@ -455,7 +524,20 @@ function SegmentoDoPlano({ linhas }: { linhas: LinhaDoPlano[] }) {
  * O bloco inteiro do plano: as três abas, a visão por loja e o motivo do que
  * não coube.
  */
-export function PlanoDeCompra({ plano, segments }: { plano: PlanoDetalhado; segments: StrategySegment[] }) {
+export function PlanoDeCompra({
+  plano,
+  segments,
+  compra,
+  titulo = 'O que comprar, e para onde vai',
+  descricao = 'A divisão do piso em peças concretas, na ordem em que a compra se pensa: grife, tipo, gênero e modelo. Clique em qualquer linha para ver por que ela entrou e quanto vai para cada loja.',
+}: {
+  plano: PlanoDetalhado;
+  segments: StrategySegment[];
+  /** Só na feira: o contador de balcão em cada linha. */
+  compra?: ControleDeCompra;
+  titulo?: string;
+  descricao?: string;
+}) {
   const [aba, setAba] = useState<StrategySegment['key'] | 'lojas'>('best-seller');
   const rotulo = new Map(segments.map((s) => [s.key, s.label]));
   const doSegmento = (k: StrategySegment['key']) =>
@@ -465,8 +547,8 @@ export function PlanoDeCompra({ plano, segments }: { plano: PlanoDetalhado; segm
     <>
       <AberturaDeSecao
         eyebrow="Plano de compra"
-        titulo="O que comprar, e para onde vai"
-        descricao="A divisão do piso em peças concretas, na ordem em que a compra se pensa: grife, tipo, gênero e modelo. Clique em qualquer linha para ver por que ela entrou e quanto vai para cada loja."
+        titulo={titulo}
+        descricao={descricao}
         acoes={
           <Selo tom="gray" icone="ideia" title="Peças analisadas para montar este plano.">
             {fmt(plano.candidatosExaminados)} de {fmt(plano.universo)} peças
@@ -542,7 +624,7 @@ export function PlanoDeCompra({ plano, segments }: { plano: PlanoDetalhado; segm
               {fmt(doSegmento(aba)?.alocado ?? 0)} un.
             </span>
           </div>
-          <SegmentoDoPlano linhas={doSegmento(aba)?.linhas ?? []} />
+          <SegmentoDoPlano linhas={doSegmento(aba)?.linhas ?? []} compra={compra} />
         </>
       )}
     </>

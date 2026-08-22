@@ -1002,6 +1002,11 @@ export interface LinhaDoPlano {
   semLoja?: number;
   /** Lojas fora da divisão por não trabalharem a grife. */
   excludedByMix?: string[];
+  /**
+   * Só no modo feira: o que já foi lançado no balcão para esta peça. Fica no
+   * banco, não no navegador.
+   */
+  comprado?: number;
 }
 
 export interface PlanoDetalhado {
@@ -1053,6 +1058,49 @@ export const getCommercialStrategy = (params: PlanParams) =>
   api.get<CommercialStrategy>('/planning/strategy', { params }).then((r) => r.data);
 export const getPurchaseOrders = (params: PlanParams) =>
   api.get<PurchaseOrdersPlan>('/planning/purchase-orders', { params }).then((r) => r.data);
+
+// ─── Feira: o plano de compra de uma coleção nova ────────────────────────────
+
+/** Uma feira na lista de eventos. */
+export interface FeiraResumo {
+  id: string;
+  supplier: string;
+  collection: string;
+  floorUnits: number;
+  risk: RiskProfile;
+  status: string;
+  arrivesAt: string | null;
+  targetAt: string | null;
+  ofertas: number;
+  createdAt: string;
+}
+
+/**
+ * O plano de uma feira. É a MESMA estratégia do modo contínuo — a matemática
+ * não muda por a coleção ser nova —, mais o cabeçalho do evento e o registro
+ * do que já foi comprado.
+ */
+export interface PlanoDaFeira extends CommercialStrategy {
+  feira: FeiraResumo & {
+    /** Tudo que foi lançado no balcão, dentro ou fora do plano. */
+    comprado: number;
+    /** A parte que saiu de linha sugerida pelo plano. */
+    compradoNoPlano: number;
+  };
+}
+
+export const listarFeiras = () =>
+  api.get<{ rows: FeiraResumo[] }>('/planning/feiras').then((r) => r.data.rows);
+export const getPlanoDaFeira = (id: string, signal?: AbortSignal) =>
+  api.get<PlanoDaFeira>(`/planning/feiras/${id}`, { signal }).then((r) => r.data);
+/** Lança a compra de uma linha. Vai para o banco na hora. */
+export const registrarCompraDeFeira = (offerId: string, bought: number) =>
+  api
+    .put<{ id: string; sku: string; bought: number; fairId: string }>(
+      `/planning/feiras/ofertas/${offerId}`,
+      { bought },
+    )
+    .then((r) => r.data);
 
 export type PurchaseOrderRecordStatus = 'SENT' | 'RECEIVED' | 'CANCELLED';
 

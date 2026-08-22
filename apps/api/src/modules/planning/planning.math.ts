@@ -3845,16 +3845,55 @@ export interface PerfilQueVende {
 export function familiaDePeca(tipo: string | null | undefined): string {
   const t = normCategory(tipo ?? '');
   if (!t) return '';
+  // O ACESSÓRIO vem primeiro por causa de "PORTA OCULOS": ele contém "oculos"
+  // e cairia na regra de eliminação lá embaixo, virando um óculos de sol.
+  if (/porta.?oculos|acess|estojo|\bcase\b|cordao|flanela|lenco/.test(t)) return 'acessorio';
   if (/\bsol\b|solar|\bsun\b/.test(t)) return 'solar';
   if (/armac|\bgrau\b|\brx\b|optic|acetato/.test(t)) return 'armacao';
   if (/relog|watch/.test(t)) return 'relogio';
   if (/lente|lens/.test(t)) return 'lente';
-  if (/acess|estojo|case|cordao/.test(t)) return 'acessorio';
+  /*
+   * "OCULOS", sozinho, É SOLAR — por eliminação, e medido no catálogo da rede.
+   *
+   * O cadastro da A GRACIOSA não usa "óculos de sol": ele tem OCULOS (196
+   * peças) e ARMACAO (244) como categorias irmãs, e o conteúdo decide qual é
+   * qual — em OCULOS estão RB3548NL, RB4473D, RB4441D (as faixas 3xxx/4xxx da
+   * Ray-Ban são solares), enquanto ARMACAO guarda RY1603L e MU05VV, que são de
+   * grau. Havendo um balde próprio para armação, o balde "óculos" só pode ser
+   * o solar.
+   *
+   * Sem esta linha, toda peça solar de uma oferta de fornecedor procura
+   * "solar|" num histórico arquivado em "oculos|", não encontra lastro nenhum e
+   * cai em aposta — o mesmo defeito que a ponte acima existe para corrigir,
+   * sobrevivendo numa quarta grafia. Vem DEPOIS de armação e de grau de
+   * propósito: "oculos de grau" já saiu classificado três linhas acima.
+   */
+  if (/\boculos\b/.test(t)) return 'solar';
   return t;
 }
 
 export const chaveDePerfil = (tipo: string | null, genero: string | null): string =>
   `${familiaDePeca(tipo)}|${normCategory(genero ?? '')}`;
+
+/**
+ * As famílias que TÊM giro no histórico da rede.
+ *
+ * Existe para que a ponte acima falhe ALTO em vez de baixo. Cada grafia nova
+ * que ela não reconhece produz o mesmo sintoma silencioso — a peça não acha
+ * lastro, vira aposta, e o plano informa que a compra é especulação sem dizer
+ * que na verdade não conseguiu ler o tipo. Já aconteceu quatro vezes nesta
+ * base, e a quinta grafia não vai ser prevista por regex nenhuma: o que
+ * generaliza é comparar as famílias da oferta com estas e DIZER quando não se
+ * encontram.
+ */
+export function familiasComGiro(perfil: PerfilQueVende): Set<string> {
+  const s = new Set<string>();
+  for (const [chave, unidades] of perfil.porTipoGenero) {
+    if (unidades > 0) s.add(chave.split('|')[0] ?? '');
+  }
+  s.delete('');
+  return s;
+}
 
 /**
  * A EVIDÊNCIA DO PERFIL, degradando: tipo+gênero primeiro, tipo sozinho depois.

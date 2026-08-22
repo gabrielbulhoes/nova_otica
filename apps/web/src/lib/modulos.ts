@@ -100,6 +100,9 @@ export const MODULOS: Modulo[] = [
     paginas: [
       { to: '/admin/planejamento', label: 'Planejamento & Compras' },
       { to: '/admin/estrategia', label: 'Estratégia comercial' },
+      // Os dois modos da compra vivem lado a lado: o CONTÍNUO repõe o que a
+      // rede já vende, a FEIRA planeja uma coleção que ninguém vendeu ainda.
+      { to: '/admin/feira', label: 'Feira de compra' },
     ],
   },
   {

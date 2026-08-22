@@ -5,6 +5,7 @@ import {
   classificarCandidato,
   evidenciaDoPerfil,
   familiaDePeca,
+  familiasComGiro,
   explicarLinha,
   margemPct,
   montarPlanoDetalhado,
@@ -223,6 +224,26 @@ describe('familiaDePeca · dois vocabulários, uma chave', () => {
     expect(familiaDePeca('RELOGIOS')).toBe('relogio');
   });
 
+  it('"OCULOS" sozinho é solar — o cadastro desta rede não escreve "de sol"', () => {
+    /*
+     * A QUARTA grafia do mesmo defeito, medida no catálogo da A GRACIOSA: ele
+     * não usa "óculos de sol". Tem OCULOS (196 peças) e ARMACAO (244) como
+     * categorias irmãs, e o conteúdo decide qual é qual — RB3548NL, RB4473D e
+     * RB4441D estão em OCULOS (faixas 3xxx/4xxx da Ray-Ban são solares),
+     * enquanto RY1603L e MU05VV, de grau, estão em ARMACAO.
+     *
+     * Sem esta regra, toda peça solar de uma oferta procura "solar|" num
+     * histórico arquivado em "oculos|" e cai em aposta por não encontrar nada.
+     */
+    expect(familiaDePeca('OCULOS')).toBe('solar');
+    expect(familiaDePeca('OCULOS')).toBe(familiaDePeca('SOLAR'));
+    // Mas "de grau" continua sendo armação, e o porta-óculos continua acessório
+    // — a eliminação não pode atropelar o que já estava classificado.
+    expect(familiaDePeca('OCULOS DE GRAU')).toBe('armacao');
+    expect(familiaDePeca('PORTA OCULOS')).toBe('acessorio');
+    expect(familiaDePeca('LENCOS')).toBe('acessorio');
+  });
+
   it('vocabulário desconhecido cai em si mesmo, sem inventar', () => {
     // Duas planilhas que usem o mesmo termo estranho continuam casando entre
     // si; nenhuma delas é forçada para dentro de uma família que não é a sua.
@@ -269,5 +290,43 @@ describe('familiaDePeca · dois vocabulários, uma chave', () => {
     };
     const nova = peca({ unitsSold: 0, tipo: 'SOLAR', genero: 'Masculino' });
     expect(classificarCandidato(nova, perfil)).toBe('lancamento');
+  });
+});
+
+describe('familiasComGiro · a ponte falha alto, não baixo', () => {
+  /*
+   * Quatro grafias já derrubaram este módulo em silêncio. A quinta não vai ser
+   * prevista por regex nenhuma — o que generaliza é comparar as famílias dos
+   * dois lados e DECLARAR quando não se encontram, para o plano nunca informar
+   * "é tudo aposta" quando na verdade não conseguiu ler o tipo.
+   */
+  it('lista as famílias que têm giro, ignorando as zeradas', () => {
+    const perfil: PerfilQueVende = {
+      porTipoGenero: new Map([
+        [chaveDePerfil('OCULOS', null), 300],
+        [chaveDePerfil('OCULOS', 'Masculino'), 120],
+        [chaveDePerfil('ARMACAO', null), 200],
+        // Zerada não conta: uma família presente no cadastro mas sem venda
+        // nenhuma não é lastro para peça alguma.
+        [chaveDePerfil('RELOGIO', null), 0],
+      ]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    const f = familiasComGiro(perfil);
+    expect([...f].sort()).toEqual(['armacao', 'solar']);
+    expect(f.has('relogio')).toBe(false);
+  });
+
+  it('perfil vazio não afirma que nada tem lastro', () => {
+    // A diferença entre "não há histórico" e "esta família não tem histórico" é
+    // exatamente o que o alarme precisa distinguir: com o perfil vazio não há o
+    // que comparar, e acusar vocabulário seria acusar errado.
+    const vazio: PerfilQueVende = {
+      porTipoGenero: new Map(),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    expect(familiasComGiro(vazio).size).toBe(0);
   });
 });

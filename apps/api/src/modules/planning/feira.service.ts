@@ -1,14 +1,19 @@
 import { prisma } from '../../lib/prisma.js';
 import { badRequest, notFound, toNumber } from '../../http/helpers.js';
 import {
+  TETO_POR_LINHA_PCT,
   buildCommercialStrategy,
   chaveDePerfil,
+  classificarCandidato,
   explicarLinha,
+  familiaDePeca,
+  familiasComGiro,
   margemPct,
   montarPlanoDetalhado,
   normBrandKey,
   splitByNeed,
   type CandidatoDeCompra,
+  type PerfilQueVende,
   type SegmentoDoPlano,
 } from './planning.math.js';
 import { porteiroDeMix } from './mixDeLoja.js';
@@ -85,28 +90,65 @@ export async function planoDaFeira(fairId: string) {
   if (!feira) throw notFound('Feira não encontrada');
 
   const { perfil, rankFormato, pecasComGiro } = await perfilDaRede();
+  const productPlans = await plans(365, undefined, 'principal');
 
-  const candidatos: CandidatoDeCompra[] = feira.offers.map((o) => ({
-    id: o.id,
-    sku: o.sku,
-    description: o.description,
-    brand: o.brand,
-    tipo: o.tipo,
-    genero: o.genero,
-    formato: o.formato,
-    cor: o.cor,
-    unitCost: toNumber(o.unitCost) ?? 0,
-    unitPrice: toNumber(o.unitPrice) ?? 0,
-    // COLEÇÃO NOVA: a rede nunca vendeu estas peças, então não há giro próprio
-    // nem estoque. É o que joga a decisão para o perfil.
-    unitsSold: 0,
-    currentStock: 0,
-    coberturaDaGrifeMeses: null,
-    // Sem absorção medida: não há histórico DESTA peça para dizer quanto ela
-    // escoa. Quem governa aqui é o teto de concentração do segmento — e
-    // inventar uma absorção seria transformar ausência de dado em permissão.
-    absorcao: null,
-  }));
+  /*
+   * A REPOSIÇÃO DENTRO DA FEIRA.
+   *
+   * Nem toda peça de uma coleção é nova: o fornecedor leva à feira as
+   * referências que continuam em linha, e essas a rede JÁ VENDE. Tratar a
+   * oferta inteira como novidade jogava fora o dado mais forte que existe —
+   * giro medido da própria peça — e deixava o balde de best-seller vazio por
+   * construção, ou seja, 45% do piso estruturalmente sem alocar em toda feira.
+   *
+   * O casamento é EXATO, por SKU ou código do ERP. Aproximar por descrição
+   * inventaria best-seller: uma peça marcada como "já vende" sem vender é o
+   * erro caro desta tela, porque manda comprar em cima de um giro que não
+   * existe.
+   */
+  const refs = feira.offers.flatMap((o) => [o.sku, o.sku.toUpperCase(), o.sku.trim()]);
+  const doCatalogo = await prisma.product.findMany({
+    where: { OR: [{ sku: { in: refs } }, { externalId: { in: refs } }] },
+    select: { id: true, sku: true, externalId: true },
+  });
+  const planoPor = new Map(productPlans.map((p) => [p.productId, p]));
+  const conhecidaPorSku = new Map<string, (typeof productPlans)[number]>();
+  for (const p of doCatalogo) {
+    const plano = planoPor.get(p.id);
+    if (!plano) continue;
+    for (const chave of [p.sku, p.externalId]) {
+      if (chave) conhecidaPorSku.set(chave.trim().toUpperCase(), plano);
+    }
+  }
+
+  const candidatos: CandidatoDeCompra[] = feira.offers.map((o) => {
+    const conhecida = conhecidaPorSku.get(o.sku.trim().toUpperCase());
+    return {
+      id: o.id,
+      sku: o.sku,
+      description: o.description,
+      brand: o.brand,
+      tipo: o.tipo,
+      genero: o.genero,
+      formato: o.formato,
+      cor: o.cor,
+      unitCost: toNumber(o.unitCost) ?? 0,
+      unitPrice: toNumber(o.unitPrice) ?? 0,
+      // A peça que a rede já vende entra com o giro DELA; a que é novidade
+      // entra zerada, e é isso que joga a decisão para o perfil.
+      unitsSold: conhecida?.unitsSold ?? 0,
+      currentStock: conhecida?.currentStock ?? 0,
+      coberturaDaGrifeMeses:
+        conhecida?.coverageDays == null ? null : Math.round((conhecida.coverageDays / 30) * 10) / 10,
+      // Sem absorção medida a peça nova não ganha teto próprio: não há
+      // histórico DELA para dizer quanto escoa, e inventar uma absorção seria
+      // transformar ausência de dado em permissão. A conhecida tem.
+      absorcao: conhecida ? Math.max(0, Math.round(conhecida.targetStock - conhecida.currentStock)) : null,
+    };
+  });
+  const jaVendidas = candidatos.filter((c) => c.unitsSold > 0).length;
+  /** Das que a rede já vende, quantas ainda têm espaço abaixo do alvo. */
+  const comEspaco = candidatos.filter((c) => c.unitsSold > 0 && (c.absorcao ?? 0) > 0).length;
 
   // A estratégia roda sobre a mesma matemática do contínuo. `windowMonths` sai
   // das datas do evento quando elas existem: uma feira é evento com calendário.
@@ -114,7 +156,6 @@ export async function planoDaFeira(fairId: string) {
     feira.arrivesAt && feira.targetAt
       ? Math.max(1, Math.round((feira.targetAt.getTime() - feira.arrivesAt.getTime()) / (30 * 86_400_000)))
       : 6;
-  const productPlans = await plans(365, undefined, 'principal');
   const estrategia = buildCommercialStrategy(productPlans, {
     floorUnits: feira.floorUnits,
     windowMonths: meses,
@@ -151,6 +192,11 @@ export async function planoDaFeira(fairId: string) {
   const porGrife = await posicoesPorGrife(feira.offers.map((o) => o.brand));
   const porLoja = new Map<string, { storeId: string; storeName: string; units: number }>();
 
+  // O que já foi lançado no balcão, por linha. Vai junto com o plano porque é
+  // exatamente a comparação que o comprador precisa fazer de pé na feira:
+  // sugeri 16, levei 20.
+  const compradoPorOferta = new Map(feira.offers.map((o) => [o.id, o.bought]));
+
   const comDestino = new Map<string, unknown>();
   for (const seg of plano.segmentos) {
     for (const l of seg.linhas) {
@@ -167,12 +213,17 @@ export async function planoDaFeira(fairId: string) {
         ...l,
         lojas: linhas,
         semLoja: l.units - linhas.reduce((a, r) => a + r.suggestedQty, 0),
+        comprado: compradoPorOferta.get(l.candidato.id) ?? 0,
         ...(excluidas.length > 0 ? { excludedByMix: excluidas.map((e) => e.storeName) } : {}),
       });
     }
   }
 
   const comprado = feira.offers.reduce((a, o) => a + o.bought, 0);
+  const compradoNoPlano = plano.segmentos.reduce(
+    (a, s) => a + s.linhas.reduce((b, l) => b + (compradoPorOferta.get(l.candidato.id) ?? 0), 0),
+    0,
+  );
   return {
     feira: {
       id: feira.id,
@@ -186,6 +237,13 @@ export async function planoDaFeira(fairId: string) {
       ofertas: feira.offers.length,
       /** O que já foi lançado no balcão — persistido, não guardado no navegador. */
       comprado,
+      /**
+       * Do que foi comprado, quanto saiu de linha que o plano sugeriu. A
+       * diferença para `comprado` é o que o comprador levou POR FORA do plano —
+       * e essa diferença é informação, não erro: a feira tem peça que só se vê
+       * no balcão. O que não pode é a conta sumir.
+       */
+      compradoNoPlano,
     },
     ...estrategia,
     detalhe: {
@@ -199,15 +257,150 @@ export async function planoDaFeira(fairId: string) {
       candidatosExaminados: candidatos.length,
       universo: candidatos.length,
       truncado: false,
-      motivo:
-        plano.naoAlocado > 0
-          ? `${plano.naoAlocado} un. do piso não couberam na oferta desta feira sem concentrar ` +
-            `demais em poucas peças. A oferta tem ${candidatos.length} ` +
-            `${candidatos.length === 1 ? 'peça' : 'peças'}; o lastro do perfil vem de ` +
-            `${pecasComGiro} peças com giro na rede.`
-          : '',
+      motivo: [
+        avisoDeVocabulario(candidatos, perfil),
+        motivoDoPlano(plano, candidatos, perfil, { jaVendidas, comEspaco, pecasComGiro }),
+      ]
+        .filter(Boolean)
+        .join(' '),
+      /** Quantas peças da oferta a rede já vende — reposição dentro da feira. */
+      jaVendidas,
     },
   };
+}
+
+/**
+ * O ALARME DO VOCABULÁRIO — a ponte falhando ALTO em vez de baixo.
+ *
+ * Quando o tipo da oferta não casa com nada do histórico, o sintoma é sempre o
+ * mesmo e é silencioso: as peças não acham lastro, caem em aposta, e o plano
+ * informa que a compra é especulação sem dizer que na verdade não conseguiu ler
+ * o tipo. Já aconteceu com quatro grafias diferentes nesta base ("oculos de
+ * sol" vs. "solar", "OCULOS" sozinho). A quinta não vai ser prevista por regex
+ * nenhuma — então o plano compara as famílias dos dois lados e DIZ.
+ */
+function avisoDeVocabulario(
+  candidatos: CandidatoDeCompra[],
+  perfil: PerfilQueVende,
+): string {
+  const comGiro = familiasComGiro(perfil);
+  if (comGiro.size === 0) return '';
+
+  const pecasPorFamilia = new Map<string, number>();
+  for (const c of candidatos) {
+    const f = familiaDePeca(c.tipo);
+    if (f) pecasPorFamilia.set(f, (pecasPorFamilia.get(f) ?? 0) + 1);
+  }
+  const orfas = [...pecasPorFamilia.entries()].filter(([f]) => !comGiro.has(f));
+  if (orfas.length === 0) return '';
+
+  const pecas = orfas.reduce((a, [, n]) => a + n, 0);
+  const nomes = orfas.map(([f]) => `“${f}”`).join(', ');
+  return (
+    `${pecas} ${pecas === 1 ? 'peça da oferta pertence a uma família' : 'peças da oferta pertencem a famílias'} ` +
+    `sem histórico na rede (${nomes}) — ${pecas === 1 ? 'ela cai' : 'elas caem'} em aposta por falta de lastro, ` +
+    'não por avaliação. Se essas peças deveriam ter comparação, o tipo da planilha está escrito de um jeito ' +
+    'que o cadastro da rede não usa; me diga o termo exato e a ponte passa a reconhecê-lo.'
+  );
+}
+
+/**
+ * O BEST-SELLER VAZIO — o motivo estrutural, dito com o nome certo.
+ *
+ * O perfil de risco reserva a maior fatia do piso para "reposição do que já
+ * vende". Numa coleção inteiramente nova não existe o que repor: nenhuma peça
+ * da oferta tem giro próprio, e essa fatia fica vazia por construção, não por
+ * cálculo. Dizer "não coube sem concentrar demais em poucas peças" ali seria
+ * dar o motivo errado para o comprador — ele sairia procurando na oferta uma
+ * peça que o motor tivesse recusado, e não há nenhuma.
+ */
+const ROTULO: Record<SegmentoDoPlano, string> = {
+  'best-seller': 'best-seller',
+  lancamento: 'lançamento',
+  aposta: 'aposta',
+};
+
+/**
+ * O MOTIVO DO QUE NÃO COUBE — segmento a segmento, com o motivo de cada um.
+ *
+ * O perfil de risco divide o piso em três fatias antes de olhar a oferta, e
+ * numa feira duas delas ficam vazias por NATUREZA e não por cálculo: uma
+ * coleção nova não tem o que repor (best-seller), e uma coleção cujo perfil
+ * inteiro já roda na rede não tem o que especular (aposta). Nos dois casos há
+ * unidades sobrando, e o motivo genérico — "não couberam sem concentrar demais
+ * em poucas peças" — manda o comprador procurar na oferta uma peça que o motor
+ * tivesse recusado. Não há nenhuma, e ele perde a tarde conferindo.
+ *
+ * Cada fatia que não fecha explica a SUA razão. É a mesma exigência que a aba
+ * de distribuição pagou caro para aprender: tela que mostra menos do que se
+ * esperava sem dizer por quê é lida como defeito.
+ */
+function motivoDoPlano(
+  plano: { segmentos: { segmento: SegmentoDoPlano; meta: number; alocado: number }[]; naoAlocado: number },
+  candidatos: CandidatoDeCompra[],
+  perfil: PerfilQueVende,
+  ctx: { jaVendidas: number; comEspaco: number; pecasComGiro: number },
+): string {
+  if (plano.naoAlocado <= 0) return '';
+
+  const candidatosPor = new Map<SegmentoDoPlano, number>();
+  for (const c of candidatos) {
+    const s = classificarCandidato(c, perfil);
+    candidatosPor.set(s, (candidatosPor.get(s) ?? 0) + 1);
+  }
+
+  const partes: string[] = [];
+  for (const seg of plano.segmentos) {
+    const falta = seg.meta - seg.alocado;
+    if (falta <= 0) continue;
+    const quantas = candidatosPor.get(seg.segmento) ?? 0;
+    partes.push(`${falta} un. de ${ROTULO[seg.segmento]}: ${porQue(seg.segmento, quantas, ctx)}`);
+  }
+  if (partes.length === 0) return '';
+
+  return (
+    `${plano.naoAlocado} un. do piso ficaram sem destino. ${partes.join('; ')}. ` +
+    'Um perfil de risco diferente redistribui essas fatias entre os três cenários.'
+  );
+}
+
+/** A razão de UMA fatia não ter fechado. */
+function porQue(
+  segmento: SegmentoDoPlano,
+  candidatos: number,
+  ctx: { jaVendidas: number; comEspaco: number; pecasComGiro: number },
+): string {
+  if (candidatos === 0) {
+    if (segmento === 'best-seller') {
+      return (
+        'nenhuma peça desta oferta tem giro na rede — é coleção nova, e não há o que repor. Se o ' +
+        'fornecedor traz referências que você já vende, elas entram por aqui assim que o SKU da planilha ' +
+        'for o mesmo do cadastro'
+      );
+    }
+    if (segmento === 'aposta') {
+      // O oposto do medo: todo o resto encontrou lastro, e não sobrou nada
+      // genuinamente especulativo para comprar.
+      return 'toda peça da oferta encontrou lastro no histórico da rede — não sobrou especulação a fazer';
+    }
+    return (
+      `nenhuma peça da oferta tem perfil que já rode na rede (o lastro vem de ${ctx.pecasComGiro} peças ` +
+      'com giro)'
+    );
+  }
+  if (segmento === 'best-seller' && ctx.comEspaco === 0) {
+    // Há o que repor, e a resposta é não repor. Comprar de novo o que já passou
+    // do alvo é exatamente o defeito que este console existe para evitar.
+    return (
+      `${ctx.jaVendidas === 1 ? 'a única peça' : `as ${ctx.jaVendidas} peças`} desta oferta que a rede já ` +
+      `vende ${ctx.jaVendidas === 1 ? 'está' : 'estão'} com estoque acima do alvo de cobertura — comprar ` +
+      'mais na feira aumentaria o excesso em vez de repor'
+    );
+  }
+  return (
+    `as ${candidatos} ${candidatos === 1 ? 'peça elegível chegou' : 'peças elegíveis chegaram'} ao teto de ` +
+    `${TETO_POR_LINHA_PCT}% por linha — o resto concentraria a compra em poucos modelos`
+  );
 }
 
 /**
