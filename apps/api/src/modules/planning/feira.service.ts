@@ -10,6 +10,7 @@ import {
   familiasComGiro,
   margemPct,
   montarPlanoDetalhado,
+  chaveDeGrifeParaCasar,
   normBrandKey,
   splitByNeed,
   type CandidatoDeCompra,
@@ -223,7 +224,7 @@ export async function planoDaFeira(fairId: string) {
   const comDestino = new Map<string, LinhaComDestino>();
   for (const seg of plano.segmentos) {
     for (const l of seg.linhas) {
-      const candidatas = porGrife.get(normBrandKey(l.candidato.brand)) ?? [];
+      const candidatas = porGrife.get(chaveDeGrifeParaCasar(l.candidato.brand)) ?? [];
       const { elegiveis, excluidas } = mix.separar(l.candidato.brand, candidatas);
       const rateio = splitByNeed(elegiveis, l.units, JANELA_PADRAO_DIAS);
       const linhas = rateio.rows.filter((r) => r.suggestedQty > 0);
@@ -443,10 +444,11 @@ function porQue(
  * a peça em si não existe na rede.
  */
 async function posicoesPorGrife(marcas: string[]) {
-  const chaves = new Set(marcas.map((m) => normBrandKey(m)));
+  const chaves = new Set(marcas.map((m) => chaveDeGrifeParaCasar(m)));
   const productPlans = await plans(365, undefined, 'principal');
   const doInteresse = productPlans.filter((p) =>
-    chaves.has(normBrandKey(p.brand ?? '')) || chaves.has(normBrandKey(p.description.split(/\s+/)[0] ?? '')),
+    chaves.has(chaveDeGrifeParaCasar(p.brand ?? '')) ||
+    chaves.has(chaveDeGrifeParaCasar(p.description.split(/\s+/)[0] ?? '')),
   );
   const posicoes = await posicoesPorLoja(doInteresse.map((p) => p.productId), 365);
 
@@ -454,9 +456,9 @@ async function posicoesPorGrife(marcas: string[]) {
   // cada loja NAQUELA grife, não naquela peça.
   const porGrife = new Map<string, Map<string, { storeId: string; storeName: string; unitsSold: number; stockUnits: number }>>();
   for (const p of doInteresse) {
-    const chave = chaves.has(normBrandKey(p.brand ?? ''))
-      ? normBrandKey(p.brand ?? '')
-      : normBrandKey(p.description.split(/\s+/)[0] ?? '');
+    const chave = chaves.has(chaveDeGrifeParaCasar(p.brand ?? ''))
+      ? chaveDeGrifeParaCasar(p.brand ?? '')
+      : chaveDeGrifeParaCasar(p.description.split(/\s+/)[0] ?? '');
     const alvo = porGrife.get(chave) ?? new Map();
     for (const pos of posicoes.get(p.productId) ?? []) {
       const atual = alvo.get(pos.storeId) ?? {
