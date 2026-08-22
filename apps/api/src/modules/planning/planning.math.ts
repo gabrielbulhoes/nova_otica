@@ -3775,6 +3775,26 @@ export interface CandidatoDeCompra {
   currentStock: number;
   /** Cobertura em meses da GRIFE na rede (null = sem venda). */
   coberturaDaGrifeMeses: number | null;
+
+  /**
+   * A ABSORÇÃO: quantas unidades ESTA peça consegue escoar na janela, já
+   * descontado o que a loja tem. `null` = sem teto próprio.
+   *
+   * Existe porque o teto por linha sozinho não basta, e a primeira execução
+   * contra dado real mostrou o buraco: o plano mandou comprar 40 unidades de
+   * uma peça com 68 em estoque que vendeu 12 em noventa dias — dois anos de
+   * cobertura, dentro do teto de concentração e completamente errado.
+   *
+   * O teto de segmento responde "esta peça não pode virar metade da compra".
+   * A absorção responde "esta peça não escoa isso". São perguntas diferentes e
+   * um plano precisa das duas: sem a segunda, o piso do cliente vira ordem de
+   * empurrar mercadoria para dentro da rede.
+   *
+   * Só o best-seller tem absorção medida — é o único com histórico próprio.
+   * Lançamento e aposta ficam com `null` e são governados pelo teto, porque
+   * ali a pergunta "quanto escoa" ainda não tem resposta honesta.
+   */
+  absorcao?: number | null;
 }
 
 export type SegmentoDoPlano = 'best-seller' | 'lancamento' | 'aposta';
@@ -3932,30 +3952,44 @@ export function montarPlanoDetalhado(
       continue;
     }
 
-    const teto = Math.max(1, Math.ceil((meta * TETO_POR_LINHA_PCT) / 100));
+    const tetoDoSegmento = Math.max(1, Math.ceil((meta * TETO_POR_LINHA_PCT) / 100));
+    // O TETO EFETIVO de cada linha é o MENOR entre concentração e absorção.
+    // As duas travas respondem perguntas diferentes — "não pode virar metade
+    // da compra" e "não escoa isso" — e um plano precisa das duas.
+    const tetos = elegiveis.map((c) =>
+      c.absorcao == null ? tetoDoSegmento : Math.max(0, Math.min(tetoDoSegmento, Math.trunc(c.absorcao))),
+    );
     const pesos = elegiveis.map((c) => pesoDoCandidato(c, perfil));
     let cotas = largestRemainders(pesos, meta, (i, j) => pesos[j] - pesos[i]);
 
-    // Aplica o teto e REDISTRIBUI o excedente entre quem ainda tem folga, em
+    // Aplica os tetos e REDISTRIBUI o excedente entre quem ainda tem folga, em
     // rodadas. Descartar o excedente faria o segmento fechar abaixo da meta —
     // que é exatamente o "aprox. no re-escalonamento" do concorrente.
-    for (let volta = 0; volta < 8; volta += 1) {
+    for (let volta = 0; volta < 12; volta += 1) {
       let excedente = 0;
-      cotas = cotas.map((q) => {
-        if (q > teto) {
-          excedente += q - teto;
-          return teto;
+      cotas = cotas.map((q, i) => {
+        if (q > tetos[i]) {
+          excedente += q - tetos[i];
+          return tetos[i];
         }
         return q;
       });
       if (excedente === 0) break;
-      const folga = cotas.map((q, i) => (q < teto ? pesos[i] : 0));
+      const folga = cotas.map((q, i) => (q < tetos[i] ? pesos[i] : 0));
       if (folga.every((f) => f === 0)) {
-        // Todo mundo no teto e ainda sobra: o segmento não comporta a meta.
+        // Todo mundo no teto e ainda sobra. NÃO é falha do plano: é a resposta
+        // honesta de que o piso pedido não cabe no que a rede escoa. Empurrar
+        // o resto por cima seria transformar o piso do cliente em ordem de
+        // encher a rede — o defeito que a absorção veio corrigir.
         naoAlocado += excedente;
         break;
       }
       const extra = largestRemainders(folga, excedente, (i, j) => folga[j] - folga[i]);
+      // SEM clamp aqui, de propósito: a redistribuição pode estourar o teto de
+      // quem recebeu, e é a volta seguinte do laço que precisa ENXERGAR esse
+      // estouro para recontá-lo. Cortar agora faria as unidades desaparecerem
+      // entre duas iterações, sem entrar em `naoAlocado` — o tipo de perda que
+      // não aparece em erro nenhum, só num total que não fecha.
       cotas = cotas.map((q, i) => q + extra[i]);
     }
 
