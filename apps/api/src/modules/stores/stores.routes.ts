@@ -28,14 +28,32 @@ export const storesRouter = Router();
  *    deixaria sem origem o fluxo entregue no feedback 6.0 · item 06. ZEISS
  *    fica fora aqui também — mexer em saldo de uma filial cujo número vem
  *    desatualizado de outro ERP é escrever ficção.
- *  · `todas` — o cadastro inteiro. Só para as telas que administram o próprio
- *    cadastro (lista de lojas, vínculo de usuário), onde esconder uma filial
- *    esconderia a linha que precisa ser corrigida.
+ *  · `todas` — a retaguarda de volta, para as telas que administram o próprio
+ *    cadastro (lista de lojas, vínculo de usuário). **NÃO é o cadastro
+ *    literal**: a filial em outro ERP não entra nem aqui — ver a nota no
+ *    próprio campo, que registra a decisão do cliente que a tirou.
  */
 export const ESCOPOS = {
   planejaveis: { excludeFromPlanning: false, externalErp: false },
   operacionais: { externalErp: false },
-  todas: {},
+  /**
+   * TODAS AS FILIAIS QUE A PLATAFORMA RECONHECE — e a ZEISS não é uma delas.
+   *
+   * Este escopo já foi `{}` (o cadastro literal), com a ZEISS aparecendo na
+   * tela de Lojas sob um selo "outro ERP". A intenção era boa — esconder a
+   * filial esconderia a linha que precisa ser conferida — e o cliente
+   * discordou, pela segunda rodada seguida: *"Zeiss continua aparecendo.
+   * Tirar totalmente do campo de visão."*
+   *
+   * Ele tem razão, e o argumento é dele: não há nada a conferir numa filial
+   * cujos números a plataforma não usa e não atualiza. O selo transformava uma
+   * exclusão limpa numa exceção que o operador precisa lembrar toda vez que lê
+   * a lista.
+   *
+   * A RETAGUARDA CONTINUA. Ela é da rede, tem estoque de verdade e é a origem
+   * da distribuição do recebimento — só não vende ao cliente.
+   */
+  todas: { externalErp: false },
 } as const;
 
 const escopoSchema = z.enum(['planejaveis', 'operacionais', 'todas']).default('planejaveis');
@@ -85,7 +103,10 @@ storesRouter.get(
       where: { id: req.params.id },
       include: { _count: { select: { stockItems: true, sales: true, sellers: true } } },
     });
-    if (!store) throw notFound('Loja não encontrada');
+    // Não basta sumir da lista: o id de uma filial em outro ERP continuava
+    // resolvendo aqui, e um link antigo ou uma URL colada trazia a tela de
+    // volta. "Fora do campo de visão" vale para a porta dos fundos também.
+    if (!store || store.externalErp) throw notFound('Loja não encontrada');
     res.json(store);
   }),
 );

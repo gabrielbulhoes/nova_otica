@@ -20,6 +20,11 @@ import {
   buildPurchaseOrders,
   buildRebalance,
   buildSuggestions,
+  chaveDePerfil,
+  explicarLinha,
+  margemPct,
+  montarPlanoDetalhado,
+  splitByNeed,
   contarIdades,
   filtrarVista,
   finalizarBoard,
@@ -32,6 +37,8 @@ import {
   matchesProductGroup,
   normBrandKey,
   type AtributosDaPeca,
+  type CandidatoDeCompra,
+  type SegmentoDoPlano,
   type FairSplitInput,
   type FiltroDeVista,
   type PlanningConfig,
@@ -801,7 +808,212 @@ export async function commercialStrategy(
   storeId?: string,
 ) {
   const productPlans = await plans(days, storeId, 'principal');
-  return buildCommercialStrategy(productPlans, params);
+  const estrategia = buildCommercialStrategy(productPlans, params);
+  // O DETALHE é o módulo que faltava: a estratégia dizia QUANTO comprar e
+  // parava aí. Vem no mesmo pacote porque a tela é a mesma — o comprador ajusta
+  // o piso e quer ver a lista mudar junto, não navegar para outro lugar.
+  const detalhe = await detalharPlanoContinuo(productPlans, estrategia, days);
+  return { ...estrategia, detalhe };
+}
+
+/**
+ * O universo de candidatos do modo CONTÍNUO tem teto, e o teto é declarado.
+ *
+ * O recorte 'principal' da rede tem dezenas de milhares de peças, e a
+ * esmagadora maioria receberia zero num piso de novecentas unidades. Carregar
+ * a ficha de todas para descartar 98% é o custo que não erra a saída e derruba
+ * a rota — o mesmo que derrubou a Central de Decisões e o painel de alertas.
+ *
+ * O corte é por RELEVÂNCIA (giro primeiro), não alfabético, e o que ficou de
+ * fora vai declarado na resposta.
+ */
+const TETO_DE_CANDIDATOS = 3_000;
+
+/**
+ * Monta o plano detalhado sobre a rede viva — Segmento → Marca → Tipo →
+ * Gênero → SKU, com o porquê de cada linha.
+ *
+ * A EVIDÊNCIA DO PERFIL sai dos próprios planos cruzados com a ficha do
+ * fornecedor: quanto a rede vendeu de cada (tipo|gênero), de cada formato e de
+ * cada cor. É o que permite classificar uma peça sem giro próprio como
+ * LANÇAMENTO em vez de aposta — a distinção que sustenta o módulo.
+ */
+async function detalharPlanoContinuo(
+  productPlans: ProductPlan[],
+  estrategia: ReturnType<typeof buildCommercialStrategy>,
+  days: number,
+) {
+  // Relevância: quem gira primeiro; empate pelo capital da peça, que é o que
+  // diferencia duas peças paradas.
+  const ordenados = [...productPlans].sort(
+    (a, b) => b.unitsSold - a.unitsSold || b.stockValue - a.stockValue,
+  );
+  const pool = ordenados.slice(0, TETO_DE_CANDIDATOS);
+  const fichas = await fichasDoFornecedor(
+    pool.map((p) => ({ ...p, recommendation: 'BUY' as const, suggestedQty: 1 })),
+  );
+
+  const candidatos: CandidatoDeCompra[] = pool.map((p) => {
+    const f = fichas.get(p.productId);
+    return {
+      id: p.productId,
+      sku: p.productId,
+      description: p.description,
+      // A GRIFE, não o fornecedor — a mesma regra do resto do motor.
+      brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
+      tipo: p.category,
+      genero: f?.genero ?? null,
+      formato: f?.formato ?? null,
+      cor: null,
+      unitCost: p.unitCost,
+      unitPrice: p.unitPrice,
+      unitsSold: p.unitsSold,
+      currentStock: p.currentStock,
+      coberturaDaGrifeMeses: p.coverageDays === null ? null : Math.round((p.coverageDays / 30) * 10) / 10,
+      /*
+       * A ABSORÇÃO sai do `targetStock` que o motor já calcula — o alvo de
+       * cobertura da peça — menos o que a rede tem hoje. É a mesma régua da
+       * sugestão de compra individual, e usá-la aqui é o que impede o plano de
+       * discordar da tela ao lado sobre a mesma peça.
+       *
+       * Só para quem TEM giro. Sem venda não há alvo de cobertura honesto, e
+       * inventar um transformaria a ausência de dado em permissão de comprar.
+       */
+      absorcao: p.unitsSold > 0 ? Math.max(0, Math.round(p.targetStock - p.currentStock)) : null,
+    };
+  });
+
+  // O PERFIL QUE VENDE — só do que de fato vendeu. Somar o catálogo inteiro
+  // daria peso a perfil que existe em estoque e não sai, que é o oposto do
+  // sinal que se procura.
+  const porTipoGenero = new Map<string, number>();
+  const porFormato = new Map<string, number>();
+  const soma = (m: Map<string, number>, k: string | null, v: number) => {
+    if (!k) return;
+    m.set(k, (m.get(k) ?? 0) + v);
+  };
+  for (const c of candidatos) {
+    if (c.unitsSold <= 0) continue;
+    soma(porTipoGenero, chaveDePerfil(c.tipo, c.genero), c.unitsSold);
+    soma(porFormato, c.formato ? normBrandKey(c.formato) : null, c.unitsSold);
+  }
+  const perfil = { porTipoGenero, porFormato, porCor: new Map<string, number>() };
+
+  // O RANKING do formato dentro do segmento — é o que transforma "formato que
+  // vende" em "2º formato do segmento", e situa a peça contra as concorrentes.
+  const rankPorFormato = new Map<string, number>();
+  [...porFormato.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([k], i) => rankPorFormato.set(k, i + 1));
+
+  const metas = Object.fromEntries(
+    estrategia.segments.map((s) => [s.key, s.units]),
+  ) as Record<SegmentoDoPlano, number>;
+
+  // A margem média do recorte, para a frase comparar em vez de só informar.
+  const comPreco = candidatos.filter((c) => c.unitPrice > 0);
+  const margemMedia = comPreco.length
+    ? Math.round((comPreco.reduce((a, c) => a + margemPct(c.unitPrice, c.unitCost), 0) / comPreco.length) * 10) / 10
+    : null;
+
+  const plano = montarPlanoDetalhado(candidatos, metas, perfil, (c, seg, units) =>
+    explicarLinha(c, seg, units, {
+      rankFormato: c.formato ? (rankPorFormato.get(normBrandKey(c.formato)) ?? null) : null,
+      margemMedia,
+    }),
+  );
+
+  /*
+   * E PARA ONDE VAI — a metade da pergunta que a plataforma nunca respondeu.
+   *
+   * "ele sugere a compra, mas ele não sugere como distribuir isso pra por
+   *  loja. É isso que a gente precisa sacar." Três rodadas seguidas.
+   *
+   * A divisão sai do MESMO `splitByNeed` do rateio de pedido e do plano de
+   * recebimento, e passa pelo MESMO porteiro de mix: grife restrita só entra
+   * nas lojas que a trabalham, e as excluídas saem nomeadas. Uma quarta conta
+   * de "quanto vai para cada loja" seria a divergência seguinte.
+   *
+   * Só as linhas do plano entram na consulta de posições — algumas centenas,
+   * não o recorte inteiro.
+   */
+  const linhas = plano.segmentos.flatMap((s) => s.linhas);
+  const posicoes = await posicoesPorLoja(linhas.map((l) => l.candidato.id), days);
+  const mix = await porteiroDeMix();
+
+  const porLoja = new Map<string, { storeId: string; storeName: string; units: number }>();
+  const comDestino = linhas.map((l) => {
+    const todas = posicoes.get(l.candidato.id) ?? [];
+    const { elegiveis, excluidas } = mix.separar(l.candidato.brand, todas);
+    const rateio = splitByNeed(elegiveis, l.units, days);
+    for (const r of rateio.rows) {
+      if (r.suggestedQty <= 0) continue;
+      const atual = porLoja.get(r.storeId) ?? { storeId: r.storeId, storeName: r.storeName, units: 0 };
+      atual.units += r.suggestedQty;
+      porLoja.set(r.storeId, atual);
+    }
+    return {
+      ...l,
+      lojas: rateio.rows.filter((r) => r.suggestedQty > 0),
+      // Unidades que nenhuma loja elegível reclamou. Declaradas: a soma da
+      // tela tem que fechar contra as unidades do plano.
+      semLoja: l.units - rateio.rows.reduce((a, r) => a + r.suggestedQty, 0),
+      ...(excluidas.length > 0 ? { excludedByMix: excluidas.map((e) => e.storeName) } : {}),
+    };
+  });
+
+  const porLinha = new Map(comDestino.map((l) => [`${l.segmento}:${l.candidato.id}`, l]));
+  return {
+    ...plano,
+    segmentos: plano.segmentos.map((s) => ({
+      ...s,
+      linhas: s.linhas.map((l) => porLinha.get(`${s.segmento}:${l.candidato.id}`) ?? l),
+    })),
+    // A visão POR LOJA — o total que cada filial recebe deste plano, somando
+    // todas as linhas. É a leitura de quem monta o malote.
+    porLoja: [...porLoja.values()].sort((a, b) => b.units - a.units),
+    days,
+    candidatosExaminados: candidatos.length,
+    /** `true` quando o recorte não coube no teto — ver `TETO_DE_CANDIDATOS`. */
+    truncado: productPlans.length > pool.length,
+    universo: productPlans.length,
+    /**
+     * POR QUE O PLANO NÃO FECHOU O PISO, quando não fecha.
+     *
+     * Plano vazio sem explicação é lido como tela quebrada — foi exatamente o
+     * que aconteceu com a aba de distribuição, que existia e abria vazia. Aqui
+     * o vazio tem causa e ela é INFORMAÇÃO: significa que a rede não escoa o
+     * que o piso pede, e é uma resposta melhor do que uma lista bonita
+     * mandando encher as lojas.
+     */
+    motivo: motivoDoResto(plano.naoAlocado, plano.total, candidatos),
+  };
+}
+
+/** A frase do resto não alocado — vazia quando o plano fechou o piso. */
+function motivoDoResto(naoAlocado: number, total: number, candidatos: CandidatoDeCompra[]): string {
+  if (naoAlocado <= 0) return '';
+  const comAbsorcao = candidatos.filter((c) => (c.absorcao ?? 0) > 0).length;
+  const semGiro = candidatos.filter((c) => c.unitsSold <= 0).length;
+
+  if (total === 0 && comAbsorcao === 0) {
+    return (
+      `Nenhuma das ${candidatos.length} peças analisadas tem folga para receber mais estoque: ` +
+      'todas já estão no alvo de cobertura ou acima dele. O piso pedido não cabe na rede hoje — ' +
+      'antes de comprar, o caminho é escoar o que está parado.'
+    );
+  }
+  if (comAbsorcao > 0 && semGiro === candidatos.length - comAbsorcao) {
+    return (
+      `${naoAlocado} un. do piso não foram alocadas: as peças com giro já chegaram ao alvo de ` +
+      'cobertura, e as demais não têm histórico que sustente a compra. Ampliar a janela ou ' +
+      'reduzir o piso aproxima o plano do que a rede escoa.'
+    );
+  }
+  return (
+    `${naoAlocado} un. do piso não foram alocadas — a oferta analisada não tem variedade ou ` +
+    'absorção suficiente para o volume pedido sem concentrar demais em poucas peças.'
+  );
 }
 
 /**

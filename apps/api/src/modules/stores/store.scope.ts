@@ -60,3 +60,38 @@ export async function plannedStoreIds(): Promise<string[]> {
   });
   return rows.map((r) => r.id);
 }
+
+// ─── Visibilidade: o que a ZEISS exige e o escopo de planejamento não dá ─────
+
+/**
+ * FILIAL EM OUTRO ERP NÃO EXISTE PARA A PLATAFORMA — em nenhuma tela.
+ *
+ * "Zeiss continua aparecendo. Tirar totalmente do campo de visão." É a
+ * SEGUNDA vez que o cliente pede, e a primeira resposta foi incompleta por um
+ * motivo específico que vale registrar:
+ *
+ * `PLANNED_STORE_WHERE` responde "esta filial entra na CONTA?" — e foi
+ * aplicado com cuidado em planejamento, BI, relatórios e painel. Mas há telas
+ * que não fazem conta nenhuma e mesmo assim mostram loja: a lista de vendas, o
+ * detalhe de um produto com as posições por filial, o histórico de um cliente.
+ * Nenhuma delas é "planejamento", então nenhuma foi tocada — e em todas elas a
+ * ZEISS continuou visível.
+ *
+ * São duas perguntas diferentes e elas precisam de dois filtros:
+ *
+ *  · `PLANNED_STORE_WHERE` — entra na conta? (tira retaguarda E outro ERP)
+ *  · `VISIBLE_STORE_WHERE` — existe para o usuário? (tira só o outro ERP)
+ *
+ * A retaguarda NÃO sai daqui: o GMAIS é origem de movimentação e destino de
+ * recebimento, e some-lo da vista quebraria a distribuição. O que sai é só a
+ * filial cujo dado chega desatualizado de outro sistema — porque número velho
+ * apresentado como atual é pior que número ausente, e essa é a razão original
+ * do pedido.
+ */
+export const VISIBLE_STORE_WHERE = { externalErp: false } as const;
+
+/** Filtro para Sale: `{ store: { … } }`. */
+export const saleVisibleWhere: Prisma.SaleWhereInput = { store: VISIBLE_STORE_WHERE };
+
+/** Filtro para StockItem: `{ store: { … } }`. */
+export const stockVisibleWhere: Prisma.StockItemWhereInput = { store: VISIBLE_STORE_WHERE };

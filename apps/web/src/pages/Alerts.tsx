@@ -188,7 +188,24 @@ export function Alerts() {
       <AberturaDeSecao
         eyebrow="Lista"
         titulo="O que está faltando agora"
-        descricao="Uma linha por produto e loja. O mínimo pode ser ajustado na própria linha."
+        descricao="Uma linha por produto e loja, da mais crítica para a menos. Só entram peças que a loja realmente trabalha — tem saldo hoje ou vendeu nos últimos seis meses. O mínimo pode ser ajustado na própria linha."
+        acoes={
+          /* O CORTE, DITO NA TELA.
+             Ele existia antes e era silencioso: a lista trazia as primeiras
+             100.000 posições ORDENADAS POR DESCRIÇÃO e contava sobre elas — em
+             produção, um número sobre as primeiras letras do alfabeto,
+             apresentado como se fosse a rede inteira. Agora o corte é pela
+             urgência e vem declarado. */
+          alerts.data?.truncado ? (
+            <Selo
+              tom="gray"
+              icone="filtro"
+              title="Os contadores acima são da seleção inteira; só a lista é cortada."
+            >
+              as {alerts.data.limite} mais críticas de {alerts.data.total}
+            </Selo>
+          ) : undefined
+        }
       />
 
       <div className="card" style={{ padding: 0 }}>

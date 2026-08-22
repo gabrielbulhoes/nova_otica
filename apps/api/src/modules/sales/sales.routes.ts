@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
 import { assertStoreAccess, scopedStoreId } from '../auth/auth.middleware.js';
+import { saleVisibleWhere } from '../stores/store.scope.js';
 
 export const salesRouter = Router();
 
@@ -11,7 +12,10 @@ salesRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const { limit, page, skip } = parsePaging(req.query);
-    const where: Prisma.SaleWhereInput = {};
+    // Filial em outro ERP não aparece — nem aqui, que não faz conta nenhuma e
+    // por isso passou batido nas duas rodadas anteriores. Ver
+    // `VISIBLE_STORE_WHERE`.
+    const where: Prisma.SaleWhereInput = { ...saleVisibleWhere };
     const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
     if (storeId) where.storeId = storeId;
 

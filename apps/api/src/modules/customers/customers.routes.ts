@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Prisma, Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
+import { saleVisibleWhere } from '../stores/store.scope.js';
 
 export const customersRouter = Router();
 
@@ -51,7 +52,14 @@ customersRouter.get(
     const customer = await prisma.customer.findUnique({
       where: { id: req.params.id },
       include: {
-        sales: { orderBy: { saleDate: 'desc' }, take: 20, include: { store: true } },
+        // Sem o filtro, o histórico do cliente mostrava compras feitas nas
+        // lojas ZEISS — com o dado desatualizado que motivou tirá-las.
+        sales: {
+          where: saleVisibleWhere,
+          orderBy: { saleDate: 'desc' },
+          take: 20,
+          include: { store: true },
+        },
       },
     });
     if (!customer) throw notFound('Cliente não encontrado');

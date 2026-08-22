@@ -3722,3 +3722,394 @@ export function separarPorMix<T extends { storeId: string; storeName?: string }>
   for (const c of candidatas) (lojas.has(c.storeId) ? elegiveis : excluidas).push(c);
   return { elegiveis, excluidas };
 }
+
+// ─── O plano de compra DETALHADO — Segmento → Marca → Tipo → Gênero → SKU ────
+//
+// "ele sugere a compra, mas ele não sugere como distribuir isso por loja… ele
+//  tem que detalhar um pouco mais, tantas peças por tais marcas, do best-seller
+//  é best-seller, mas aí no outro cenário x peças pra tais marcas, aí dentro do
+//  cenário de aposta, tais masculinos."  — Galbe, 19/08/2026
+//
+// `buildCommercialStrategy` responde QUANTO comprar: três baldes de unidades
+// para um piso. Ele não responde O QUÊ nem PARA ONDE, e é aí que a plataforma
+// parava — exatamente onde a decisão de compra começa.
+//
+// Este bloco fecha a distância. É o MESMO construtor para os dois modos:
+//
+//  · FEIRA — o universo é a oferta do fornecedor para a coleção. A maior parte
+//    dos SKUs nunca foi vendida pela rede, então a evidência vem do PERFIL
+//    (grife, tipo, gênero, formato, cor), não do histórico da peça.
+//  · CONTÍNUO — o universo é o catálogo da própria rede, com giro e saldo ao
+//    vivo. A evidência vem da peça.
+//
+// O que muda entre eles é a lista de candidatos e a evidência que cada um
+// carrega. A alocação é uma só, e é este arquivo — que segue sem imports.
+
+/** Uma peça que PODE ser comprada, com o que se sabe dela. */
+export interface CandidatoDeCompra {
+  /** Chave estável: productId da rede, ou o código da oferta na feira. */
+  id: string;
+  sku: string;
+  description: string;
+  /** A GRIFE (Ray-Ban, Dior), nunca o fornecedor. */
+  brand: string;
+  /** SOLAR · ARMACAO · … — o "tipo" da hierarquia do cliente. */
+  tipo: string | null;
+  /** Feminino · Masculino · Unissex — vem da ficha do fornecedor. */
+  genero: string | null;
+  /** Piloto, Quadrado, Gatinho… */
+  formato: string | null;
+  cor: string | null;
+  unitCost: number;
+  unitPrice: number;
+
+  /**
+   * A EVIDÊNCIA, e ela é o que separa os três segmentos.
+   *
+   * Na feira, quase toda peça chega com `unitsSold: 0` — é lançamento, a rede
+   * nunca a vendeu. Isso NÃO a torna uma aposta: o que decide é se o PERFIL
+   * dela (tipo + gênero + formato + cor) já vende na rede. Confundir "peça
+   * nova" com "aposta" jogaria a coleção inteira no balde especulativo.
+   */
+  unitsSold: number;
+  currentStock: number;
+  /** Cobertura em meses da GRIFE na rede (null = sem venda). */
+  coberturaDaGrifeMeses: number | null;
+
+  /**
+   * A ABSORÇÃO: quantas unidades ESTA peça consegue escoar na janela, já
+   * descontado o que a loja tem. `null` = sem teto próprio.
+   *
+   * Existe porque o teto por linha sozinho não basta, e a primeira execução
+   * contra dado real mostrou o buraco: o plano mandou comprar 40 unidades de
+   * uma peça com 68 em estoque que vendeu 12 em noventa dias — dois anos de
+   * cobertura, dentro do teto de concentração e completamente errado.
+   *
+   * O teto de segmento responde "esta peça não pode virar metade da compra".
+   * A absorção responde "esta peça não escoa isso". São perguntas diferentes e
+   * um plano precisa das duas: sem a segunda, o piso do cliente vira ordem de
+   * empurrar mercadoria para dentro da rede.
+   *
+   * Só o best-seller tem absorção medida — é o único com histórico próprio.
+   * Lançamento e aposta ficam com `null` e são governados pelo teto, porque
+   * ali a pergunta "quanto escoa" ainda não tem resposta honesta.
+   */
+  absorcao?: number | null;
+}
+
+export type SegmentoDoPlano = 'best-seller' | 'lancamento' | 'aposta';
+
+/** Uma linha do plano: quanto comprar desta peça, e por quê. */
+export interface LinhaDoPlano {
+  candidato: CandidatoDeCompra;
+  segmento: SegmentoDoPlano;
+  units: number;
+  /** Margem sobre o preço (0–100). */
+  margemPct: number;
+  /**
+   * O PORQUÊ, em português corrido.
+   *
+   * O concorrente publica isto como string de máquina numa coluna que o
+   * comprador lê — `low_cover_21mo_abs_weighted+sinal_tendencia_verificado`.
+   * Quem decide compra de seis dígitos precisa da frase, não do log.
+   */
+  porque: string;
+}
+
+/** Quanto o perfil de uma peça já roda na rede — a base do lançamento. */
+export interface PerfilQueVende {
+  /** Unidades vendidas na rede por (tipo|genero). */
+  porTipoGenero: ReadonlyMap<string, number>;
+  /** Idem por formato, dentro do tipo+gênero. */
+  porFormato: ReadonlyMap<string, number>;
+  /** Idem por cor. */
+  porCor: ReadonlyMap<string, number>;
+}
+
+export const chaveDePerfil = (tipo: string | null, genero: string | null): string =>
+  `${normCategory(tipo ?? '')}|${normCategory(genero ?? '')}`;
+
+/**
+ * Classifica um candidato nos três segmentos do cliente.
+ *
+ * A ordem das perguntas é a regra, e cada uma existe por um motivo:
+ *
+ *  1. VENDEU? → best-seller. É a única classe com lastro na própria peça, e
+ *     "best-seller" não significa outra coisa.
+ *  2. O PERFIL vende? → lançamento. A peça é nova, mas piloto masculino em
+ *     Havana já é o que sai — a aderência é real, não é torcida.
+ *  3. Nada disso → aposta. Grife de baixa cobertura, fora do envelope de
+ *     demanda provada. É a definição do concorrente, e é honesta.
+ */
+export function classificarCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): SegmentoDoPlano {
+  if (c.unitsSold > 0) return 'best-seller';
+  const doPerfil = perfil.porTipoGenero.get(chaveDePerfil(c.tipo, c.genero)) ?? 0;
+  if (doPerfil > 0) return 'lancamento';
+  return 'aposta';
+}
+
+/**
+ * O PESO de um candidato dentro do seu segmento — o que decide quantas peças
+ * dele entram no plano. Puro, e separado da alocação de propósito: é a régua
+ * comercial, e é aqui que se discute, não no laço que reparte.
+ */
+export function pesoDoCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): number {
+  const margem = margemPct(c.unitPrice, c.unitCost);
+  switch (classificarCandidato(c, perfil)) {
+    case 'best-seller':
+      // Giro comprovado da PEÇA. A margem entra como leve modulador, nunca
+      // como régua principal: uma peça que vende muito com margem menor ainda
+      // é o que a loja precisa ter — trocar giro por margem aqui é como se
+      // deixa de vender o que o cliente entra pedindo.
+      return c.unitsSold * (0.75 + margem / 200);
+
+    case 'lancamento': {
+      // A peça é nova; quem tem lastro é o PERFIL. Multiplicamos os três
+      // sinais em vez de somar: um piloto masculino numa cor que não sai não
+      // deve herdar o peso inteiro do "masculino".
+      const base = perfil.porTipoGenero.get(chaveDePerfil(c.tipo, c.genero)) ?? 0;
+      const fFormato = c.formato ? 1 + (perfil.porFormato.get(normCategory(c.formato)) ?? 0) : 1;
+      const fCor = c.cor ? 1 + (perfil.porCor.get(normCategory(c.cor)) ?? 0) : 1;
+      return base * Math.log1p(fFormato) * Math.log1p(fCor);
+    }
+
+    case 'aposta':
+      // Sem giro e sem perfil, sobra a MARGEM — é o único sinal que resta, e
+      // é o que compensa o risco. Cobertura baixa da grife favorece: aposta é
+      // exatamente onde a rede tem pouco, não onde já está cheia.
+      return Math.max(1, margem) * (c.coberturaDaGrifeMeses === null ? 1 : 1 / (1 + c.coberturaDaGrifeMeses));
+  }
+}
+
+/** Margem sobre o PREÇO (0–100). Preço zero não vira divisão por zero. */
+export function margemPct(unitPrice: number, unitCost: number): number {
+  if (!(unitPrice > 0)) return 0;
+  return round1(((unitPrice - unitCost) / unitPrice) * 100);
+}
+
+/**
+ * O TETO POR LINHA — a trava que impede uma peça de comer o segmento inteiro.
+ *
+ * Sem ela, um best-seller com giro dez vezes maior que o segundo levaria
+ * metade do balde: matematicamente correto e comercialmente suicida, porque
+ * concentra a compra num SKU e deixa a vitrine sem variedade. O concorrente
+ * usa a mesma ideia e a publica na base da linha (`teto_25p`).
+ */
+export const TETO_POR_LINHA_PCT = 25;
+
+export interface PlanoDetalhado {
+  segmentos: { segmento: SegmentoDoPlano; meta: number; alocado: number; linhas: LinhaDoPlano[] }[];
+  /**
+   * Unidades da meta que o plano NÃO conseguiu alocar — declaradas, nunca
+   * sumidas. Duas causas, e as duas são informação para quem compra:
+   *
+   *  · o segmento não tem candidato nenhum (a feira de uma grife só não tem o
+   *    que oferecer para o balde de lançamento);
+   *  · a oferta não tem VARIEDADE bastante para absorver a meta sem estourar o
+   *    teto por linha — cinco SKUs não comportam 400 peças a 25% cada.
+   *
+   * Nos dois casos a resposta honesta é "não cabe", e não espalhar o resto
+   * por cima do teto fingindo que coube.
+   */
+  naoAlocado: number;
+  total: number;
+}
+
+/**
+ * Reparte a meta de cada segmento entre os candidatos daquele segmento.
+ *
+ * A SOMA FECHA EXATO em cada segmento (`largestRemainders`), e a conta é
+ * verificável na tela: o concorrente exibe "TOTAL best-seller: 419 un / meta
+ * 426 (aprox. no re-escalonamento)" — ou seja, ele NÃO fecha, e declara isso.
+ * Aqui fecha, e o teto por linha é redistribuído em vez de descartado.
+ */
+export function montarPlanoDetalhado(
+  candidatos: CandidatoDeCompra[],
+  metasPorSegmento: Record<SegmentoDoPlano, number>,
+  perfil: PerfilQueVende,
+  explicar: (c: CandidatoDeCompra, seg: SegmentoDoPlano, units: number) => string,
+): PlanoDetalhado {
+  const porSegmento = new Map<SegmentoDoPlano, CandidatoDeCompra[]>([
+    ['best-seller', []],
+    ['lancamento', []],
+    ['aposta', []],
+  ]);
+  for (const c of candidatos) porSegmento.get(classificarCandidato(c, perfil))!.push(c);
+
+  const segmentos: PlanoDetalhado['segmentos'] = [];
+  let naoAlocado = 0;
+
+  for (const segmento of ['best-seller', 'lancamento', 'aposta'] as const) {
+    const meta = Math.max(0, Math.trunc(metasPorSegmento[segmento] ?? 0));
+    const elegiveis = porSegmento.get(segmento)!;
+
+    // Segmento sem candidato nenhum: a meta não evapora, vira resto declarado.
+    // Na feira isso acontece de verdade — um fornecedor de uma grife só não
+    // tem o que oferecer para o balde de lançamento.
+    if (meta === 0 || elegiveis.length === 0) {
+      naoAlocado += meta;
+      segmentos.push({ segmento, meta, alocado: 0, linhas: [] });
+      continue;
+    }
+
+    const tetoDoSegmento = Math.max(1, Math.ceil((meta * TETO_POR_LINHA_PCT) / 100));
+    // O TETO EFETIVO de cada linha é o MENOR entre concentração e absorção.
+    // As duas travas respondem perguntas diferentes — "não pode virar metade
+    // da compra" e "não escoa isso" — e um plano precisa das duas.
+    const tetos = elegiveis.map((c) =>
+      c.absorcao == null ? tetoDoSegmento : Math.max(0, Math.min(tetoDoSegmento, Math.trunc(c.absorcao))),
+    );
+    const pesos = elegiveis.map((c) => pesoDoCandidato(c, perfil));
+    let cotas = largestRemainders(pesos, meta, (i, j) => pesos[j] - pesos[i]);
+
+    // Aplica os tetos e REDISTRIBUI o excedente entre quem ainda tem folga, em
+    // rodadas. Descartar o excedente faria o segmento fechar abaixo da meta —
+    // que é exatamente o "aprox. no re-escalonamento" do concorrente.
+    for (let volta = 0; volta < 12; volta += 1) {
+      let excedente = 0;
+      cotas = cotas.map((q, i) => {
+        if (q > tetos[i]) {
+          excedente += q - tetos[i];
+          return tetos[i];
+        }
+        return q;
+      });
+      if (excedente === 0) break;
+      const folga = cotas.map((q, i) => (q < tetos[i] ? pesos[i] : 0));
+      if (folga.every((f) => f === 0)) {
+        // Todo mundo no teto e ainda sobra. NÃO é falha do plano: é a resposta
+        // honesta de que o piso pedido não cabe no que a rede escoa. Empurrar
+        // o resto por cima seria transformar o piso do cliente em ordem de
+        // encher a rede — o defeito que a absorção veio corrigir.
+        naoAlocado += excedente;
+        break;
+      }
+      const extra = largestRemainders(folga, excedente, (i, j) => folga[j] - folga[i]);
+      // SEM clamp aqui, de propósito: a redistribuição pode estourar o teto de
+      // quem recebeu, e é a volta seguinte do laço que precisa ENXERGAR esse
+      // estouro para recontá-lo. Cortar agora faria as unidades desaparecerem
+      // entre duas iterações, sem entrar em `naoAlocado` — o tipo de perda que
+      // não aparece em erro nenhum, só num total que não fecha.
+      cotas = cotas.map((q, i) => q + extra[i]);
+    }
+
+    const linhas = elegiveis
+      .map((c, i) => ({
+        candidato: c,
+        segmento,
+        units: cotas[i],
+        margemPct: margemPct(c.unitPrice, c.unitCost),
+        porque: explicar(c, segmento, cotas[i]),
+      }))
+      .filter((l) => l.units > 0)
+      .sort((a, b) => b.units - a.units || a.candidato.description.localeCompare(b.candidato.description, 'pt-BR'));
+
+    segmentos.push({ segmento, meta, alocado: linhas.reduce((a, l) => a + l.units, 0), linhas });
+  }
+
+  return {
+    segmentos,
+    naoAlocado,
+    total: segmentos.reduce((a, s) => a + s.alocado, 0),
+  };
+}
+
+/**
+ * O PORQUÊ DE CADA LINHA, em português corrido.
+ *
+ * O concorrente entrega isto de dois jeitos, e um deles é um defeito que vale
+ * não copiar: no detalhe do SKU ele escreve uma frase boa ("piloto é o 2º
+ * formato do segmento e Havana, a 2ª cor, então aqui tem aderência real e não
+ * só nome"), mas na tabela de aposta ele publica
+ * `low_cover_21mo_abs_weighted+sinal_tendencia_verificado+teto_25p` — numa
+ * coluna chamada BASE, que o comprador lê enquanto decide.
+ *
+ * Log de máquina numa tela de decisão não é transparência: é a aparência dela.
+ * Quem assina uma compra de seis dígitos precisa da frase.
+ *
+ * A frase nomeia o RANKING, e não só o fato — "2º formato do segmento" diz
+ * mais que "formato que vende", porque situa a peça contra as concorrentes.
+ * E a margem entra com a comparação, não sozinha: 60,6% não significa nada
+ * até virar "abaixo da média de 64,5%".
+ */
+export function explicarLinha(
+  c: CandidatoDeCompra,
+  segmento: SegmentoDoPlano,
+  units: number,
+  ctx: {
+    /** Posição do formato dentro do tipo+gênero (1 = o que mais vende). */
+    rankFormato?: number | null;
+    rankCor?: number | null;
+    /** Margem média do recorte, para a comparação. */
+    margemMedia?: number | null;
+  } = {},
+): string {
+  if (units <= 0) return '';
+  const m = margemPct(c.unitPrice, c.unitCost);
+  // FRASES INTEIRAS, montadas com espaço entre elas. A primeira versão
+  // concatenava pedaços sem separador e produzia "já roda na rede— piloto" e
+  // "do segmentoe havana" — numa tela que existe para o comprador confiar.
+  const frases: string[] = [];
+  const un = (n: number) => `${n} ${n === 1 ? 'peça' : 'peças'}`;
+  // VÍRGULA DECIMAL. A frase vai para a tela do comprador brasileiro, e "60.7%"
+  // num documento de compra é erro de tradução — o mesmo tipo de descuido que
+  // o log de máquina do concorrente na coluna BASE.
+  const num = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  // Ordinal com GÊNERO. "2º cor" estava saindo na frase que vai ao cliente:
+  // cor é feminino, formato é masculino, e errar isso numa tela de decisão de
+  // seis dígitos parece descuido — porque é.
+  const ordinal = (n: number, genero: 'm' | 'f') => `${n}${genero === 'f' ? 'ª' : 'º'}`;
+
+  if (segmento === 'best-seller') {
+    const vendeu = `${c.unitsSold} ${c.unitsSold === 1 ? 'unidade' : 'unidades'}`;
+    frases.push(
+      `Compra de reposição de ${un(units)}: a rede já vendeu ${vendeu} desta peça no período` +
+        (c.currentStock > 0 ? ` e ainda tem ${c.currentStock} em estoque` : '') +
+        ' — é giro comprovado, não estimativa.',
+    );
+  } else if (segmento === 'lancamento') {
+    const perfil = [c.formato, c.genero].filter(Boolean).join(' ').toLowerCase();
+    if (ctx.rankFormato && c.formato) {
+      const cor =
+        ctx.rankCor && c.cor
+          ? ` e ${c.cor}, a ${ordinal(ctx.rankCor, 'f')} cor`
+          : '';
+      frases.push(
+        `Quota de lançamento de ${un(units)}: ${c.formato.toLowerCase()} é o ` +
+          `${ordinal(ctx.rankFormato, 'm')} formato do segmento${cor}, então aqui há aderência ` +
+          'real e não só o nome da grife.',
+      );
+    } else {
+      frases.push(
+        `Quota de lançamento de ${un(units)}` +
+          (perfil ? `: o perfil ${perfil} já roda na rede.` : '. A peça é nova; quem tem lastro é o perfil dela.'),
+      );
+    }
+  } else {
+    frases.push(
+      `Aposta de ${un(units)}: sem giro próprio e com perfil que a rede ainda não vende — é a ` +
+        'parte especulativa do plano.' +
+        (c.coberturaDaGrifeMeses !== null
+          ? ` A grife tem cobertura de ${c.coberturaDaGrifeMeses} meses na rede.`
+          : ''),
+    );
+  }
+
+  // A margem SEMPRE fecha a frase, e sempre comparada. Um número solto na
+  // linha de uma decisão de compra é ruído com aparência de dado.
+  if (ctx.margemMedia != null && ctx.margemMedia > 0) {
+    const dif = round1(m - ctx.margemMedia);
+    const pontos = (n: number) => `${num(n)} ponto${n === 1 ? '' : 's'}`;
+    frases.push(
+      dif === 0
+        ? `Margem de ${num(m)}%, na média do recorte.`
+        : dif > 0
+          ? `Margem de ${num(m)}%, ${pontos(dif)} acima da média de ${num(ctx.margemMedia)}%.`
+          : `Atenção à margem de ${num(m)}%, ${pontos(Math.abs(dif))} abaixo da média de ${num(ctx.margemMedia)}%.`,
+    );
+  } else {
+    frases.push(`Margem de ${num(m)}%.`);
+  }
+
+  return frases.join(' ');
+}

@@ -1276,3 +1276,64 @@ describe('demo: mix por loja e a fila de distribuição', () => {
     for (const u of rows) expect(idsDeVarejo.has(u.id)).toBe(false);
   });
 });
+
+/**
+ * O PLANO DETALHADO na demo — Segmento → Marca → Tipo → Gênero → SKU.
+ *
+ * A demonstração é onde o cliente confere o comportamento antes de confiar
+ * nele. Um módulo que só existisse na produção faria a demo mostrar a versão
+ * ANTIGA do produto — a segunda verdade que este arquivo passou rodadas
+ * inteiras tentando não ser.
+ */
+describe('demo: o plano de compra detalhado', () => {
+  const estrategia = (floor = 900) =>
+    get('/planning/strategy', { floor: String(floor), window: '7', risk: 'equilibrado' });
+
+  it('a estratégia devolve o detalhe junto — é a mesma tela', () => {
+    const r = estrategia();
+    expect(r.detalhe, 'o plano detalhado não veio no pacote da estratégia').toBeTruthy();
+    expect(r.detalhe.segmentos.map((s: any) => s.segmento)).toEqual([
+      'best-seller',
+      'lancamento',
+      'aposta',
+    ]);
+  });
+
+  it('a hierarquia não inventa unidade além do piso', () => {
+    // `alocado + naoAlocado` tem que fechar no piso pedido. Um plano que
+    // devolve mais do que foi autorizado é pior que um que devolve menos.
+    const r = estrategia(900);
+    expect(r.detalhe.total + r.detalhe.naoAlocado).toBe(r.floorUnits);
+    for (const seg of r.detalhe.segmentos) {
+      const daEstrategia = r.segments.find((s: any) => s.key === seg.segmento);
+      expect(seg.meta).toBe(daEstrategia.units);
+      expect(seg.alocado).toBeLessThanOrEqual(seg.meta);
+    }
+  });
+
+  it('a divisão por loja fecha contra as unidades da linha', () => {
+    const r = estrategia();
+    const linhas = r.detalhe.segmentos.flatMap((s: any) => s.linhas);
+    for (const l of linhas as any[]) {
+      const paraLojas = (l.lojas ?? []).reduce((a: number, x: any) => a + x.suggestedQty, 0);
+      expect(paraLojas + (l.semLoja ?? 0)).toBe(l.units);
+    }
+  });
+
+  it('nenhuma linha entrega log de máquina no porquê', () => {
+    // `low_cover_21mo_abs_weighted+sinal_tendencia_verificado` é o que o
+    // concorrente publica numa coluna que o comprador lê enquanto decide.
+    const r = estrategia();
+    const linhas = r.detalhe.segmentos.flatMap((s: any) => s.linhas) as any[];
+    for (const l of linhas.slice(0, 30)) {
+      expect(l.porque).not.toMatch(/_[a-z]+_|\+[a-z_]+=/);
+      expect(l.porque, 'ponto decimal numa frase em pt-BR').not.toMatch(/\d+\.\d+%/);
+    }
+  });
+
+  it('piso zero não inventa compra', () => {
+    const r = estrategia(0);
+    expect(r.detalhe.total).toBe(0);
+    expect(r.detalhe.porLoja).toEqual([]);
+  });
+});

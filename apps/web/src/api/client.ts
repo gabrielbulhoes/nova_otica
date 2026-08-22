@@ -466,7 +466,22 @@ export const getFairSplit = (params: Record<string, string | number | undefined>
 
 export const getAlerts = (params: Record<string, string | undefined>) =>
   api
-    .get<{ total: number; out: number; low: number; rows: StockAlert[] }>('/alerts', { params })
+    .get<{
+      total: number;
+      out: number;
+      low: number;
+      rows: StockAlert[];
+      /** Posições examinadas — o universo depois da guarda "a loja trabalha". */
+      examinadas?: number;
+      /**
+       * A LISTA foi cortada (os contadores nunca são). Existe porque o corte
+       * era silencioso: a tela contava sobre uma fatia alfabética do catálogo
+       * e apresentava o número como se fosse da rede inteira.
+       */
+      truncado?: boolean;
+      /** Teto da lista, para a tela dizer "as N mais críticas". */
+      limite?: number;
+    }>('/alerts', { params })
     .then((r) => r.data);
 export const setMinStock = (productId: string, minStock: number | null, storeId?: string) =>
   api.put('/alerts/min-stock', { productId, minStock, storeId }).then((r) => r.data);
@@ -944,6 +959,69 @@ export interface CommercialStrategy {
   backedPct: number;
   segments: StrategySegment[];
   verdict: string;
+  /** O plano DETALHADO — o que comprar, e para onde. Ver `PlanoDetalhado`. */
+  detalhe: PlanoDetalhado;
+}
+
+/** Uma peça candidata, com o que se sabe dela. */
+export interface CandidatoDoPlano {
+  id: string;
+  sku: string;
+  description: string;
+  /** A GRIFE (Ray-Ban, Dior), nunca o fornecedor. */
+  brand: string;
+  /** SOLAR · ARMACAO — o "tipo" da hierarquia. */
+  tipo: string | null;
+  genero: string | null;
+  formato: string | null;
+  cor: string | null;
+  unitCost: number;
+  unitPrice: number;
+  unitsSold: number;
+  currentStock: number;
+  coberturaDaGrifeMeses: number | null;
+  /** Quanto ESTA peça escoa na janela. `null` = sem teto próprio. */
+  absorcao?: number | null;
+}
+
+export interface LinhaDoPlano {
+  candidato: CandidatoDoPlano;
+  segmento: StrategySegment['key'];
+  units: number;
+  margemPct: number;
+  /**
+   * O porquê em PORTUGUÊS. O concorrente publica
+   * `low_cover_21mo_abs_weighted+sinal_tendencia_verificado` numa coluna que o
+   * comprador lê enquanto decide — log de máquina numa tela de decisão não é
+   * transparência, é a aparência dela.
+   */
+  porque: string;
+  /** Quanto vai para cada loja. */
+  lojas?: RateioLoja[];
+  /** Unidades que nenhuma loja elegível reclamou — declaradas, nunca sumidas. */
+  semLoja?: number;
+  /** Lojas fora da divisão por não trabalharem a grife. */
+  excludedByMix?: string[];
+}
+
+export interface PlanoDetalhado {
+  segmentos: {
+    segmento: StrategySegment['key'];
+    meta: number;
+    alocado: number;
+    linhas: LinhaDoPlano[];
+  }[];
+  /** O total que cada filial recebe — a leitura de quem monta o malote. */
+  porLoja: { storeId: string; storeName: string; units: number }[];
+  /** Unidades do piso que o plano não conseguiu alocar. */
+  naoAlocado: number;
+  total: number;
+  days: number;
+  candidatosExaminados: number;
+  universo: number;
+  truncado: boolean;
+  /** Por que o piso não fechou. Vazio quando fechou. */
+  motivo: string;
 }
 
 type PlanParams = Record<string, string | number | undefined>;

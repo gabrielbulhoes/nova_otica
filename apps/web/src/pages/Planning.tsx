@@ -1008,8 +1008,18 @@ function FilaDeDistribuicao() {
         {fila.isLoading ? (
           <Loading />
         ) : pendentes.length === 0 ? (
-          <div className="empty">
-            Nenhuma carga esperando. Toda mercadoria recebida já foi repartida entre as lojas.
+          /* O vazio precisa dizer o que fazer, e não só que está vazio.
+             Esta fila só enxerga pedidos REGISTRADOS na plataforma; quem
+             compra por fora nunca produz uma linha aqui, e o vazio sozinho
+             se lê como "o recurso não existe" — foi exatamente essa a
+             leitura do cliente. */
+          <div className="empty" style={{ display: 'block', textAlign: 'left', lineHeight: 1.6 }}>
+            <strong>Nenhuma carga registrada esperando divisão.</strong>
+            <br />
+            Esta fila mostra os pedidos que foram registrados aqui e tiveram o recebimento
+            confirmado. <strong>Se a compra foi feita por fora da plataforma</strong>, use o
+            bloco abaixo — informe a grife ou o tipo e a quantidade que chegou, e a divisão
+            entre as lojas sai pela mesma lógica.
           </div>
         ) : (
           <table>
@@ -1846,9 +1856,14 @@ function FairSplit() {
   return (
     <>
     <AberturaDeSecao
-      eyebrow="Feira"
-      titulo="Modo Feira — como distribuir uma compra nova"
-      descricao="Lançamentos de feira não têm histórico. Escolha a marca ou o grupo, a quantidade comprada, e o sistema rateia entre as lojas pela participação de cada uma nas vendas desse recorte (a soma bate exatamente com o total)."
+      eyebrow="Lote avulso"
+      /* O título era "Modo Feira", que é jargão NOSSO. O cliente pede
+         "distribuição dos lotes por loja" — e num bloco que agora responde
+         exatamente isso, o nome interno vira mais um motivo para não achar o
+         que se procura. A feira continua sendo o caso de uso original; deixou
+         de ser o nome. */
+      titulo="Dividir um lote entre as lojas"
+      descricao="Para a mercadoria que chegou sem pedido registrado aqui — compra de feira, lote avulso, reposição direta do fornecedor. Escolha a grife ou o tipo, informe quantas unidades chegaram, e a divisão sai pela participação de cada loja nas vendas desse recorte. A soma bate exatamente com o total."
     />
     <div className="card">
       <div className="toolbar" style={{ marginBottom: 0 }}>
@@ -2316,7 +2331,31 @@ export function Planning() {
       </>
       )}
 
-      {frente === 'distribuir' && <FilaDeDistribuicao />}
+      {frente === 'distribuir' && (
+        <>
+          <FilaDeDistribuicao />
+          {/*
+            O MODO FEIRA MUDOU DE LUGAR, e a mudança é o conserto.
+
+            "Continuamos sem a aba de distribuição dos lotes por loja" — dito
+            DEPOIS de a aba existir. A aba estava lá; o que ela não tinha era o
+            que mostrar.
+
+            A fila lista cargas com RECEBIMENTO CONFIRMADO no sistema, e chegar
+            a esse estado exige dois passos deliberados (registrar o envio do
+            rascunho, confirmar a chegada). Quem compra fora da plataforma
+            nunca produz uma dessas linhas — e abre a aba num vazio, que é
+            indistinguível de recurso ausente.
+
+            O rateio ad-hoc já respondia exatamente a pergunta "chegou uma
+            caixa, como divido entre as lojas?", e vivia numa seção separada
+            embaixo da aba de COMPRAS — o lugar onde ninguém procura por
+            distribuição. Trazê-lo para cá faz a aba responder à pergunta que
+            dá nome a ela, com ou sem pedido registrado.
+          */}
+          {isAdmin && <FairSplit />}
+        </>
+      )}
 
       {/* ── 3º: análise completa item a item ── */}
       <div ref={purchaseRef}>
@@ -2550,9 +2589,6 @@ export function Planning() {
           fáceis de confundir: aquela tira a grife da REDE, esta tira a grife
           de ALGUMAS LOJAS. Separadas por um título, na mesma dobra. */}
       {isAdmin && <MixPorLoja canEdit={isAdmin} />}
-
-      {/* ── Modo Feira: distribuir uma compra nova entre as lojas (ADMIN) ── */}
-      {isAdmin && <FairSplit />}
 
       {/* ── Panorama (secundário): capital imobilizado + Pareto ── */}
       {overview.isLoading || !overview.data ? (
