@@ -3,6 +3,8 @@ import {
   TETO_POR_LINHA_PCT,
   chaveDePerfil,
   classificarCandidato,
+  evidenciaDoPerfil,
+  familiaDePeca,
   explicarLinha,
   margemPct,
   montarPlanoDetalhado,
@@ -188,5 +190,84 @@ describe('margemPct', () => {
 
   it('preço zero não vira divisão por zero', () => {
     expect(margemPct(0, 100)).toBe(0);
+  });
+});
+
+/**
+ * A PONTE DE VOCABULÁRIO — o defeito que a primeira execução do modo feira
+ * expôs, e que teria ido a produção sem barulho.
+ *
+ * O histórico da rede vem do CDS e diz "OCULOS DE SOL" / "ARMACOES". A oferta
+ * do fornecedor vem da planilha dele e diz "SOLAR" / "ARMACAO". São a mesma
+ * coisa, nunca casam por texto, e o efeito medido foi 100% da coleção caindo
+ * no balde de aposta — o plano dizendo que a compra inteira é especulação.
+ *
+ * É a terceira vez que esta base tropeça em dois vocabulários tratados como
+ * um: a grife contra o fornecedor, o mix por nome de loja contra o id, e agora
+ * o tipo da peça.
+ */
+describe('familiaDePeca · dois vocabulários, uma chave', () => {
+  it('o CDS e o fornecedor chegam à MESMA família', () => {
+    expect(familiaDePeca('OCULOS DE SOL')).toBe(familiaDePeca('SOLAR'));
+    expect(familiaDePeca('ARMACOES')).toBe(familiaDePeca('ARMACAO'));
+    // E com acento, que é como o ERP às vezes devolve.
+    expect(familiaDePeca('Óculos de Sol')).toBe('solar');
+    expect(familiaDePeca('Armações')).toBe('armacao');
+  });
+
+  it('não confunde famílias diferentes', () => {
+    // "SOLAR" e "ARMACAO" precisam continuar separados: o perfil de um não
+    // pode servir de lastro para o outro.
+    expect(familiaDePeca('SOLAR')).not.toBe(familiaDePeca('ARMACAO'));
+    expect(familiaDePeca('LENTES')).toBe('lente');
+    expect(familiaDePeca('RELOGIOS')).toBe('relogio');
+  });
+
+  it('vocabulário desconhecido cai em si mesmo, sem inventar', () => {
+    // Duas planilhas que usem o mesmo termo estranho continuam casando entre
+    // si; nenhuma delas é forçada para dentro de uma família que não é a sua.
+    expect(familiaDePeca('JOALHERIA')).toBe('joalheria');
+    expect(familiaDePeca('')).toBe('');
+    expect(familiaDePeca(null)).toBe('');
+  });
+
+  it('a chave de perfil degrada de gênero para tipo', () => {
+    /*
+     * A outra metade do mesmo defeito. A oferta do fornecedor SABE o gênero
+     * (é o catálogo dele); o histórico da rede quase nunca sabe — 4.339 de 61
+     * mil peças têm ficha. Exigir casamento exato compara um lado que sabe com
+     * outro que não sabe, e nunca casa.
+     */
+    const perfil: PerfilQueVende = {
+      porTipoGenero: new Map([[chaveDePerfil('OCULOS DE SOL', null), 400]]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    // Com gênero: não casa exato, mas o tipo casa — meia evidência, e vale.
+    expect(evidenciaDoPerfil('SOLAR', 'Masculino', perfil)).toBeGreaterThan(0);
+    // Casar nos dois vale MAIS que casar só no tipo: o gênero é informação.
+    const comAmbos: PerfilQueVende = {
+      porTipoGenero: new Map([
+        [chaveDePerfil('OCULOS DE SOL', null), 400],
+        [chaveDePerfil('OCULOS DE SOL', 'Masculino'), 400],
+      ]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    expect(evidenciaDoPerfil('SOLAR', 'Masculino', comAmbos)).toBeGreaterThan(
+      evidenciaDoPerfil('SOLAR', 'Masculino', perfil),
+    );
+  });
+
+  it('peça de coleção nova com perfil conhecido é LANÇAMENTO, não aposta', () => {
+    // A invariante que sustenta o modo feira. Numa feira toda peça tem
+    // `unitsSold: 0`; se isso bastasse, a compra inteira viraria especulação.
+    const perfil: PerfilQueVende = {
+      porTipoGenero: new Map([[chaveDePerfil('OCULOS DE SOL', null), 400]]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    const nova = peca({ unitsSold: 0, tipo: 'SOLAR', genero: 'Masculino' });
+    expect(classificarCandidato(nova, perfil)).toBe('lancamento');
   });
 });

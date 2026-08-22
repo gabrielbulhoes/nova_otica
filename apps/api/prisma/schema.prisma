@@ -857,3 +857,84 @@ model ProductAttribute {
   @@index([genero])
   @@index([marcaCatalogo])
 }
+
+/// UMA FEIRA — o evento de compra de uma coleção junto a um fornecedor.
+///
+/// O modo contínuo planeja sobre o catálogo que a rede já vende. A feira é o
+/// contrário: quase toda peça da oferta NUNCA foi vendida aqui, porque é
+/// coleção nova. A evidência não pode vir da peça; vem do PERFIL dela — se
+/// piloto masculino em Havana já é o que sai, a aderência é real.
+///
+/// O CONCORRENTE GUARDA ISTO NO NAVEGADOR: "seus lançamentos ficam neste
+/// navegador durante a feira". É `localStorage` — monousuário, sem histórico,
+/// e some se alguém limpar o cache no meio de uma compra de seis dígitos.
+/// Persistir é a diferença barata que ninguém percebe até o dia em que percebe.
+model PurchaseFair {
+  id String @id @default(cuid())
+
+  /// Quem vende (Safilo, Luxottica) e o nome da coleção ("Safilo 2026").
+  supplier   String
+  collection String
+
+  /// A JANELA DE VENDA, como o comprador pensa: quando a mercadoria chega e
+  /// até quando ela precisa girar. O modo contínuo usa meses; aqui são datas,
+  /// porque uma feira é um evento com calendário — "Set 2026 → Mar 2027".
+  arrivesAt DateTime?
+  targetAt  DateTime?
+
+  /// Os parâmetros do plano. Guardados no evento para que reabrir a feira
+  /// devolva o MESMO plano — e não o de hoje sobre a oferta de outrora.
+  floorUnits Int    @default(0)
+  risk       String @default("equilibrado")
+
+  /// ABERTA enquanto se compra; FECHADA quando a compra terminou.
+  status String @default("ABERTA")
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  offers PurchaseFairOffer[]
+
+  @@index([status])
+  @@index([supplier])
+}
+
+/// UMA PEÇA DA OFERTA do fornecedor, e o que o comprador de fato levou dela.
+///
+/// Vem da planilha do fornecedor — SKU, grife, tipo, gênero, formato, cor,
+/// custo e preço. É o universo de candidatos do plano da feira.
+///
+/// `bought` é o registro da compra REAL, lançado linha a linha no balcão. É o
+/// dado mais caro do evento inteiro: o plano se recalcula a qualquer momento a
+/// partir da oferta, mas o que o comprador decidiu levar não se recalcula.
+model PurchaseFairOffer {
+  id     String       @id @default(cuid())
+  fairId String
+  fair   PurchaseFair @relation(fields: [fairId], references: [id], onDelete: Cascade)
+
+  sku         String
+  description String
+  /// A GRIFE (Ray-Ban, David Beckham), nunca o fornecedor — a mesma regra do
+  /// resto do motor.
+  brand       String
+  /// SOLAR · ARMACAO
+  tipo        String?
+  genero      String?
+  formato     String?
+  cor         String?
+
+  unitCost  Decimal @db.Decimal(12, 2)
+  unitPrice Decimal @db.Decimal(12, 2)
+
+  /// Unidades efetivamente compradas. Nunca é recalculado.
+  bought Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// O SKU identifica a peça DENTRO da feira: a mesma referência pode voltar
+  /// numa coleção seguinte com outro preço.
+  @@unique([fairId, sku])
+  @@index([fairId, brand])
+}
