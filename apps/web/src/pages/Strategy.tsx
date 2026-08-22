@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getCommercialStrategy } from '../api/client';
-import type { RiskProfile, StrategySegment } from '../api/client';
-import { AberturaDeSecao, Loading, PageHeader, Selo, StatCard, Unidade } from '../components/ui';
+import type { LinhaDoPlano, PlanoDetalhado, RiskProfile, StrategySegment } from '../api/client';
+import { AberturaDeSecao, Botao, Loading, PageHeader, Selo, StatCard, Unidade } from '../components/ui';
 import { Icon } from '../brand/Icon';
 
 /**
@@ -248,6 +248,303 @@ export function Strategy() {
           )}
         </div>
       </div>
+
+      {/* ── O PLANO DETALHADO ──
+          Os cartões acima param em "quanto". Daqui para baixo é "o quê" e
+          "para onde" — a distância entre "compre 900 peças" e "compre 16 do
+          DB99 Voyager, 6 para Guarabira". */}
+      {s?.detalhe && <PlanoDeCompra plano={s.detalhe} segments={s.segments} />}
+    </>
+  );
+}
+
+// ─── O plano DETALHADO — o que comprar, e para onde ─────────────────────────
+//
+// "ele sugere a compra, mas ele não sugere como distribuir isso pra por loja.
+//  É isso que a gente precisa sacar."
+//
+// Os três cartões acima respondem QUANTO. Daqui para baixo é O QUÊ e PARA
+// ONDE, na hierarquia que o cliente usa para pensar a compra:
+// Marca → Tipo → Gênero → SKU.
+
+type Agrupado = { chave: string; units: number; linhas: LinhaDoPlano[]; filhos?: Agrupado[] };
+
+/** Agrupa linhas por uma chave, somando unidades e ordenando por volume. */
+function agrupar(linhas: LinhaDoPlano[], chave: (l: LinhaDoPlano) => string): Agrupado[] {
+  const m = new Map<string, LinhaDoPlano[]>();
+  for (const l of linhas) {
+    const k = chave(l) || '—';
+    (m.get(k) ?? m.set(k, []).get(k)!).push(l);
+  }
+  return [...m.entries()]
+    .map(([k, ls]) => ({ chave: k, units: ls.reduce((a, x) => a + x.units, 0), linhas: ls }))
+    .sort((a, b) => b.units - a.units || a.chave.localeCompare(b.chave, 'pt-BR'));
+}
+
+/** Uma peça do plano, com o porquê que abre ao clicar. */
+function LinhaDeSku({ linha }: { linha: LinhaDoPlano }) {
+  const [aberto, setAberto] = useState(false);
+  const c = linha.candidato;
+  return (
+    <>
+      <tr>
+        <td>
+          <Botao
+            variante="discreto"
+            pequeno
+            icone={aberto ? 'chevron-baixo' : 'chevron-direita'}
+            onClick={() => setAberto((v) => !v)}
+            aria-expanded={aberto}
+          >
+            {c.description}
+          </Botao>
+        </td>
+        <td className="num">
+          <strong>{linha.units}</strong>
+          <Unidade>un.</Unidade>
+        </td>
+        {/* A margem fica ao lado da quantidade porque é o par que o comprador
+            lê junto — quanto levar e quanto sobra. */}
+        <td className="num">{linha.margemPct.toLocaleString('pt-BR')}%</td>
+        <td>
+          {linha.lojas && linha.lojas.length > 0 ? (
+            <span className="muted" style={{ fontSize: 12 }}>
+              {linha.lojas.length} {linha.lojas.length === 1 ? 'loja' : 'lojas'}
+            </span>
+          ) : (
+            <span className="muted" style={{ fontSize: 12 }}>—</span>
+          )}
+        </td>
+      </tr>
+      {aberto && (
+        <tr>
+          <td colSpan={4} style={{ background: 'var(--panel-2)' }}>
+            {/* O PORQUÊ. É a diferença entre um número e uma decisão — e é
+                onde o concorrente entrega log de máquina ao comprador. */}
+            <p style={{ margin: '4px 0 10px', lineHeight: 1.55 }}>{linha.porque}</p>
+            {linha.lojas && linha.lojas.length > 0 && (
+              <table style={{ marginTop: 4 }}>
+                <thead>
+                  <tr>
+                    <th>Loja</th>
+                    <th className="num">Recebe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {linha.lojas.map((r) => (
+                    <tr key={r.storeId}>
+                      <td>{r.storeName}</td>
+                      <td className="num">
+                        <strong>{r.suggestedQty}</strong>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {linha.semLoja != null && linha.semLoja > 0 && (
+              <p className="hint" style={{ marginTop: 8 }}>
+                {linha.semLoja} un. sem loja definida — nenhuma filial elegível está abaixo do alvo
+                de cobertura desta peça. Ficam para divisão manual.
+              </p>
+            )}
+            {linha.excludedByMix && linha.excludedByMix.length > 0 && (
+              <p className="hint" style={{ marginTop: 6 }}>
+                Fora da divisão por não trabalharem a grife: {linha.excludedByMix.join(', ')}.
+              </p>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/** Um nível da hierarquia que abre para o próximo. */
+function Nivel({
+  titulo,
+  units,
+  detalhe,
+  children,
+}: {
+  titulo: string;
+  units: number;
+  detalhe?: string;
+  children: ReactNode;
+}) {
+  const [aberto, setAberto] = useState(false);
+  return (
+    <div className="card" style={{ padding: 0, marginBottom: 6 }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={aberto}
+        onClick={() => setAberto((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') setAberto((v) => !v);
+        }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 14px',
+          cursor: 'pointer',
+        }}
+      >
+        <Icon name={aberto ? 'chevron-baixo' : 'chevron-direita'} size={16} style={{ color: 'var(--muted)' }} />
+        <strong style={{ flex: 1, minWidth: 0 }}>{titulo}</strong>
+        {detalhe && <span className="muted" style={{ fontSize: 12 }}>{detalhe}</span>}
+        <span style={{ whiteSpace: 'nowrap' }}>
+          <strong>{fmt(units)}</strong>
+          <Unidade>un.</Unidade>
+        </span>
+      </div>
+      {aberto && <div style={{ padding: '0 14px 12px' }}>{children}</div>}
+    </div>
+  );
+}
+
+/** O plano de um segmento, na hierarquia Marca → Tipo → Gênero → SKU. */
+function SegmentoDoPlano({ linhas }: { linhas: LinhaDoPlano[] }) {
+  if (linhas.length === 0) {
+    return (
+      <div className="empty">
+        Nenhuma peça entrou neste cenário — veja o motivo declarado acima.
+      </div>
+    );
+  }
+  return (
+    <>
+      {agrupar(linhas, (l) => l.candidato.brand).map((marca) => (
+        <Nivel
+          key={marca.chave}
+          titulo={marca.chave}
+          units={marca.units}
+          detalhe={`${marca.linhas.length} ${marca.linhas.length === 1 ? 'linha' : 'linhas'}`}
+        >
+          {agrupar(marca.linhas, (l) => l.candidato.tipo ?? '—').map((tipo) => (
+            <Nivel key={tipo.chave} titulo={tipo.chave} units={tipo.units}>
+              {agrupar(tipo.linhas, (l) => l.candidato.genero ?? 'Sem gênero na ficha').map((gen) => (
+                <Nivel key={gen.chave} titulo={gen.chave} units={gen.units}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Peça</th>
+                        <th className="num">Comprar</th>
+                        <th className="num">Margem</th>
+                        <th>Destino</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {gen.linhas.map((l) => (
+                        <LinhaDeSku key={`${l.segmento}-${l.candidato.id}`} linha={l} />
+                      ))}
+                    </tbody>
+                  </table>
+                </Nivel>
+              ))}
+            </Nivel>
+          ))}
+        </Nivel>
+      ))}
+    </>
+  );
+}
+
+/**
+ * O bloco inteiro do plano: as três abas, a visão por loja e o motivo do que
+ * não coube.
+ */
+export function PlanoDeCompra({ plano, segments }: { plano: PlanoDetalhado; segments: StrategySegment[] }) {
+  const [aba, setAba] = useState<StrategySegment['key'] | 'lojas'>('best-seller');
+  const rotulo = new Map(segments.map((s) => [s.key, s.label]));
+  const doSegmento = (k: StrategySegment['key']) =>
+    plano.segmentos.find((s) => s.segmento === k);
+
+  return (
+    <>
+      <AberturaDeSecao
+        eyebrow="Plano de compra"
+        titulo="O que comprar, e para onde vai"
+        descricao="A divisão do piso em peças concretas, na ordem em que a compra se pensa: grife, tipo, gênero e modelo. Clique em qualquer linha para ver por que ela entrou e quanto vai para cada loja."
+        acoes={
+          <Selo tom="gray" icone="ideia" title="Peças analisadas para montar este plano.">
+            {fmt(plano.candidatosExaminados)} de {fmt(plano.universo)} peças
+          </Selo>
+        }
+      />
+
+      {/* O MOTIVO vem ANTES da lista, não depois.
+          Plano curto sem explicação é lido como tela quebrada — foi o que
+          aconteceu com a aba de distribuição, que existia e abria vazia. */}
+      {plano.motivo && (
+        <div className="banner" style={{ alignItems: 'flex-start' }}>
+          <Icon name="informacao" size={18} style={{ marginTop: 2, color: 'var(--muted)' }} />
+          <span className="muted">{plano.motivo}</span>
+        </div>
+      )}
+
+      <div className="segmented" role="group" aria-label="Cenário" style={{ marginBottom: 12 }}>
+        {segments.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            className={aba === s.key ? 'active' : ''}
+            onClick={() => setAba(s.key)}
+            aria-pressed={aba === s.key}
+          >
+            {s.label} · {fmt(doSegmento(s.key)?.alocado ?? 0)}
+          </button>
+        ))}
+        {/* A VISÃO POR LOJA é uma aba irmã, não um apêndice: é a leitura de
+            quem monta o malote, e foi a metade que faltou três rodadas. */}
+        <button
+          type="button"
+          className={aba === 'lojas' ? 'active' : ''}
+          onClick={() => setAba('lojas')}
+          aria-pressed={aba === 'lojas'}
+        >
+          Por loja · {plano.porLoja.length}
+        </button>
+      </div>
+
+      {aba === 'lojas' ? (
+        <div className="card" style={{ padding: 0 }}>
+          {plano.porLoja.length === 0 ? (
+            <div className="empty">Nenhuma peça foi endereçada a loja alguma neste plano.</div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Loja</th>
+                  <th className="num">Recebe deste plano</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plano.porLoja.map((l) => (
+                  <tr key={l.storeId}>
+                    <td>{l.storeName}</td>
+                    <td className="num">
+                      <strong>{fmt(l.units)}</strong>
+                      <Unidade>un.</Unidade>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 8 }}>
+            <span className="hint">
+              {rotulo.get(aba)} · meta {fmt(doSegmento(aba)?.meta ?? 0)} un. · alocado{' '}
+              {fmt(doSegmento(aba)?.alocado ?? 0)} un.
+            </span>
+          </div>
+          <SegmentoDoPlano linhas={doSegmento(aba)?.linhas ?? []} />
+        </>
+      )}
     </>
   );
 }

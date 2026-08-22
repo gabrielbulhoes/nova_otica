@@ -34,6 +34,10 @@ import {
   recortePedido,
   splitByNeed,
   NEED_BASIS_LABEL,
+  chaveDePerfil,
+  explicarLinha,
+  margemPct,
+  montarPlanoDetalhado,
   DECISION_PRIORITIES,
   DECISION_TYPES,
   DEFAULT_PLANNING_CONFIG,
@@ -42,6 +46,7 @@ import {
   LINHAS_POR_PAGINA,
   TETO_DE_CARDS,
   TETO_DE_LINHAS,
+  type CandidatoDeCompra,
   type AbcItem,
   type BrandBannerInput,
   type FairSplitInput,
@@ -2227,10 +2232,106 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     const windowMonths = Math.trunc(Number(one(params.window))) || 9;
     const r = one(params.risk);
     const risk = r === 'conservador' || r === 'agressivo' ? r : 'equilibrado';
-    return buildCommercialStrategy(
-      planningPlans(planDays, one(params.storeId), 'principal'),
-      { floorUnits, windowMonths, risk },
+    const ps = planningPlans(planDays, one(params.storeId), 'principal');
+    const estrategia = buildCommercialStrategy(ps, { floorUnits, windowMonths, risk });
+
+    /*
+     * O PLANO DETALHADO também na demo — Segmento → Marca → Tipo → Gênero →
+     * SKU, com a divisão por loja.
+     *
+     * É a entrega que responde "ele não sugere como distribuir isso pra por
+     * loja", e é justamente onde o cliente vai olhar antes de confiar. Um
+     * módulo que só existe na produção faria a demonstração mostrar a versão
+     * antiga do produto — a segunda verdade que este arquivo passou rodadas
+     * inteiras tentando não ser.
+     */
+    const candidatos: CandidatoDeCompra[] = ps.map((p) => ({
+      id: p.productId,
+      sku: p.productId,
+      description: p.description,
+      brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
+      tipo: p.category,
+      // A demo não carrega ficha de fornecedor; o gênero sai nulo e a
+      // hierarquia mostra "Sem gênero na ficha" — que é a verdade dela.
+      genero: null,
+      formato: null,
+      cor: null,
+      unitCost: p.unitCost,
+      unitPrice: p.unitPrice,
+      unitsSold: p.unitsSold,
+      currentStock: p.currentStock,
+      coberturaDaGrifeMeses: p.coverageDays === null ? null : Math.round((p.coverageDays / 30) * 10) / 10,
+      absorcao: p.unitsSold > 0 ? Math.max(0, Math.round(p.targetStock - p.currentStock)) : null,
+    }));
+
+    const porTipoGenero = new Map<string, number>();
+    for (const c of candidatos) {
+      if (c.unitsSold <= 0) continue;
+      const k = chaveDePerfil(c.tipo, c.genero);
+      porTipoGenero.set(k, (porTipoGenero.get(k) ?? 0) + c.unitsSold);
+    }
+    const perfil = { porTipoGenero, porFormato: new Map<string, number>(), porCor: new Map<string, number>() };
+    const metas = Object.fromEntries(estrategia.segments.map((s) => [s.key, s.units])) as Record<
+      'best-seller' | 'lancamento' | 'aposta',
+      number
+    >;
+    const comPreco = candidatos.filter((c) => c.unitPrice > 0);
+    const margemMedia = comPreco.length
+      ? Math.round((comPreco.reduce((a, c) => a + margemPct(c.unitPrice, c.unitCost), 0) / comPreco.length) * 10) / 10
+      : null;
+
+    const plano = montarPlanoDetalhado(candidatos, metas, perfil, (c, seg, units) =>
+      explicarLinha(c, seg, units, { margemMedia }),
     );
+
+    // A divisão por loja, pela MESMA regra da produção (`splitByNeed`).
+    const linhasPlanas = plano.segmentos.flatMap((s) => s.linhas);
+    const porLoja = new Map<string, { storeId: string; storeName: string; units: number }>();
+    const comDestino = new Map<string, unknown>();
+    for (const l of linhasPlanas) {
+      const candidatas = stores.map((st) => ({
+        storeId: st.id,
+        storeName: st.name,
+        unitsSold: soldQty.get(key(st.id, l.candidato.id)) ?? 0,
+        stockUnits: stockQty.get(key(st.id, l.candidato.id)) ?? 0,
+      }));
+      const elegiveis = candidatas.filter((x) => demoLojaTrabalhaAGrife(l.candidato.brand, x.storeId));
+      const excluidas = candidatas.filter((x) => !demoLojaTrabalhaAGrife(l.candidato.brand, x.storeId));
+      const rateio = splitByNeed(elegiveis, l.units, planDays);
+      const linhas = rateio.rows.filter((r) => r.suggestedQty > 0);
+      for (const r of linhas) {
+        const atual = porLoja.get(r.storeId) ?? { storeId: r.storeId, storeName: r.storeName, units: 0 };
+        atual.units += r.suggestedQty;
+        porLoja.set(r.storeId, atual);
+      }
+      comDestino.set(`${l.segmento}:${l.candidato.id}`, {
+        ...l,
+        lojas: linhas,
+        semLoja: l.units - linhas.reduce((a, r) => a + r.suggestedQty, 0),
+        ...(excluidas.length > 0 ? { excludedByMix: excluidas.map((e) => e.storeName) } : {}),
+      });
+    }
+
+    return {
+      ...estrategia,
+      detalhe: {
+        ...plano,
+        segmentos: plano.segmentos.map((s) => ({
+          ...s,
+          linhas: s.linhas.map((l) => comDestino.get(`${s.segmento}:${l.candidato.id}`) ?? l),
+        })),
+        porLoja: [...porLoja.values()].sort((a, b) => b.units - a.units),
+        days: planDays,
+        candidatosExaminados: candidatos.length,
+        universo: ps.length,
+        truncado: false,
+        motivo:
+          plano.naoAlocado > 0
+            ? `${plano.naoAlocado} un. do piso não foram alocadas: as peças analisadas já estão no ` +
+              'alvo de cobertura ou não têm histórico que sustente a compra.'
+            : '',
+      },
+    };
   }
   if (url === '/planning/rebalance') {
     return rebalanceRows();
