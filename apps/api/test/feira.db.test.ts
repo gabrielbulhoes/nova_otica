@@ -85,14 +85,13 @@ d('feira de compra (integração com Postgres)', () => {
   });
 
   it('a divisão por loja fecha contra as unidades da linha', async () => {
+    // Sem cast: `planoDaFeira` declara o tipo da linha com destino. O cast que
+    // estava aqui escondia que o serviço devolvia `unknown` — e o disfarce só
+    // caiu no CI, onde o typecheck inclui a pasta de testes.
     const r = await planoDaFeira(fairId);
-    const linhas = r.detalhe.segmentos.flatMap((s) => s.linhas) as (typeof r.detalhe.segmentos[number]['linhas'][number] & {
-      lojas?: { suggestedQty: number }[];
-      semLoja?: number;
-    })[];
-    for (const l of linhas) {
-      const paraLojas = (l.lojas ?? []).reduce((a, x) => a + x.suggestedQty, 0);
-      expect(paraLojas + (l.semLoja ?? 0)).toBe(l.units);
+    for (const l of r.detalhe.segmentos.flatMap((s) => s.linhas)) {
+      const paraLojas = l.lojas.reduce((a, x) => a + x.suggestedQty, 0);
+      expect(paraLojas + l.semLoja).toBe(l.units);
     }
   });
 

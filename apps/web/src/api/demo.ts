@@ -344,8 +344,14 @@ const SKUS_DE_CONTINUIDADE = (() => {
     const productId = chave.slice(chave.indexOf(':') + 1);
     vendidoPor.set(productId, (vendidoPor.get(productId) ?? 0) + qtd);
   }
+  // Pela FAMÍLIA, não por regex sobre o rótulo cru: o dataset fictício escreve
+  // "Armação" e "Óculos de Sol", o agregado real escreve "ARMACAO" e "OCULOS",
+  // e um `/ARMACAO|OCULOS/i` casa com o segundo e falha no primeiro por causa
+  // do acento — a lista sairia vazia e o casamento por SKU nunca rodaria.
+  const daFamilia = (categoria: string | null | undefined) =>
+    ['solar', 'armacao'].includes(familiaDePeca(categoria));
   return products
-    .filter((p) => p.sku && /ARMACAO|OCULOS/i.test(p.category ?? '') && (vendidoPor.get(p.id) ?? 0) > 0)
+    .filter((p) => p.sku && daFamilia(p.category) && (vendidoPor.get(p.id) ?? 0) > 0)
     .sort((a, b) => (vendidoPor.get(b.id) ?? 0) - (vendidoPor.get(a.id) ?? 0))
     .slice(0, 14)
     .map((p) => p.sku as string);

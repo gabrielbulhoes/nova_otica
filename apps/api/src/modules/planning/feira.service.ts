@@ -13,6 +13,7 @@ import {
   normBrandKey,
   splitByNeed,
   type CandidatoDeCompra,
+  type LinhaDoPlano,
   type PerfilQueVende,
   type SegmentoDoPlano,
 } from './planning.math.js';
@@ -39,6 +40,28 @@ import { plans, posicoesPorLoja } from './planning.service.js';
 
 /** Janela em dias entre a chegada e o alvo, para o rateio por loja. */
 const JANELA_PADRAO_DIAS = 180;
+
+/**
+ * Uma linha do plano com o destino resolvido.
+ *
+ * Existe como TIPO, e não como `unknown` num mapa, porque quem consome o plano
+ * — a tela e os testes — precisa enxergar `units` e `lojas`. Com `unknown` o
+ * TypeScript degrada a união inteira para `{}` e a asserção mais básica do
+ * teste ("nenhuma linha passa do teto") deixa de compilar; foi assim que a
+ * suíte da feira quebrou no CI depois de passar aqui.
+ */
+type LinhaComDestino = LinhaDoPlano & {
+  /** Quanto cada loja recebe desta linha. */
+  lojas: RateioDeLoja[];
+  /** Unidades que nenhuma loja elegível reclamou — declaradas, nunca sumidas. */
+  semLoja: number;
+  /** O que já foi lançado no balcão para esta peça. */
+  comprado: number;
+  /** Lojas fora da divisão por não trabalharem a grife. */
+  excludedByMix?: string[];
+};
+
+type RateioDeLoja = ReturnType<typeof splitByNeed>['rows'][number];
 
 /** O histórico da rede que serve de lastro para uma coleção que ninguém vendeu. */
 export async function perfilDaRede(days = 365) {
@@ -197,7 +220,7 @@ export async function planoDaFeira(fairId: string) {
   // sugeri 16, levei 20.
   const compradoPorOferta = new Map(feira.offers.map((o) => [o.id, o.bought]));
 
-  const comDestino = new Map<string, unknown>();
+  const comDestino = new Map<string, LinhaComDestino>();
   for (const seg of plano.segmentos) {
     for (const l of seg.linhas) {
       const candidatas = porGrife.get(normBrandKey(l.candidato.brand)) ?? [];
@@ -250,7 +273,19 @@ export async function planoDaFeira(fairId: string) {
       ...plano,
       segmentos: plano.segmentos.map((s) => ({
         ...s,
-        linhas: s.linhas.map((l) => comDestino.get(`${s.segmento}:${l.candidato.id}`) ?? l),
+        // O laço acima insere UMA entrada por linha, então o destino existe
+        // sempre. O fallback fica explícito em vez de `?? l`: com o `??` o tipo
+        // vira uma união em que metade não tem `lojas`, e todo consumidor passa
+        // a precisar de cast — que foi exatamente o que escondeu o `unknown`.
+        linhas: s.linhas.map(
+          (l) =>
+            comDestino.get(`${s.segmento}:${l.candidato.id}`) ?? {
+              ...l,
+              lojas: [],
+              semLoja: l.units,
+              comprado: compradoPorOferta.get(l.candidato.id) ?? 0,
+            },
+        ),
       })),
       porLoja: [...porLoja.values()].sort((a, b) => b.units - a.units),
       days: JANELA_PADRAO_DIAS,
