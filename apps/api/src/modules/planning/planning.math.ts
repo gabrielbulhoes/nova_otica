@@ -3826,8 +3826,104 @@ export interface PerfilQueVende {
   porCor: ReadonlyMap<string, number>;
 }
 
+/**
+ * A FAMÍLIA DA PEÇA — a ponte entre dois vocabulários que não se falam.
+ *
+ * O histórico da rede vem do CDS e diz "OCULOS DE SOL" e "ARMACOES". A oferta
+ * do fornecedor vem da planilha dele e diz "SOLAR" e "ARMACAO". São a mesma
+ * coisa e nunca casariam por texto — medido na primeira execução do modo
+ * feira: 100% da coleção caiu no balde de aposta porque nenhum tipo bateu.
+ *
+ * É a mesma armadilha que já custou duas entregas aqui — a grife contra o
+ * fornecedor, o mix por nome de loja contra o id — e a resposta é sempre a
+ * mesma: reduzir os dois lados a uma chave canônica em vez de comparar as
+ * strings que cada sistema escolheu usar.
+ *
+ * Vocabulário desconhecido cai em si mesmo, normalizado: duas planilhas que
+ * usem o mesmo termo estranho continuam casando entre si, e nada é inventado.
+ */
+export function familiaDePeca(tipo: string | null | undefined): string {
+  const t = normCategory(tipo ?? '');
+  if (!t) return '';
+  // O ACESSÓRIO vem primeiro por causa de "PORTA OCULOS": ele contém "oculos"
+  // e cairia na regra de eliminação lá embaixo, virando um óculos de sol.
+  if (/porta.?oculos|acess|estojo|\bcase\b|cordao|flanela|lenco/.test(t)) return 'acessorio';
+  if (/\bsol\b|solar|\bsun\b/.test(t)) return 'solar';
+  if (/armac|\bgrau\b|\brx\b|optic|acetato/.test(t)) return 'armacao';
+  if (/relog|watch/.test(t)) return 'relogio';
+  if (/lente|lens/.test(t)) return 'lente';
+  /*
+   * "OCULOS", sozinho, É SOLAR — por eliminação, e medido no catálogo da rede.
+   *
+   * O cadastro da A GRACIOSA não usa "óculos de sol": ele tem OCULOS (196
+   * peças) e ARMACAO (244) como categorias irmãs, e o conteúdo decide qual é
+   * qual — em OCULOS estão RB3548NL, RB4473D, RB4441D (as faixas 3xxx/4xxx da
+   * Ray-Ban são solares), enquanto ARMACAO guarda RY1603L e MU05VV, que são de
+   * grau. Havendo um balde próprio para armação, o balde "óculos" só pode ser
+   * o solar.
+   *
+   * Sem esta linha, toda peça solar de uma oferta de fornecedor procura
+   * "solar|" num histórico arquivado em "oculos|", não encontra lastro nenhum e
+   * cai em aposta — o mesmo defeito que a ponte acima existe para corrigir,
+   * sobrevivendo numa quarta grafia. Vem DEPOIS de armação e de grau de
+   * propósito: "oculos de grau" já saiu classificado três linhas acima.
+   */
+  if (/\boculos\b/.test(t)) return 'solar';
+  return t;
+}
+
 export const chaveDePerfil = (tipo: string | null, genero: string | null): string =>
-  `${normCategory(tipo ?? '')}|${normCategory(genero ?? '')}`;
+  `${familiaDePeca(tipo)}|${normCategory(genero ?? '')}`;
+
+/**
+ * As famílias que TÊM giro no histórico da rede.
+ *
+ * Existe para que a ponte acima falhe ALTO em vez de baixo. Cada grafia nova
+ * que ela não reconhece produz o mesmo sintoma silencioso — a peça não acha
+ * lastro, vira aposta, e o plano informa que a compra é especulação sem dizer
+ * que na verdade não conseguiu ler o tipo. Já aconteceu quatro vezes nesta
+ * base, e a quinta grafia não vai ser prevista por regex nenhuma: o que
+ * generaliza é comparar as famílias da oferta com estas e DIZER quando não se
+ * encontram.
+ */
+export function familiasComGiro(perfil: PerfilQueVende): Set<string> {
+  const s = new Set<string>();
+  for (const [chave, unidades] of perfil.porTipoGenero) {
+    if (unidades > 0) s.add(chave.split('|')[0] ?? '');
+  }
+  s.delete('');
+  return s;
+}
+
+/**
+ * A EVIDÊNCIA DO PERFIL, degradando: tipo+gênero primeiro, tipo sozinho depois.
+ *
+ * A cascata não é refinamento — sem ela o modo feira não funciona, e o teste
+ * de integração provou isso na primeira execução: a coleção INTEIRA caiu no
+ * balde de aposta.
+ *
+ * O motivo é a assimetria dos dados. A oferta do fornecedor vem com gênero
+ * (é o catálogo dele, bem preenchido); o histórico da rede vem do CDS, que
+ * não tem gênero — só 4.339 das 61 mil peças ganharam ficha, e as demais
+ * entram no perfil com gênero nulo. Exigir casamento exato compara um lado
+ * que sabe o gênero com outro que não sabe, e nunca casa.
+ *
+ * "SOLAR masculino já vende" é o sinal forte. "SOLAR já vende" é mais fraco e
+ * ainda assim REAL — e é infinitamente melhor que declarar especulação uma
+ * peça cujo tipo é o que mais sai da rede.
+ */
+export function evidenciaDoPerfil(
+  tipo: string | null,
+  genero: string | null,
+  perfil: PerfilQueVende,
+): number {
+  const comGenero = perfil.porTipoGenero.get(chaveDePerfil(tipo, genero)) ?? 0;
+  if (comGenero > 0) return comGenero;
+  // Só o tipo. Meia evidência vale meio peso: o gênero é informação de verdade
+  // quando existe, e quem casa nos dois não pode empatar com quem casa em um.
+  const soTipo = perfil.porTipoGenero.get(chaveDePerfil(tipo, null)) ?? 0;
+  return soTipo * 0.5;
+}
 
 /**
  * Classifica um candidato nos três segmentos do cliente.
@@ -3843,8 +3939,7 @@ export const chaveDePerfil = (tipo: string | null, genero: string | null): strin
  */
 export function classificarCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): SegmentoDoPlano {
   if (c.unitsSold > 0) return 'best-seller';
-  const doPerfil = perfil.porTipoGenero.get(chaveDePerfil(c.tipo, c.genero)) ?? 0;
-  if (doPerfil > 0) return 'lancamento';
+  if (evidenciaDoPerfil(c.tipo, c.genero, perfil) > 0) return 'lancamento';
   return 'aposta';
 }
 
@@ -3867,7 +3962,7 @@ export function pesoDoCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): n
       // A peça é nova; quem tem lastro é o PERFIL. Multiplicamos os três
       // sinais em vez de somar: um piloto masculino numa cor que não sai não
       // deve herdar o peso inteiro do "masculino".
-      const base = perfil.porTipoGenero.get(chaveDePerfil(c.tipo, c.genero)) ?? 0;
+      const base = evidenciaDoPerfil(c.tipo, c.genero, perfil);
       const fFormato = c.formato ? 1 + (perfil.porFormato.get(normCategory(c.formato)) ?? 0) : 1;
       const fCor = c.cor ? 1 + (perfil.porCor.get(normCategory(c.cor)) ?? 0) : 1;
       return base * Math.log1p(fFormato) * Math.log1p(fCor);

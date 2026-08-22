@@ -3,6 +3,9 @@ import {
   TETO_POR_LINHA_PCT,
   chaveDePerfil,
   classificarCandidato,
+  evidenciaDoPerfil,
+  familiaDePeca,
+  familiasComGiro,
   explicarLinha,
   margemPct,
   montarPlanoDetalhado,
@@ -188,5 +191,142 @@ describe('margemPct', () => {
 
   it('preço zero não vira divisão por zero', () => {
     expect(margemPct(0, 100)).toBe(0);
+  });
+});
+
+/**
+ * A PONTE DE VOCABULÁRIO — o defeito que a primeira execução do modo feira
+ * expôs, e que teria ido a produção sem barulho.
+ *
+ * O histórico da rede vem do CDS e diz "OCULOS DE SOL" / "ARMACOES". A oferta
+ * do fornecedor vem da planilha dele e diz "SOLAR" / "ARMACAO". São a mesma
+ * coisa, nunca casam por texto, e o efeito medido foi 100% da coleção caindo
+ * no balde de aposta — o plano dizendo que a compra inteira é especulação.
+ *
+ * É a terceira vez que esta base tropeça em dois vocabulários tratados como
+ * um: a grife contra o fornecedor, o mix por nome de loja contra o id, e agora
+ * o tipo da peça.
+ */
+describe('familiaDePeca · dois vocabulários, uma chave', () => {
+  it('o CDS e o fornecedor chegam à MESMA família', () => {
+    expect(familiaDePeca('OCULOS DE SOL')).toBe(familiaDePeca('SOLAR'));
+    expect(familiaDePeca('ARMACOES')).toBe(familiaDePeca('ARMACAO'));
+    // E com acento, que é como o ERP às vezes devolve.
+    expect(familiaDePeca('Óculos de Sol')).toBe('solar');
+    expect(familiaDePeca('Armações')).toBe('armacao');
+  });
+
+  it('não confunde famílias diferentes', () => {
+    // "SOLAR" e "ARMACAO" precisam continuar separados: o perfil de um não
+    // pode servir de lastro para o outro.
+    expect(familiaDePeca('SOLAR')).not.toBe(familiaDePeca('ARMACAO'));
+    expect(familiaDePeca('LENTES')).toBe('lente');
+    expect(familiaDePeca('RELOGIOS')).toBe('relogio');
+  });
+
+  it('"OCULOS" sozinho é solar — o cadastro desta rede não escreve "de sol"', () => {
+    /*
+     * A QUARTA grafia do mesmo defeito, medida no catálogo da A GRACIOSA: ele
+     * não usa "óculos de sol". Tem OCULOS (196 peças) e ARMACAO (244) como
+     * categorias irmãs, e o conteúdo decide qual é qual — RB3548NL, RB4473D e
+     * RB4441D estão em OCULOS (faixas 3xxx/4xxx da Ray-Ban são solares),
+     * enquanto RY1603L e MU05VV, de grau, estão em ARMACAO.
+     *
+     * Sem esta regra, toda peça solar de uma oferta procura "solar|" num
+     * histórico arquivado em "oculos|" e cai em aposta por não encontrar nada.
+     */
+    expect(familiaDePeca('OCULOS')).toBe('solar');
+    expect(familiaDePeca('OCULOS')).toBe(familiaDePeca('SOLAR'));
+    // Mas "de grau" continua sendo armação, e o porta-óculos continua acessório
+    // — a eliminação não pode atropelar o que já estava classificado.
+    expect(familiaDePeca('OCULOS DE GRAU')).toBe('armacao');
+    expect(familiaDePeca('PORTA OCULOS')).toBe('acessorio');
+    expect(familiaDePeca('LENCOS')).toBe('acessorio');
+  });
+
+  it('vocabulário desconhecido cai em si mesmo, sem inventar', () => {
+    // Duas planilhas que usem o mesmo termo estranho continuam casando entre
+    // si; nenhuma delas é forçada para dentro de uma família que não é a sua.
+    expect(familiaDePeca('JOALHERIA')).toBe('joalheria');
+    expect(familiaDePeca('')).toBe('');
+    expect(familiaDePeca(null)).toBe('');
+  });
+
+  it('a chave de perfil degrada de gênero para tipo', () => {
+    /*
+     * A outra metade do mesmo defeito. A oferta do fornecedor SABE o gênero
+     * (é o catálogo dele); o histórico da rede quase nunca sabe — 4.339 de 61
+     * mil peças têm ficha. Exigir casamento exato compara um lado que sabe com
+     * outro que não sabe, e nunca casa.
+     */
+    const perfil: PerfilQueVende = {
+      porTipoGenero: new Map([[chaveDePerfil('OCULOS DE SOL', null), 400]]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    // Com gênero: não casa exato, mas o tipo casa — meia evidência, e vale.
+    expect(evidenciaDoPerfil('SOLAR', 'Masculino', perfil)).toBeGreaterThan(0);
+    // Casar nos dois vale MAIS que casar só no tipo: o gênero é informação.
+    const comAmbos: PerfilQueVende = {
+      porTipoGenero: new Map([
+        [chaveDePerfil('OCULOS DE SOL', null), 400],
+        [chaveDePerfil('OCULOS DE SOL', 'Masculino'), 400],
+      ]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    expect(evidenciaDoPerfil('SOLAR', 'Masculino', comAmbos)).toBeGreaterThan(
+      evidenciaDoPerfil('SOLAR', 'Masculino', perfil),
+    );
+  });
+
+  it('peça de coleção nova com perfil conhecido é LANÇAMENTO, não aposta', () => {
+    // A invariante que sustenta o modo feira. Numa feira toda peça tem
+    // `unitsSold: 0`; se isso bastasse, a compra inteira viraria especulação.
+    const perfil: PerfilQueVende = {
+      porTipoGenero: new Map([[chaveDePerfil('OCULOS DE SOL', null), 400]]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    const nova = peca({ unitsSold: 0, tipo: 'SOLAR', genero: 'Masculino' });
+    expect(classificarCandidato(nova, perfil)).toBe('lancamento');
+  });
+});
+
+describe('familiasComGiro · a ponte falha alto, não baixo', () => {
+  /*
+   * Quatro grafias já derrubaram este módulo em silêncio. A quinta não vai ser
+   * prevista por regex nenhuma — o que generaliza é comparar as famílias dos
+   * dois lados e DECLARAR quando não se encontram, para o plano nunca informar
+   * "é tudo aposta" quando na verdade não conseguiu ler o tipo.
+   */
+  it('lista as famílias que têm giro, ignorando as zeradas', () => {
+    const perfil: PerfilQueVende = {
+      porTipoGenero: new Map([
+        [chaveDePerfil('OCULOS', null), 300],
+        [chaveDePerfil('OCULOS', 'Masculino'), 120],
+        [chaveDePerfil('ARMACAO', null), 200],
+        // Zerada não conta: uma família presente no cadastro mas sem venda
+        // nenhuma não é lastro para peça alguma.
+        [chaveDePerfil('RELOGIO', null), 0],
+      ]),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    const f = familiasComGiro(perfil);
+    expect([...f].sort()).toEqual(['armacao', 'solar']);
+    expect(f.has('relogio')).toBe(false);
+  });
+
+  it('perfil vazio não afirma que nada tem lastro', () => {
+    // A diferença entre "não há histórico" e "esta família não tem histórico" é
+    // exatamente o que o alarme precisa distinguir: com o perfil vazio não há o
+    // que comparar, e acusar vocabulário seria acusar errado.
+    const vazio: PerfilQueVende = {
+      porTipoGenero: new Map(),
+      porFormato: new Map(),
+      porCor: new Map(),
+    };
+    expect(familiasComGiro(vazio).size).toBe(0);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TETO_DE_CARDS, TETO_DE_LINHAS, analysisBrand, normBrandKey } from '@planning';
+import { TETO_DE_CARDS, TETO_DE_LINHAS, analysisBrand, familiaDePeca, normBrandKey } from '@planning';
 import { proximaPagina } from '../lib/paginacao';
 import { demoHandle, demoIdadeNaLoja } from './demo';
 
@@ -1335,5 +1335,158 @@ describe('demo: o plano de compra detalhado', () => {
     const r = estrategia(0);
     expect(r.detalhe.total).toBe(0);
     expect(r.detalhe.porLoja).toEqual([]);
+  });
+});
+
+/**
+ * A FEIRA na demonstração.
+ *
+ * O módulo só existe de verdade se o cliente puder abri-lo e ver o plano — um
+ * recurso que só roda na produção faz a demo mostrar a versão antiga do
+ * produto, que é a segunda verdade que este arquivo passou rodadas inteiras
+ * tentando não ser.
+ */
+describe('demo: feira de compra', () => {
+  const put = (url: string, body: Record<string, unknown>) =>
+    demoHandle({ method: 'PUT', url, body }) as Record<string, any>;
+  const plano = () => {
+    const feiras = get('/planning/feiras').rows as any[];
+    return get(`/planning/feiras/${feiras[0].id}`);
+  };
+  /** As famílias que TÊM giro no catálogo que a demo carregou. */
+  const familiasDaRede = () => {
+    const cats = get('/products/categories') as unknown as string[];
+    return new Set(cats.map((c) => familiaDePeca(c)).filter(Boolean));
+  };
+
+  it('há uma feira aberta, com oferta', () => {
+    const rows = get('/planning/feiras').rows as any[];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0].ofertas).toBeGreaterThan(0);
+    expect(rows[0].floorUnits).toBeGreaterThan(0);
+  });
+
+  it('o plano fecha contra o piso da feira', () => {
+    const r = plano();
+    expect(r.detalhe.total + r.detalhe.naoAlocado).toBe(r.floorUnits);
+  });
+
+  it('a coleção nova NÃO cai inteira no balde especulativo', () => {
+    /*
+     * A invariante que sustenta o modo feira.
+     *
+     * Todas as peças da oferta têm giro zero — é coleção nova. Se a
+     * classificação olhasse só isso, as 1.500 unidades cairiam em "aposta" e o
+     * plano informaria que a compra toda é especulação: verdadeiro no papel,
+     * inútil no balcão.
+     */
+    const r = plano();
+    const aposta = r.detalhe.segmentos.find((s: any) => s.segmento === 'aposta');
+    expect(r.detalhe.total).toBeGreaterThan(0);
+    expect(aposta.alocado, 'a coleção inteira caiu em aposta').toBeLessThan(r.detalhe.total);
+  });
+
+  it('família da oferta sem histórico na rede é DECLARADA, não escondida', () => {
+    /*
+     * O alarme do vocabulário.
+     *
+     * Quando o tipo da planilha não casa com o do cadastro, o sintoma é sempre
+     * o mesmo e é silencioso: a peça não acha lastro, cai em aposta, e o plano
+     * informa que a compra é especulação sem dizer que na verdade não
+     * conseguiu ler o tipo. Já aconteceu com quatro grafias nesta base.
+     *
+     * A asserção é sobre a INVARIANTE, não sobre o vocabulário deste dataset:
+     * a demo roda tanto sobre os dados fictícios quanto sobre o agregado real,
+     * e as categorias dos dois são diferentes. O que precisa valer nos dois é
+     * que peça órfã e plano calado nunca aparecem juntos.
+     */
+    const r = plano();
+    const familias = new Set(
+      (r.detalhe.segmentos.flatMap((s: any) => s.linhas) as any[]).map((l) =>
+        familiaDePeca(l.candidato.tipo),
+      ),
+    );
+    const orfas = [...familias].filter((f) => f && !familiasDaRede().has(f));
+    if (orfas.length > 0) {
+      expect(r.detalhe.motivo, `famílias órfãs (${orfas.join(', ')}) e o plano calado`).toMatch(
+        /sem histórico na rede/,
+      );
+    }
+  });
+
+  it('a divisão por loja fecha contra as unidades da linha', () => {
+    const r = plano();
+    for (const l of r.detalhe.segmentos.flatMap((s: any) => s.linhas) as any[]) {
+      const paraLojas = (l.lojas ?? []).reduce((a: number, x: any) => a + x.suggestedQty, 0);
+      expect(paraLojas + (l.semLoja ?? 0)).toBe(l.units);
+    }
+  });
+
+  it('o lançamento da compra PERSISTE entre chamadas — não vive no navegador', () => {
+    const antes = plano();
+    const linha = antes.detalhe.segmentos.flatMap((s: any) => s.linhas)[0] as any;
+    put(`/planning/feiras/ofertas/${linha.candidato.id}`, { bought: 9 });
+
+    const depois = plano();
+    const relida = depois.detalhe.segmentos
+      .flatMap((s: any) => s.linhas)
+      .find((l: any) => l.candidato.id === linha.candidato.id) as any;
+    expect(relida.comprado).toBe(9);
+    expect(depois.feira.comprado).toBeGreaterThanOrEqual(9);
+  });
+
+  it('recalcular o plano não apaga o que já foi comprado', () => {
+    const linha = plano().detalhe.segmentos.flatMap((s: any) => s.linhas)[0] as any;
+    put(`/planning/feiras/ofertas/${linha.candidato.id}`, { bought: 4 });
+    plano();
+    plano();
+    const fim = plano();
+    const relida = fim.detalhe.segmentos
+      .flatMap((s: any) => s.linhas)
+      .find((l: any) => l.candidato.id === linha.candidato.id) as any;
+    expect(relida.comprado).toBe(4);
+  });
+
+  it('nenhuma linha passa do teto de concentração do segmento', () => {
+    // Numa feira não há absorção medida para a peça nova — ela não existe na
+    // rede —, então quem governa a concentração é o teto. Ele precisa valer.
+    const r = plano();
+    for (const seg of r.detalhe.segmentos as any[]) {
+      if (seg.meta === 0) continue;
+      const teto = Math.max(1, Math.ceil((seg.meta * 25) / 100));
+      for (const l of seg.linhas) expect(l.units).toBeLessThanOrEqual(teto);
+    }
+  });
+
+  it('toda fatia que não fecha aparece no motivo, com a razão DELA', () => {
+    /*
+     * O perfil de risco divide o piso em três fatias ANTES de olhar a oferta, e
+     * numa feira duas delas ficam vazias por natureza: coleção nova não tem o
+     * que repor, e coleção com perfil conhecido não tem o que especular. Sobram
+     * unidades, e um motivo genérico manda o comprador procurar na oferta uma
+     * peça que o motor tivesse recusado — não há nenhuma, e ele perde a tarde.
+     *
+     * É o mesmo defeito que a aba de distribuição pagou caro para aprender:
+     * tela que mostra menos do que se esperava sem dizer por quê é lida como
+     * quebrada.
+     */
+    const r = plano();
+    const abertas = (r.detalhe.segmentos as any[]).filter((s) => s.meta - s.alocado > 0);
+    if (abertas.length === 0) return;
+    expect(r.detalhe.motivo, 'fatia aberta e plano calado').not.toBe('');
+    for (const s of abertas) {
+      expect(r.detalhe.motivo, `a fatia ${s.segmento} ficou aberta sem explicação`).toContain(
+        `${s.meta - s.alocado} un. de`,
+      );
+    }
+  });
+
+  it('a peça que a rede já vende entra com o giro DELA', () => {
+    // A oferta de um fornecedor não é 100% novidade: parte é o que continua em
+    // linha. Tratar tudo como novo joga fora o dado mais forte que existe —
+    // giro medido da própria peça — e esvazia o balde de best-seller por
+    // construção, em toda feira.
+    const r = plano();
+    expect(r.detalhe.jaVendidas, 'nenhuma referência de continuidade casou por SKU').toBeGreaterThan(0);
   });
 });

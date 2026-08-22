@@ -23,6 +23,7 @@ import {
 } from './decisions.service.js';
 import { batchHistory } from './batches.service.js';
 import { declararMixDaGrife, listarMixPorLoja } from './mixDeLoja.js';
+import { listarFeiras, planoDaFeira, registrarCompra } from './feira.service.js';
 import {
   createDistributionMovements,
   distributionPlan,
@@ -517,5 +518,50 @@ planningRouter.get(
   asyncHandler(async (req, res) => {
     const limit = Number(req.query.limit) || 30;
     res.json({ rows: await batchHistory(limit) });
+  }),
+);
+
+// ─── Feira: o plano de compra de uma coleção nova ────────────────────────────
+
+/** GET /api/planning/feiras — as feiras cadastradas (ADMIN). */
+planningRouter.get(
+  '/feiras',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    res.json(await listarFeiras());
+  }),
+);
+
+/**
+ * GET /api/planning/feiras/:id — o plano da feira.
+ *
+ * Recalculado a cada chamada, de propósito. O concorrente guarda cenários
+ * ("reabrir um que você já rodou é instantâneo e não consome a IA de novo"),
+ * porque o plano dele custa uma chamada de modelo. O nosso é função pura sobre
+ * a oferta e o histórico — recalcular é barato e devolve o dado de hoje.
+ */
+planningRouter.get(
+  '/feiras/:id',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    res.json(await planoDaFeira(req.params.id));
+  }),
+);
+
+const compraSchema = z.object({ bought: z.number().int().nonnegative().max(100_000) });
+
+/**
+ * PUT /api/planning/feiras/ofertas/:offerId — lança a compra de uma linha.
+ *
+ * É o dado mais caro do evento: o plano se recalcula a qualquer momento a
+ * partir da oferta, mas o que o comprador decidiu levar no balcão não se
+ * recalcula. Por isso vai para o banco, e não para o navegador.
+ */
+planningRouter.put(
+  '/feiras/ofertas/:offerId',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const { bought } = compraSchema.parse(req.body);
+    res.json(await registrarCompra(req.params.offerId, bought));
   }),
 );

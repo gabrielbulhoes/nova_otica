@@ -326,7 +326,7 @@ async function onOrderQuantities(): Promise<Map<string, number>> {
   return byProduct;
 }
 
-async function plans(days: number, storeId?: string, group: ProductGroup = 'todos'): Promise<ProductPlan[]> {
+export async function plans(days: number, storeId?: string, group: ProductGroup = 'todos'): Promise<ProductPlan[]> {
   const [inputs, cfgFor] = await Promise.all([
     planningInputs(days, storeId, group),
     supplierConfigResolver(),
@@ -382,7 +382,7 @@ export async function purchaseSuggestions(
  * Aqui o recorte é fechado (só os SKUs com recomendação de COMPRA) e a soma é
  * do banco, então o que trafega é da ordem de itens × lojas.
  */
-async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<string, FairSplitInput[]>> {
+export async function posicoesPorLoja(productIds: string[], days: number): Promise<Map<string, FairSplitInput[]>> {
   const posicoes = new Map<string, FairSplitInput[]>();
   if (productIds.length === 0) return posicoes;
 
@@ -894,7 +894,10 @@ async function detalharPlanoContinuo(
   };
   for (const c of candidatos) {
     if (c.unitsSold <= 0) continue;
+    // As duas chaves — ver `evidenciaDoPerfil`. Sem a de tipo puro, uma peça
+    // com gênero na ficha nunca casaria com o histórico, que não tem gênero.
     soma(porTipoGenero, chaveDePerfil(c.tipo, c.genero), c.unitsSold);
+    soma(porTipoGenero, chaveDePerfil(c.tipo, null), c.unitsSold);
     soma(porFormato, c.formato ? normBrandKey(c.formato) : null, c.unitsSold);
   }
   const perfil = { porTipoGenero, porFormato, porCor: new Map<string, number>() };

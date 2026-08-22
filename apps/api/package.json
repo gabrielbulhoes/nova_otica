@@ -23,6 +23,7 @@
     "catalogo:importar": "tsx src/catalogo/importar.ts",
     "catalogo:semear-mix": "tsx src/catalogo/semearMix.ts",
     "catalogo:estoque-ideal": "tsx src/catalogo/estoqueIdeal.ts",
+    "catalogo:feira": "tsx src/catalogo/importarFeira.ts",
     "bootstrap:admin": "tsx src/db/bootstrapAdmin.ts"
   },
   "prisma": {
