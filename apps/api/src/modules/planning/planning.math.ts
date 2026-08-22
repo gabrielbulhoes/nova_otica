@@ -3639,6 +3639,30 @@ export function normBrandKey(s: string): string {
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * A chave FROUXA de grife \u2014 para CASAR dois cadastros, nunca para guardar.
+ *
+ * `normBrandKey` dobra acento e espa\u00e7o, mas n\u00e3o separador: o CDS escreve
+ * "RAY BAN" e a planilha do fornecedor escreve "Ray-Ban", e as duas chaves n\u00e3o
+ * se encontram. O efeito \u00e9 silencioso e caro \u2014 o rateio por loja da feira n\u00e3o
+ * acha posi\u00e7\u00e3o nenhuma da grife, toda linha cai em "sem loja definida", e a
+ * tela responde "para qual loja vai?" com um travess\u00e3o. \u00c9 exatamente a
+ * reclama\u00e7\u00e3o que o m\u00f3dulo existe para resolver.
+ *
+ * \u00c9 a QUINTA vez que este produto trope\u00e7a em dois vocabul\u00e1rios tratados como
+ * um (grife vs. fornecedor; mix por nome vs. id; "\u00f3culos de sol" vs. "solar";
+ * "OCULOS" vs. "solar"). O padr\u00e3o j\u00e1 \u00e9 conhecido: reduzir os dois lados a uma
+ * chave can\u00f4nica em vez de comparar as strings que cada sistema escolheu.
+ *
+ * N\u00c3O SUBSTITUI `normBrandKey` NO ARMAZENAMENTO. O mix por loja e o cat\u00e1logo de
+ * fornecedores j\u00e1 t\u00eam chaves gravadas na r\u00e9gua antiga; trocar a r\u00e9gua faria a
+ * marca\u00e7\u00e3o existente parar de casar \u2014 que \u00e9 o mesmo defeito, de novo, com as
+ * pontas invertidas.
+ */
+export function chaveDeGrifeParaCasar(s: string): string {
+  return normBrandKey(s).replace(/[^A-Z0-9]+/g, '');
+}
+
 /** Fornecedor canônico de uma marca (null quando não há catálogo ou marca desconhecida). */
 export function supplierFor(brand: string | null | undefined, catalog: BrandCatalog | null): string | null {
   if (!brand || !catalog) return null;

@@ -538,10 +538,27 @@ export function PlanoDeCompra({
   titulo?: string;
   descricao?: string;
 }) {
-  const [aba, setAba] = useState<StrategySegment['key'] | 'lojas'>('best-seller');
   const rotulo = new Map(segments.map((s) => [s.key, s.label]));
   const doSegmento = (k: StrategySegment['key']) =>
     plano.segmentos.find((s) => s.segmento === k);
+
+  /*
+   * A ABA ABRE NO CENÁRIO QUE TEM CONTEÚDO.
+   *
+   * Abrir sempre em best-seller parece neutro e não é: numa feira de coleção
+   * nova esse balde é vazio POR CONSTRUÇÃO — não há o que repor —, então a
+   * primeira coisa que o usuário vê é "nenhuma peça entrou neste cenário".
+   * Tela que abre vazia é lida como quebrada, e esta é a quarta vez que este
+   * produto tropeça nisso (a aba de distribuição voltou três rodadas seguidas
+   * como "continuamos sem").
+   *
+   * O motivo declarado continua acima, visível nas três abas — quem quiser
+   * saber por que o balde está vazio não precisa achá-lo aberto para ler.
+   */
+  const primeiraComLinhas =
+    segments.find((s) => (doSegmento(s.key)?.linhas.length ?? 0) > 0)?.key ?? segments[0]?.key ?? 'best-seller';
+  const [abaEscolhida, setAba] = useState<StrategySegment['key'] | 'lojas' | null>(null);
+  const aba = abaEscolhida ?? primeiraComLinhas;
 
   return (
     <>

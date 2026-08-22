@@ -35,6 +35,7 @@ import {
   splitByNeed,
   NEED_BASIS_LABEL,
   classificarCandidato,
+  chaveDeGrifeParaCasar,
   chaveDePerfil,
   explicarLinha,
   familiaDePeca,
@@ -357,9 +358,43 @@ const SKUS_DE_CONTINUIDADE = (() => {
     .map((p) => p.sku as string);
 })();
 
+/**
+ * AS GRIFES DA OFERTA saem do catálogo carregado, não da lista fictícia.
+ *
+ * Um fornecedor leva à feira as grifes que a rede trabalha. Usar `MARCAS` fixo
+ * fazia a oferta inteira falar de grifes que o dataset real não tem — e aí o
+ * rateio por loja não achava posição nenhuma, toda linha caía em "sem loja
+ * definida", e a coluna DESTINO respondia com um travessão. Exatamente a
+ * pergunta que o módulo existe para responder.
+ */
+const GRIFES_DA_OFERTA = (() => {
+  const vendidoPor = new Map<string, number>();
+  for (const [chave, qtd] of soldQty) {
+    const productId = chave.slice(chave.indexOf(':') + 1);
+    vendidoPor.set(productId, (vendidoPor.get(productId) ?? 0) + qtd);
+  }
+  const porGrife = new Map<string, number>();
+  for (const p of products) {
+    // SÓ O GRUPO PRINCIPAL (armação e solar). O plano da feira roda sobre
+    // 'principal'; incluir grife de lente aqui — HOYA vende muito — colocaria
+    // na oferta uma grife que o plano não enxerga, e as linhas dela sairiam
+    // todas sem loja de destino.
+    if (!matchesProductGroup(p.category, 'principal')) continue;
+    const g = analysisBrand(p.description, p.category, p.brand);
+    if (!g || g === '—') continue;
+    porGrife.set(g, (porGrife.get(g) ?? 0) + (vendidoPor.get(p.id) ?? 0));
+  }
+  const top = [...porGrife.entries()]
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([g]) => g);
+  return top.length > 0 ? top : MARCAS;
+})();
+
 /** A oferta do fornecedor: determinística, para a demo não mudar a cada visita. */
 const OFERTA_FEIRA = Array.from({ length: 96 }, (_, i) => {
-  const marca = MARCAS[i % MARCAS.length];
+  const marca = GRIFES_DA_OFERTA[i % GRIFES_DA_OFERTA.length];
   const solar = i % 3 !== 2;
   const h = hash01(`feira-${i}`);
   const unitPrice = Math.round((solar ? 420 + h * 680 : 320 + h * 520) * 100) / 100;
@@ -484,9 +519,14 @@ function planoDaFeiraDemo(ps: ProductPlan[]) {
    */
   const porGrife = new Map<string, { storeId: string; storeName: string; unitsSold: number; stockUnits: number }[]>();
   for (const marca of new Set(OFERTA_FEIRA.map((o) => o.brand))) {
-    const daGrife = ps.filter((p) => normBrandKey(analysisBrand(p.description, p.category, p.brand) ?? '') === normBrandKey(marca));
+    // Chave FROUXA: "RAY BAN" do cadastro e "Ray-Ban" da planilha do fornecedor
+    // são a mesma grife, e `normBrandKey` não dobra o hífen. Ver
+    // `chaveDeGrifeParaCasar`.
+    const daGrife = ps.filter(
+      (p) => chaveDeGrifeParaCasar(analysisBrand(p.description, p.category, p.brand) ?? '') === chaveDeGrifeParaCasar(marca),
+    );
     porGrife.set(
-      normBrandKey(marca),
+      chaveDeGrifeParaCasar(marca),
       stores.map((st) => ({
         storeId: st.id,
         storeName: st.name,
@@ -501,7 +541,7 @@ function planoDaFeiraDemo(ps: ProductPlan[]) {
   let compradoNoPlano = 0;
   for (const seg of plano.segmentos) {
     for (const l of seg.linhas) {
-      const candidatas = porGrife.get(normBrandKey(l.candidato.brand)) ?? [];
+      const candidatas = porGrife.get(chaveDeGrifeParaCasar(l.candidato.brand)) ?? [];
       const elegiveis = candidatas.filter((x) => demoLojaTrabalhaAGrife(l.candidato.brand, x.storeId));
       const excluidas = candidatas.filter((x) => !demoLojaTrabalhaAGrife(l.candidato.brand, x.storeId));
       const rateio = splitByNeed(elegiveis, l.units, JANELA_DA_FEIRA_DIAS);
@@ -2696,7 +2736,13 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     return { id: offerId, sku: offerId, bought, fairId: FEIRA_DEMO.id };
   }
   if (url.startsWith('/planning/feiras/') && m === 'GET') {
-    return planoDaFeiraDemo(planningPlans(JANELA_DA_FEIRA_DIAS, undefined, 'principal'));
+    // `effectiveDays` NÃO é opcional aqui — ver a nota do feedback 5.0 · item
+    // 04 logo acima de `planDays`. A demo carrega uma fotografia de poucos dias
+    // do CDS; dividir essa venda por uma janela de 180 dias achata a demanda
+    // diária dezenas de vezes, e a capacidade da rede desaba. O sintoma não é
+    // um erro: é a feira abrindo com "o piso passa a capacidade da rede (13)",
+    // que o cliente lê como motor quebrado — e estaria certo.
+    return planoDaFeiraDemo(planningPlans(effectiveDays(JANELA_DA_FEIRA_DIAS), undefined, 'principal'));
   }
   if (url === '/planning/rebalance') {
     return rebalanceRows();

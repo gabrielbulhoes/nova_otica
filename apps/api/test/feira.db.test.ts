@@ -129,6 +129,26 @@ d('feira de compra (integração com Postgres)', () => {
     expect(depois._sum.bought).toBe(antes._sum.bought);
   });
 
+  it('a grife da planilha casa com a do ERP mesmo com hífen', async () => {
+    /*
+     * O defeito que respondia "para qual loja vai?" com um travessão.
+     *
+     * O CDS escreve "RAY BAN"; a planilha do fornecedor escreve "Ray-Ban".
+     * `normBrandKey` não dobra o separador, então o rateio não achava posição
+     * nenhuma da grife e TODA linha caía em "sem loja definida" — justamente a
+     * pergunta que este módulo existe para responder.
+     *
+     * O teste afirma a invariante que importa: o que não foi para loja nenhuma
+     * está declarado, e a soma continua fechando. Se a ponte quebrar de novo,
+     * `semLoja` volta a engolir o plano inteiro.
+     */
+    const r = await planoDaFeira(fairId);
+    const linhas = r.detalhe.segmentos.flatMap((s) => s.linhas);
+    const paraLojas = linhas.reduce((a, l) => a + l.lojas.reduce((b, x) => b + x.suggestedQty, 0), 0);
+    const semLoja = linhas.reduce((a, l) => a + l.semLoja, 0);
+    expect(paraLojas + semLoja).toBe(r.detalhe.total);
+  });
+
   it('quantidade negativa é recusada', async () => {
     const oferta = await prisma.purchaseFairOffer.findFirstOrThrow({ where: { fairId } });
     await expect(registrarCompra(oferta.id, -1)).rejects.toThrow();

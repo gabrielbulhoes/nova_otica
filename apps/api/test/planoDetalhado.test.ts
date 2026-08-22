@@ -6,6 +6,8 @@ import {
   evidenciaDoPerfil,
   familiaDePeca,
   familiasComGiro,
+  chaveDeGrifeParaCasar,
+  normBrandKey,
   explicarLinha,
   margemPct,
   montarPlanoDetalhado,
@@ -328,5 +330,43 @@ describe('familiasComGiro · a ponte falha alto, não baixo', () => {
       porCor: new Map(),
     };
     expect(familiasComGiro(vazio).size).toBe(0);
+  });
+});
+
+describe('chaveDeGrifeParaCasar · a quinta vez do mesmo defeito', () => {
+  /*
+   * O CDS escreve "RAY BAN"; a planilha do fornecedor escreve "Ray-Ban".
+   * `normBrandKey` dobra acento e espaço, mas não separador — e as duas chaves
+   * não se encontram. O sintoma é silencioso: o rateio por loja da feira não
+   * acha posição nenhuma da grife, toda linha cai em "sem loja definida", e a
+   * tela responde "para qual loja vai?" com um travessão.
+   */
+  it('o hífen do fornecedor e o espaço do ERP dão a MESMA chave', () => {
+    expect(chaveDeGrifeParaCasar('Ray-Ban')).toBe(chaveDeGrifeParaCasar('RAY BAN'));
+    expect(chaveDeGrifeParaCasar('Miu  Miu')).toBe(chaveDeGrifeParaCasar('MIU MIU'));
+    expect(chaveDeGrifeParaCasar('Tom Ford')).toBe(chaveDeGrifeParaCasar('TOM-FORD'));
+  });
+
+  it('acento não separa a grife de si mesma', () => {
+    expect(chaveDeGrifeParaCasar('Vogue Eyewear')).toBe(chaveDeGrifeParaCasar('VOGUE EYEWEAR'));
+    expect(chaveDeGrifeParaCasar('Óptica')).toBe(chaveDeGrifeParaCasar('OPTICA'));
+  });
+
+  it('grifes diferentes continuam diferentes', () => {
+    // A chave frouxa não pode colapsar duas marcas de verdade numa só.
+    expect(chaveDeGrifeParaCasar('Versace')).not.toBe(chaveDeGrifeParaCasar('Vogue'));
+    expect(chaveDeGrifeParaCasar('Prada')).not.toBe(chaveDeGrifeParaCasar('Prado'));
+  });
+
+  it('NÃO substitui normBrandKey no armazenamento', () => {
+    /*
+     * A régua de guardar continua sendo `normBrandKey`. O mix por loja e o
+     * catálogo de fornecedores têm chaves gravadas na régua antiga; trocá-la
+     * faria a marcação existente parar de casar — o mesmo defeito, de novo,
+     * com as pontas invertidas.
+     */
+    expect(normBrandKey('Ray-Ban')).toBe('RAY-BAN');
+    expect(chaveDeGrifeParaCasar('Ray-Ban')).toBe('RAYBAN');
+    expect(normBrandKey('Ray-Ban')).not.toBe(chaveDeGrifeParaCasar('Ray-Ban'));
   });
 });
