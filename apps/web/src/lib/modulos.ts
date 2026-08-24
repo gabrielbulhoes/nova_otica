@@ -95,15 +95,33 @@ export const MODULOS: Modulo[] = [
     nome: 'Compras',
     icone: 'compras',
     categoria: 'Inteligência',
-    descricao: 'Reposição por fornecedor, prazo de entrega e a estratégia da compra da safra.',
+    descricao: 'Reposição do que a rede já vende: por fornecedor, prazo de entrega e a estratégia da safra.',
     destino: '/admin/planejamento',
     paginas: [
       { to: '/admin/planejamento', label: 'Planejamento & Compras' },
       { to: '/admin/estrategia', label: 'Estratégia comercial' },
-      // Os dois modos da compra vivem lado a lado: o CONTÍNUO repõe o que a
-      // rede já vende, a FEIRA planeja uma coleção que ninguém vendeu ainda.
-      { to: '/admin/feira', label: 'Feira de compra' },
     ],
+  },
+  {
+    /*
+     * A FEIRA É MÓDULO PRÓPRIO, e não a terceira página de Compras.
+     *
+     * Os dois modos partilham a matemática, mas não o momento nem o usuário. A
+     * reposição é trabalho de mesa, mensal, sobre a rede viva. A feira é evento
+     * com data marcada, decidido de pé no balcão com o fornecedor na frente —
+     * muitas vezes no celular. Guardá-la como terceiro link dentro de Compras
+     * escondia justamente a tela que se abre com pressa.
+     *
+     * O calendário no lugar do carrinho é pelo mesmo motivo: o que distingue
+     * esta compra das outras é ter chegada e alvo de venda.
+     */
+    id: 'feira',
+    nome: 'Feira',
+    icone: 'calendario',
+    categoria: 'Inteligência',
+    descricao: 'A compra de uma coleção nova: quanto levar de cada peça, por quê, e para qual loja ela vai.',
+    destino: '/admin/feira',
+    paginas: [{ to: '/admin/feira', label: 'Feira de compra' }],
   },
   {
     id: 'bi',

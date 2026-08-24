@@ -72,6 +72,25 @@ describe('mapa de módulos', () => {
     for (const rota of TELAS) expect(doAdmin).toContain(rota);
   });
 
+  it('contínuo e feira são módulos SEPARADOS', () => {
+    /*
+     * Pedido do cliente, e a razão é de uso, não de arquitetura: os dois modos
+     * partilham a matemática, mas não o momento nem o usuário. A reposição é
+     * trabalho de mesa, mensal, sobre a rede viva; a feira é evento com data
+     * marcada, decidido de pé no balcão com o fornecedor na frente.
+     *
+     * Enquanto a feira era a terceira página de Compras, a tela que mais se
+     * abre com pressa era a mais escondida das três.
+     */
+    const compras = MODULOS.find((m) => m.id === 'compras')!;
+    const feira = MODULOS.find((m) => m.id === 'feira')!;
+    expect(feira, 'a feira deixou de ser módulo próprio').toBeDefined();
+    expect(compras.paginas.some((p) => p.to === '/admin/feira')).toBe(false);
+    expect(feira.destino).toBe('/admin/feira');
+    expect(moduloDaRota('/admin/feira')?.id).toBe('feira');
+    expect(moduloDaRota('/admin/estrategia')?.id).toBe('compras');
+  });
+
   it('todo módulo tem descrição e categoria — o cartão não fica mudo', () => {
     for (const m of MODULOS) {
       expect(m.descricao.length, `${m.nome} sem descrição`).toBeGreaterThan(20);
