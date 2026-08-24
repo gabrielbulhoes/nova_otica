@@ -16,6 +16,26 @@ build/
 # O EXEMPLO de produção entra (só placeholders); o `.env` preenchido, nunca.
 !.env.production.example
 
+# CÓPIAS DE SEGURANÇA FEITAS À MÃO NO SERVIDOR.
+#
+# A VPS roda a partir de um clone deste repositório: `/srv/nova-otica` é, ao
+# mesmo tempo, a raiz do serviço e a árvore de trabalho do git. Quem faz um
+# ajuste de emergência guarda o original ao lado — `.env.bak-20260804`,
+# `docker-compose.prod.yml.bak-20260811_2322` — e essas cópias ficam DENTRO do
+# repositório.
+#
+# `.env` está ignorado; `.env.bak-<data>` não estava. E o `.env` de produção
+# carrega as credenciais da CDS, num repositório PÚBLICO. Nenhum caminho
+# automático as commitaria (o `deploy.sh` só faz `fetch` e `reset --hard`, que
+# não tocam arquivo não rastreado), mas um `git add -A` digitado no servidor
+# bastaria — e não há desfazer para segredo publicado.
+#
+# `backups/` guarda dump do banco, que tem dado de cliente. Mesma regra, mesmo
+# motivo.
+*.bak
+*.bak-*
+backups/
+
 # Prisma
 apps/api/prisma/*.db
 apps/api/prisma/migrations/dev.db*
