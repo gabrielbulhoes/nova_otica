@@ -5,6 +5,10 @@ node_modules/
 
 # Builds
 dist/
+# `dist-demo/` é a build da DEMONSTRAÇÃO (`VITE_DEMO=1`), gerada para conferir a
+# interface e tirar as capturas dos pareceres. Saída de build como qualquer
+# outra — só não casava com `dist/` por causa do sufixo.
+dist-demo/
 build/
 *.tsbuildinfo
 
