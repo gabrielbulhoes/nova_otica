@@ -688,6 +688,8 @@ export function forecastDemand(history: DemandHistory, leadTimeDays: number): De
 
 export interface ProductMetricsInput {
   productId: string;
+  /** O código da peça como o ERP e o fornecedor a chamam (rodada final · item 04). */
+  sku?: string | null;
   description: string;
   brand: string | null;
   category: string | null;
@@ -728,6 +730,8 @@ export interface ProductMetricsInput {
 
 export interface ProductPlan {
   productId: string;
+  /** O código da peça (SKU do ERP). `null` quando o cadastro não traz. */
+  sku: string | null;
   description: string;
   brand: string | null;
   category: string | null;
@@ -757,6 +761,13 @@ export interface ProductPlan {
   reason: string;
   /** Explicação curta, direta e amigável do porquê da decisão. */
   friendlyReason: string;
+  /**
+   * A JUSTIFICATIVA MÍNIMA (rodada final · item 07): estoque, vendas no
+   * período e giro, em uma frase, para TODA recomendação — inclusive as que
+   * dizem para não fazer nada. `friendlyReason` diz o que fazer; esta diz com
+   * base em quê. Uma recomendação sem os números é opinião com cara de dado.
+   */
+  justificativa: string;
   /** Confiabilidade da decisão (0–100): volume de vendas + histórico + método. */
   confidence: number;
   /** Quanto custa manter ESTE estoque parado por 30 dias (R$). */
@@ -848,6 +859,48 @@ function friendlyReasonFor(
     case 'LIQUIDATE':
       return 'Parado, sem sair há um tempo — melhor liquidar ou remanejar pra soltar o capital.';
   }
+}
+
+/**
+ * A JUSTIFICATIVA MÍNIMA de qualquer recomendação (rodada final · item 07).
+ *
+ * "Toda recomendação deve trazer justificativa mínima: estoque, vendas,
+ *  giro." — e vale para COMPRAR, SEGURAR, NÃO COMPRAR e LIQUIDAR igualmente.
+ * Os textos de `reason` e `friendlyReason` explicam a decisão; este põe os
+ * três números na mesa, sempre na mesma ordem, para que duas linhas quaisquer
+ * sejam comparáveis de relance. Vírgula decimal e "un." porque vai para o
+ * balcão, não para o log.
+ */
+export function justificativaMinima(x: {
+  currentStock: number;
+  unitsSold: number;
+  days: number;
+  dailyDemand: number;
+  coverageDays: number | null;
+  onOrder?: number;
+  suggestedQty?: number;
+  targetCoverDays?: number;
+}): string {
+  const num = (n: number, d = 1) => n.toLocaleString('pt-BR', { maximumFractionDigits: d });
+  const partes: string[] = [];
+  partes.push(`Estoque ${num(x.currentStock, 0)} un.` + (x.onOrder ? ` (+${num(x.onOrder, 0)} a caminho)` : ''));
+  partes.push(`vendeu ${num(x.unitsSold, 0)} un. em ${num(x.days, 0)} dias`);
+  if (x.dailyDemand > 0) {
+    // Giro em unidades por MÊS quando é pequeno: "0,03/dia" não diz nada a
+    // quem compra; "1 por mês" diz.
+    const porMes = x.dailyDemand * 30;
+    partes.push(porMes >= 10 ? `giro de ${num(x.dailyDemand)}/dia` : `giro de ${num(porMes)}/mês`);
+    if (x.coverageDays !== null) {
+      partes.push(
+        `cobertura de ${num(Math.round(x.coverageDays), 0)} dias` +
+          (x.targetCoverDays ? ` (alvo ${num(x.targetCoverDays, 0)})` : ''),
+      );
+    }
+  } else {
+    partes.push('sem giro no período');
+  }
+  if (x.suggestedQty && x.suggestedQty > 0) partes.push(`sugeridas ${num(x.suggestedQty, 0)} un.`);
+  return partes.join(' · ') + '.';
 }
 
 /** Analisa um único produto e devolve o plano completo. */
@@ -965,6 +1018,7 @@ export function analyzeProduct(
 
   return {
     productId: input.productId,
+    sku: input.sku ?? null,
     description: input.description,
     brand: input.brand,
     category: input.category,
@@ -989,6 +1043,16 @@ export function analyzeProduct(
       { onOrder, coverageDays, ageDays: input.ageDays, annual: anual },
       situacao,
     ),
+    justificativa: justificativaMinima({
+      currentStock: input.currentStock,
+      unitsSold: input.unitsSold,
+      days,
+      dailyDemand,
+      coverageDays,
+      onOrder,
+      suggestedQty,
+      targetCoverDays: cfg.targetCoverDays,
+    }),
     confidence: decisionConfidence(input.unitsSold, days, dailyDemand > 0, forecast?.method ?? null),
     carryingCost30d: carryingCost(stockValue, 30, cfg),
     excessCarryingCost30d: carryingCost(excessValue, 30, cfg),
@@ -1587,12 +1651,40 @@ export function buildRebalance(
 
 export interface PurchaseOrderItem {
   productId: string;
+  /** O código da peça, como o fornecedor a reconhece (rodada final · item 04). */
+  sku: string | null;
   description: string;
   /** Marca real do produto (extraída da descrição), para exibir no pedido. */
   brand: string | null;
   category: string | null;
+  /**
+   * A quantidade EFETIVA — a que vai no pedido. Nasce igual a `suggestedQty`
+   * e é a única das duas que o comprador edita. Continua se chamando
+   * `quantity` porque os pedidos já gravados usam esse nome.
+   */
   quantity: number;
+  /**
+   * A SUGESTÃO ORIGINAL do motor (rodada final · item 04): "sugerida" e
+   * "efetiva" lado a lado, e a sugestão nunca é sobrescrita pela edição — é o
+   * que permite, meses depois, comparar o que o motor disse com o que a rede
+   * comprou.
+   */
+  suggestedQty: number;
   unitCost: number;
+  /** Preço de venda unitário — de onde sai a faixa de preço. */
+  unitPrice: number;
+  /** A faixa de R$ 500 em que o preço cai (rodada final · item 04). */
+  faixa: FaixaDePreco;
+  /** Estoque atual (on-hand) da peça no escopo. */
+  currentStock: number;
+  /** Vendido na janela analisada. */
+  unitsSold: number;
+  /** Giro: unidades por dia na janela. */
+  giro: number;
+  /** Dias de cobertura do estoque atual; null sem giro. */
+  coverageDays: number | null;
+  /** Os números por trás da linha, em uma frase (item 07). */
+  justificativa: string;
   total: number;
   /** Dias restantes para pedir sem romper (0 = hoje). */
   orderByInDays: number | null;
@@ -1634,6 +1726,14 @@ export interface AtributosDaPeca {
   /** Retangular, Quadrado, Gatinho, Phantos… — o "tipo de óculos" do feedback. */
   formato: string | null;
   material: string | null;
+  /**
+   * As versões PADRONIZADAS (rodada final · item 03) — a lista fechada do
+   * cliente. É por elas que o motor agrupa; `formato` e `material` acima são
+   * o texto de origem, para a tela mostrar e a auditoria conferir. `null` =
+   * ainda não classificado; `NAO_IDENTIFICADO` = classificado como incerto.
+   */
+  formatoLente?: FormatoLenteChave | null;
+  materialArmacao?: MaterialArmacaoChave | null;
   /** Em milímetros, como o fornecedor publica. */
   tamanhoLente: number | null;
   /**
@@ -1837,11 +1937,20 @@ export function buildPurchaseOrders(
 
     order.items.push({
       productId: p.productId,
+      sku: p.sku ?? null,
       description: p.description,
       brand: productBrand,
       category: p.category,
       quantity: p.suggestedQty,
+      suggestedQty: p.suggestedQty,
       unitCost: p.unitCost,
+      unitPrice: p.unitPrice,
+      faixa: faixaDePreco(p.unitPrice),
+      currentStock: p.currentStock,
+      unitsSold: p.unitsSold,
+      giro: p.dailyDemand,
+      coverageDays: p.coverageDays,
+      justificativa: p.justificativa,
       total: p.capital,
       orderByInDays: p.orderByInDays,
       stockoutInDays: p.stockoutInDays,
@@ -3663,6 +3772,17 @@ export function chaveDeGrifeParaCasar(s: string): string {
   return normBrandKey(s).replace(/[^A-Z0-9]+/g, '');
 }
 
+/**
+ * A chave de um ATRIBUTO de ficha (formato, cor, material) para casar o
+ * histórico da rede com a oferta. É a régua frouxa, porque "Cat-Eye", "cat
+ * eye" e "CATEYE" são a mesma coisa vinda de três planilhas. Quem grava
+ * `PerfilQueVende.porFormato` e quem lê em `pesoDoCandidato` usa ESTA função —
+ * os dois lados já divergiram uma vez e o formato nunca casou.
+ */
+export function chaveDeAtributo(s: string): string {
+  return chaveDeGrifeParaCasar(s);
+}
+
 /** Fornecedor canônico de uma marca (null quando não há catálogo ou marca desconhecida). */
 export function supplierFor(brand: string | null | undefined, catalog: BrandCatalog | null): string | null {
   if (!brand || !catalog) return null;
@@ -3987,8 +4107,13 @@ export function pesoDoCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): n
       // sinais em vez de somar: um piloto masculino numa cor que não sai não
       // deve herdar o peso inteiro do "masculino".
       const base = evidenciaDoPerfil(c.tipo, c.genero, perfil);
-      const fFormato = c.formato ? 1 + (perfil.porFormato.get(normCategory(c.formato)) ?? 0) : 1;
-      const fCor = c.cor ? 1 + (perfil.porCor.get(normCategory(c.cor)) ?? 0) : 1;
+      // A MESMA chave que os serviços usam para gravar `porFormato` — era
+      // `normCategory` aqui e `normBrandKey` lá (minúscula contra maiúscula), e
+      // o formato nunca casava: todo lançamento saía com peso de formato 1,
+      // que é o peso de "não sei". Sexta vez do mesmo defeito nesta base, e a
+      // resposta é a de sempre: uma função de chave, usada dos dois lados.
+      const fFormato = c.formato ? 1 + (perfil.porFormato.get(chaveDeAtributo(c.formato)) ?? 0) : 1;
+      const fCor = c.cor ? 1 + (perfil.porCor.get(chaveDeAtributo(c.cor)) ?? 0) : 1;
       return base * Math.log1p(fFormato) * Math.log1p(fCor);
     }
 
@@ -4015,6 +4140,65 @@ export function margemPct(unitPrice: number, unitCost: number): number {
  * usa a mesma ideia e a publica na base da linha (`teto_25p`).
  */
 export const TETO_POR_LINHA_PCT = 25;
+
+/**
+ * Reparte `meta` unidades por `pesos`, respeitando um TETO por posição, e
+ * REDISTRIBUI o excedente entre quem ainda tem folga, em rodadas. Descartar o
+ * excedente faria o total fechar abaixo da meta — que é exatamente o "aprox.
+ * no re-escalonamento" do concorrente. O que não cabe em teto nenhum volta em
+ * `naoAlocado`, declarado, nunca espalhado por cima dos tetos.
+ *
+ * Era o laço interno de `montarPlanoDetalhado`; saiu dali para a composição
+ * do mix por perfil usar a MESMA conta, em vez de uma segunda que divergiria.
+ */
+export function repartirComTeto(
+  pesos: number[],
+  meta: number,
+  tetos: number[],
+  tieBreak?: (i: number, j: number) => number,
+): { cotas: number[]; naoAlocado: number } {
+  const alvo = Math.max(0, Math.trunc(meta));
+  let cotas = largestRemainders(pesos, alvo, tieBreak);
+  let naoAlocado = 0;
+  for (let volta = 0; volta < 12; volta += 1) {
+    let excedente = 0;
+    cotas = cotas.map((q, i) => {
+      if (q > tetos[i]) {
+        excedente += q - tetos[i];
+        return tetos[i];
+      }
+      return q;
+    });
+    if (excedente === 0) break;
+    const folga = cotas.map((q, i) => (q < tetos[i] ? pesos[i] : 0));
+    if (folga.every((f) => f === 0)) {
+      // Todo mundo no teto e ainda sobra. NÃO é falha do plano: é a resposta
+      // honesta de que o piso pedido não cabe no que a rede escoa. Empurrar
+      // o resto por cima seria transformar o piso do cliente em ordem de
+      // encher a rede — o defeito que a absorção veio corrigir.
+      naoAlocado += excedente;
+      break;
+    }
+    const extra = largestRemainders(folga, excedente, (i, j) => folga[j] - folga[i]);
+    // SEM clamp aqui, de propósito: a redistribuição pode estourar o teto de
+    // quem recebeu, e é a volta seguinte do laço que precisa ENXERGAR esse
+    // estouro para recontá-lo. Cortar agora faria as unidades desaparecerem
+    // entre duas iterações, sem entrar em `naoAlocado` — o tipo de perda que
+    // não aparece em erro nenhum, só num total que não fecha.
+    cotas = cotas.map((q, i) => q + extra[i]);
+  }
+  // Uma última volta pode ter deixado alguém acima do teto se as 12 rodadas
+  // esgotaram; o excedente vira resto declarado em vez de cota acima do teto.
+  let sobra = 0;
+  cotas = cotas.map((q, i) => {
+    if (q > tetos[i]) {
+      sobra += q - tetos[i];
+      return tetos[i];
+    }
+    return q;
+  });
+  return { cotas, naoAlocado: naoAlocado + sobra };
+}
 
 export interface PlanoDetalhado {
   segmentos: { segmento: SegmentoDoPlano; meta: number; alocado: number; linhas: LinhaDoPlano[] }[];
@@ -4079,38 +4263,9 @@ export function montarPlanoDetalhado(
       c.absorcao == null ? tetoDoSegmento : Math.max(0, Math.min(tetoDoSegmento, Math.trunc(c.absorcao))),
     );
     const pesos = elegiveis.map((c) => pesoDoCandidato(c, perfil));
-    let cotas = largestRemainders(pesos, meta, (i, j) => pesos[j] - pesos[i]);
-
-    // Aplica os tetos e REDISTRIBUI o excedente entre quem ainda tem folga, em
-    // rodadas. Descartar o excedente faria o segmento fechar abaixo da meta —
-    // que é exatamente o "aprox. no re-escalonamento" do concorrente.
-    for (let volta = 0; volta < 12; volta += 1) {
-      let excedente = 0;
-      cotas = cotas.map((q, i) => {
-        if (q > tetos[i]) {
-          excedente += q - tetos[i];
-          return tetos[i];
-        }
-        return q;
-      });
-      if (excedente === 0) break;
-      const folga = cotas.map((q, i) => (q < tetos[i] ? pesos[i] : 0));
-      if (folga.every((f) => f === 0)) {
-        // Todo mundo no teto e ainda sobra. NÃO é falha do plano: é a resposta
-        // honesta de que o piso pedido não cabe no que a rede escoa. Empurrar
-        // o resto por cima seria transformar o piso do cliente em ordem de
-        // encher a rede — o defeito que a absorção veio corrigir.
-        naoAlocado += excedente;
-        break;
-      }
-      const extra = largestRemainders(folga, excedente, (i, j) => folga[j] - folga[i]);
-      // SEM clamp aqui, de propósito: a redistribuição pode estourar o teto de
-      // quem recebeu, e é a volta seguinte do laço que precisa ENXERGAR esse
-      // estouro para recontá-lo. Cortar agora faria as unidades desaparecerem
-      // entre duas iterações, sem entrar em `naoAlocado` — o tipo de perda que
-      // não aparece em erro nenhum, só num total que não fecha.
-      cotas = cotas.map((q, i) => q + extra[i]);
-    }
+    const rateio = repartirComTeto(pesos, meta, tetos, (i, j) => pesos[j] - pesos[i]);
+    const cotas = rateio.cotas;
+    naoAlocado += rateio.naoAlocado;
 
     const linhas = elegiveis
       .map((c, i) => ({
@@ -4231,4 +4386,764 @@ export function explicarLinha(
   }
 
   return frases.join(' ');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RODADA FINAL DE AJUSTES — padronização, faixa de preço, filtros e o mix por
+// perfil. Tudo puro, como o resto do arquivo: o serviço traz os Maps, a
+// interface reaproveita pelo alias `@planning`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Item 03 · listas fechadas ───────────────────────────────────────────────
+
+/**
+ * "Não identificado" é VALOR, não ausência. A peça foi olhada e o dado não
+ * permitiu dizer — o que é diferente de ninguém ter olhado (`null`). As duas
+ * pedem reações opostas (rodar o padronizador × pedir a ficha ao fornecedor),
+ * e nenhuma das duas entra num perfil de venda: um balde "não sei" com metade
+ * do catálogo dentro distorceria toda participação calculada.
+ */
+export const NAO_IDENTIFICADO = 'NAO_IDENTIFICADO' as const;
+
+export type FormatoLenteChave =
+  | 'RETANGULAR'
+  | 'QUADRADA'
+  | 'REDONDA'
+  | 'OVAL'
+  | 'AVIADOR'
+  | 'GATINHO'
+  | 'GEOMETRICA'
+  | 'WAYFARER'
+  | 'MASCARA'
+  | 'OUTROS'
+  | typeof NAO_IDENTIFICADO;
+
+export type MaterialArmacaoChave =
+  | 'ACETATO'
+  | 'METAL'
+  | 'TITANIO'
+  | 'ACO_INOX'
+  | 'ALUMINIO'
+  | 'INJETADO'
+  | 'TR90'
+  | 'NYLON'
+  | 'MADEIRA'
+  | 'COMBINADO'
+  | 'OUTROS'
+  | typeof NAO_IDENTIFICADO;
+
+/** A lista fechada do cliente, na ordem em que ele a escreveu. */
+export const FORMATOS_DE_LENTE: { chave: FormatoLenteChave; rotulo: string }[] = [
+  { chave: 'RETANGULAR', rotulo: 'Retangular' },
+  { chave: 'QUADRADA', rotulo: 'Quadrada' },
+  { chave: 'REDONDA', rotulo: 'Redonda' },
+  { chave: 'OVAL', rotulo: 'Oval' },
+  { chave: 'AVIADOR', rotulo: 'Aviador' },
+  { chave: 'GATINHO', rotulo: 'Gatinho (cat-eye)' },
+  { chave: 'GEOMETRICA', rotulo: 'Geométrica' },
+  { chave: 'WAYFARER', rotulo: 'Wayfarer' },
+  { chave: 'MASCARA', rotulo: 'Máscara (shield)' },
+  { chave: 'OUTROS', rotulo: 'Outros' },
+  { chave: NAO_IDENTIFICADO, rotulo: 'Não identificado' },
+];
+
+export const MATERIAIS_DE_ARMACAO: { chave: MaterialArmacaoChave; rotulo: string }[] = [
+  { chave: 'ACETATO', rotulo: 'Acetato' },
+  { chave: 'METAL', rotulo: 'Metal' },
+  { chave: 'TITANIO', rotulo: 'Titânio' },
+  { chave: 'ACO_INOX', rotulo: 'Aço inoxidável' },
+  { chave: 'ALUMINIO', rotulo: 'Alumínio' },
+  { chave: 'INJETADO', rotulo: 'Injetado' },
+  { chave: 'TR90', rotulo: 'TR90' },
+  { chave: 'NYLON', rotulo: 'Nylon' },
+  { chave: 'MADEIRA', rotulo: 'Madeira' },
+  { chave: 'COMBINADO', rotulo: 'Combinado' },
+  { chave: 'OUTROS', rotulo: 'Outros' },
+  { chave: NAO_IDENTIFICADO, rotulo: 'Não identificado' },
+];
+
+const ROTULO_FORMATO = new Map(FORMATOS_DE_LENTE.map((f) => [f.chave, f.rotulo]));
+const ROTULO_MATERIAL = new Map(MATERIAIS_DE_ARMACAO.map((m) => [m.chave, m.rotulo]));
+
+export const rotuloDoFormato = (c: FormatoLenteChave | null | undefined): string =>
+  c ? (ROTULO_FORMATO.get(c) ?? c) : '—';
+export const rotuloDoMaterial = (c: MaterialArmacaoChave | null | undefined): string =>
+  c ? (ROTULO_MATERIAL.get(c) ?? c) : '—';
+
+/** Texto reduzido para casar sinônimo: minúsculo, sem acento, só letras/dígitos e espaço. */
+const textoParaCasar = (s: string) =>
+  normCategory(s)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * Sinônimos → chave. A ordem IMPORTA: "quadrado wayfarer" é wayfarer (o mais
+ * específico ganha), "cat eye" antes de "oval" porque há ficha que escreve
+ * "gatinho oval". Cada linha aqui veio de uma grafia vista em planilha de
+ * fornecedor ou no cadastro do CDS; regex não vai prever a próxima, e é por
+ * isso que o que não casa vira NAO_IDENTIFICADO em vez de OUTROS — "outros" é
+ * afirmação ("é um formato que não está na lista"), e o padronizador não tem
+ * como afirmar isso de um texto que não entende.
+ */
+const SINONIMOS_DE_FORMATO: [RegExp, FormatoLenteChave][] = [
+  [/\bwayfarer\b|\bway\s?farer\b/, 'WAYFARER'],
+  [/\bmascara\b|\bshield\b|\bwrap\b|\bmask\b|\bvisor\b/, 'MASCARA'],
+  [/\baviador\b|\baviator\b|\bpilot(o|a)?\b|\bpiloto\b/, 'AVIADOR'],
+  [/\bgatinho\b|\bgato\b|\bcat\s?eye\b|\bcateye\b|\bcat\b|\bolho de gato\b/, 'GATINHO'],
+  [/\bgeometric[ao]?\b|\bhexagon\w*|\boctogon\w*|\boctagon\w*|\bpentagon\w*|\birregular\b/, 'GEOMETRICA'],
+  [/\bretangular\b|\brectangul\w*|\brectangle\b|\bretang\w*/, 'RETANGULAR'],
+  [/\bquadrad[ao]\b|\bsquare\b/, 'QUADRADA'],
+  [/\boval\b|\bovalad[ao]\b|\bovale\b/, 'OVAL'],
+  [/\bredond[ao]\b|\bround\b|\bcircular\b|\bpanto\w*|\bphanto\w*/, 'REDONDA'],
+  [/\boutr[ao]s?\b|\bother\b/, 'OUTROS'],
+];
+
+/**
+ * Padroniza o formato da lente. `null` só quando NÃO HÁ texto; texto que não
+ * casa com a lista vira NAO_IDENTIFICADO — o padronizador olhou e não soube.
+ * Chave já canônica passa direto (idempotente: rodar duas vezes não muda).
+ */
+export function normFormatoLente(texto: string | null | undefined): FormatoLenteChave | null {
+  if (texto == null) return null;
+  const t = textoParaCasar(texto);
+  if (!t) return null;
+  const canon = t.toUpperCase().replace(/ /g, '_') as FormatoLenteChave;
+  if (ROTULO_FORMATO.has(canon)) return canon;
+  for (const [re, chave] of SINONIMOS_DE_FORMATO) if (re.test(t)) return chave;
+  return NAO_IDENTIFICADO;
+}
+
+const SINONIMOS_DE_MATERIAL: [RegExp, MaterialArmacaoChave][] = [
+  [/\btr\s?-?\s?90\b/, 'TR90'],
+  [/\btitani[ou]m?\b|\btitan\b|\bbeta\s?titan\w*/, 'TITANIO'],
+  [/\baco\b.*\binox\w*|\binox\w*|\bstainless\b/, 'ACO_INOX'],
+  [/\balumin\w*/, 'ALUMINIO'],
+  [/\bnylon\b|\bnailon\b|\bgrilamid\b|\bpoliamida\b|\bultem\b|\bpeek\b/, 'NYLON'],
+  [/\bmadeira\b|\bwood\b|\bbambu\b|\bbamboo\b/, 'MADEIRA'],
+  [/\bacetat[oe]\b|\bzyl\b|\bcelulose\b/, 'ACETATO'],
+  [/\binjetad[ao]\b|\binjected\b|\bpropionat[oe]\b|\bpolicarbonato\b|\bpolycarbonate\b|\bplastic[oa]?\b|\bnylon\s?injetado\b/, 'INJETADO'],
+  [/\bmetal\w*|\bmonel\b|\blatao\b|\bbrass\b|\bsteel\b/, 'METAL'],
+  [/\boutr[ao]s?\b|\bother\b/, 'OUTROS'],
+];
+
+/**
+ * Padroniza o material da armação. Duas bases distintas no mesmo texto
+ * ("acetato e metal", "metal/acetato") viram COMBINADO — é o que a lista do
+ * cliente quer dizer com a palavra. "Combinado" escrito vale igual.
+ */
+export function normMaterialArmacao(texto: string | null | undefined): MaterialArmacaoChave | null {
+  if (texto == null) return null;
+  const t = textoParaCasar(texto);
+  if (!t) return null;
+  const canon = t.toUpperCase().replace(/ /g, '_') as MaterialArmacaoChave;
+  if (ROTULO_MATERIAL.has(canon)) return canon;
+  if (/\bcombinad[ao]\b|\bcombined\b|\bmist[ao]\b|\bmixed\b|\bmix\b/.test(t)) return 'COMBINADO';
+  const achados = new Set<MaterialArmacaoChave>();
+  for (const [re, chave] of SINONIMOS_DE_MATERIAL) if (re.test(t)) achados.add(chave);
+  achados.delete('OUTROS');
+  // Inox e alumínio são metais; titânio também. Casar "metal" junto com um
+  // deles não é combinação, é o texto sendo redundante ("metal titânio").
+  if (achados.size > 1 && achados.has('METAL')) {
+    for (const m of ['TITANIO', 'ACO_INOX', 'ALUMINIO'] as const) if (achados.has(m)) achados.delete('METAL');
+  }
+  if (achados.size > 1) return 'COMBINADO';
+  if (achados.size === 1) return [...achados][0];
+  return /\boutr[ao]s?\b|\bother\b/.test(t) ? 'OUTROS' : NAO_IDENTIFICADO;
+}
+
+export type GeneroChave = 'FEMININO' | 'MASCULINO' | 'UNISSEX' | 'MENINA' | 'MENINO' | 'INFANTIL';
+
+const ROTULO_GENERO: Record<GeneroChave, string> = {
+  FEMININO: 'Feminino',
+  MASCULINO: 'Masculino',
+  UNISSEX: 'Unissex',
+  MENINA: 'Menina',
+  MENINO: 'Menino',
+  INFANTIL: 'Infantil',
+};
+
+/**
+ * O gênero como cada fonte escreve — "Unisex" (Luxottica), "Unissex" (CDS),
+ * "Feminina", "Woman", "Kids" — reduzido a uma chave. `null` quando não há
+ * texto ou não dá para dizer: gênero errado num perfil é pior que gênero
+ * ausente, porque se soma à participação de outro.
+ */
+export function normGenero(texto: string | null | undefined): GeneroChave | null {
+  if (texto == null) return null;
+  const t = textoParaCasar(texto);
+  if (!t) return null;
+  if (/\bunis+ex\b|\bunisex\b|\bu\b/.test(t)) return 'UNISSEX';
+  if (/\bmenin[ao]s?\b|\bboy\w*|\bgirl\w*|\bkid\w*|\binfant\w*|\bcrianc\w*|\bjunior\b/.test(t)) {
+    if (/\bmenina\b|\bgirl\w*/.test(t)) return 'MENINA';
+    if (/\bmenino\b|\bboy\w*/.test(t)) return 'MENINO';
+    return 'INFANTIL';
+  }
+  if (/\bfem\w*|\bwom[ae]n\b|\bmulher\b|\bladies\b|\blady\b|\bf\b/.test(t)) return 'FEMININO';
+  if (/\bmasc\w*|\bm[ae]n\b|\bhomem\b|\bmale\b|\bm\b/.test(t)) return 'MASCULINO';
+  return null;
+}
+
+export const rotuloDoGenero = (c: GeneroChave | null | undefined): string => (c ? ROTULO_GENERO[c] : '—');
+
+// ─── Item 04 · faixa de preço a cada R$ 500 ─────────────────────────────────
+
+export interface FaixaDePreco {
+  /** floor(preço / passo) — estável, serve de chave. */
+  indice: number;
+  /** Início da faixa (inclusive). */
+  de: number;
+  /** Fim da faixa (exclusive): [de, ate). */
+  ate: number;
+  /** "R$ 500–1.000" — em pt-BR, pronto para a tela. */
+  rotulo: string;
+}
+
+export const PASSO_DA_FAIXA = 500;
+
+const reais = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+
+/**
+ * A faixa de preço FIXA, de R$ 500 em R$ 500 (rodada final · item 04). Fixa, e
+ * não por quartil, porque a faixa é vocabulário do comprador ("a peça de 500 a
+ * 1.000") e precisa significar a mesma coisa em qualquer recorte — um quartil
+ * muda quando a lista muda, e "faixa alta" passaria a ser outra coisa a cada
+ * filtro. R$ 500,00 cai em 500–1.000; R$ 499,99 em 0–500. Preço zero ou
+ * inválido cai na faixa 0, e a tela sabe que preço zero é dado faltando.
+ */
+export function faixaDePreco(preco: number, passo: number = PASSO_DA_FAIXA): FaixaDePreco {
+  const p = Number.isFinite(preco) && preco > 0 ? preco : 0;
+  const indice = Math.floor(p / passo);
+  const de = indice * passo;
+  const ate = de + passo;
+  return { indice, de, ate, rotulo: `R$ ${reais(de)}–${reais(ate)}` };
+}
+
+// ─── Item 08 · filtros combináveis da lista de compras ──────────────────────
+
+/**
+ * Tudo opcional e tudo AND: cada filtro preenchido estreita. Texto casa por
+ * inclusão sem acento; listas casam por pertencimento; números por intervalo
+ * fechado. `periodo` não está aqui de propósito — ele muda a JANELA de venda
+ * (é o `days` da consulta), não filtra linhas de um plano já calculado.
+ */
+export interface FiltroDeSugestoes {
+  marca?: string[];
+  sku?: string;
+  modelo?: string;
+  genero?: GeneroChave[];
+  formato?: FormatoLenteChave[];
+  material?: MaterialArmacaoChave[];
+  categoria?: string[];
+  /** Índices de faixa (ver `faixaDePreco`). */
+  faixa?: number[];
+  estoqueMin?: number;
+  estoqueMax?: number;
+  giroMin?: number;
+  giroMax?: number;
+}
+
+/** O que uma linha precisa expor para ser filtrável — item de pedido ou plano. */
+export interface LinhaFiltravel {
+  sku?: string | null;
+  description: string;
+  brand: string | null;
+  category: string | null;
+  unitPrice: number;
+  currentStock: number;
+  /** Unidades por dia. */
+  giro: number;
+  atributos?: Pick<AtributosDaPeca, 'genero' | 'formatoLente' | 'materialArmacao'> | null;
+}
+
+const contemTexto = (campo: string | null | undefined, busca: string) =>
+  normCategory(campo ?? '').includes(normCategory(busca));
+
+const emLista = (valor: string | null | undefined, lista: string[]) => {
+  if (!valor) return false;
+  const v = chaveDeAtributo(valor);
+  return lista.some((x) => chaveDeAtributo(x) === v);
+};
+
+export function passaNoFiltro(linha: LinhaFiltravel, f: FiltroDeSugestoes): boolean {
+  if (f.marca?.length && !emLista(linha.brand, f.marca)) return false;
+  if (f.sku && !contemTexto(linha.sku, f.sku)) return false;
+  if (f.modelo && !contemTexto(linha.description, f.modelo)) return false;
+  if (f.categoria?.length && !emLista(linha.category, f.categoria)) return false;
+  if (f.genero?.length && !f.genero.includes(normGenero(linha.atributos?.genero) as GeneroChave)) return false;
+  if (f.formato?.length && !f.formato.includes(linha.atributos?.formatoLente as FormatoLenteChave)) return false;
+  if (f.material?.length && !f.material.includes(linha.atributos?.materialArmacao as MaterialArmacaoChave)) return false;
+  if (f.faixa?.length && !f.faixa.includes(faixaDePreco(linha.unitPrice).indice)) return false;
+  if (f.estoqueMin != null && linha.currentStock < f.estoqueMin) return false;
+  if (f.estoqueMax != null && linha.currentStock > f.estoqueMax) return false;
+  if (f.giroMin != null && linha.giro < f.giroMin) return false;
+  if (f.giroMax != null && linha.giro > f.giroMax) return false;
+  return true;
+}
+
+export const filtroVazio = (f: FiltroDeSugestoes | undefined): boolean =>
+  !f ||
+  Object.values(f).every((v) => v == null || v === '' || (Array.isArray(v) && v.length === 0));
+
+/**
+ * Aplica o filtro a um plano de pedidos INTEIRO — por item, e refazendo os
+ * totais de cada pedido, porque um pedido filtrado com o total antigo diria
+ * "R$ 82 mil" sobre três linhas. Pedidos que ficam sem item somem.
+ */
+export function filtrarPedidos(plan: PurchaseOrdersPlan, f: FiltroDeSugestoes | undefined): PurchaseOrdersPlan {
+  if (filtroVazio(f)) return plan;
+  const orders = plan.orders
+    .map((o) => {
+      const items = o.items.filter((it) =>
+        passaNoFiltro(
+          {
+            sku: it.sku,
+            description: it.description,
+            brand: it.brand,
+            category: it.category,
+            unitPrice: it.unitPrice,
+            currentStock: it.currentStock,
+            giro: it.giro,
+            atributos: it.atributos ?? null,
+          },
+          f!,
+        ),
+      );
+      if (items.length === 0) return null;
+      return {
+        ...o,
+        items,
+        units: items.reduce((a, it) => a + it.quantity, 0),
+        total: round2(items.reduce((a, it) => a + it.total, 0)),
+        brands: [...new Set(items.map((it) => it.brand).filter((b): b is string => !!b))],
+      };
+    })
+    .filter((o): o is PurchaseOrder => o !== null);
+  return {
+    days: plan.days,
+    orders,
+    summary: {
+      suppliers: orders.length,
+      items: orders.reduce((a, o) => a + o.items.length, 0),
+      units: orders.reduce((a, o) => a + o.units, 0),
+      total: round2(orders.reduce((a, o) => a + o.total, 0)),
+    },
+  };
+}
+
+// ─── Item 05 · composição do mix por perfil ─────────────────────────────────
+//
+// A pergunta do cliente: "sugestões de compra por perfil — gênero + formato +
+// material + faixa de preço — cruzando participação nas vendas com
+// participação no estoque". O que sai daqui NÃO é reposição de SKU (isso é
+// `buildPurchaseOrders`): é a leitura de que "óculos de sol femininos de
+// acetato com lente gatinho, de R$ 500 a 1.000, são 18% do que vende e 7% do
+// que há em estoque" — e quantas peças NOVAS desse perfil a rede absorve.
+//
+// Desenho (painel de três propostas, três juízes): a FALTA se mede com a
+// mesma régua da recomendação por SKU (alvo de cobertura menos posição), para
+// os dois motores não discordarem na mesma tela; a LINGUAGEM é a da paridade
+// de participação, porque é o que o cliente pediu para ler; e a leitura vem
+// com TRAVAS: cobertura da ficha calculada antes de recomendar, e declarada.
+
+export type SituacaoDoPerfil =
+  | 'abaixo' // falta líquida ≥ 1 e evidência bastante → recebe compra
+  | 'coberto' // posição já cobre o alvo
+  | 'parado' // estoque sem venda — remanejamento, não compra
+  | 'evidencia-insuficiente'; // vendeu menos que o mínimo — informado, não alocado
+
+export interface PerfilDoMix {
+  familia: 'solar' | 'armacao';
+  genero: GeneroChave;
+  formato: FormatoLenteChave;
+  material: MaterialArmacaoChave;
+  faixa: FaixaDePreco;
+}
+
+export interface LinhaDoMix {
+  /** "solar|FEMININO|GATINHO|ACETATO|1" — estável. */
+  chave: string;
+  perfil: PerfilDoMix;
+  /** "Óculos de sol femininos de acetato com lente gatinho · R$ 500–1.000" */
+  rotulo: string;
+  skus: number;
+  unitsSold: number;
+  /** % das vendas entre os itens LIDOS (com ficha completa). */
+  vendasPct: number;
+  /** Estoque + a caminho + reposição por SKU já sugerida. */
+  posicao: number;
+  currentStock: number;
+  onOrder: number;
+  reposicaoPorSku: number;
+  /** % da posição entre os itens LIDOS — o outro lado da paridade. */
+  estoquePct: number;
+  dailyDemand: number;
+  coverageDays: number | null;
+  /** Σ targetStock dos SKUs do perfil — a régua da reposição por SKU. */
+  alvo: number;
+  /**
+   * O que falta pela régua de COBERTURA (alvo − posição). É zero quase
+   * sempre que os SKUs do perfil já estão em compra — porque a reposição por
+   * SKU compra exatamente isso. Fica aqui para a tela mostrar as duas
+   * leituras lado a lado, não para decidir.
+   */
+  faltaCobertura: number;
+  /**
+   * O que a PARIDADE diria que este perfil deveria ter: participação nas
+   * vendas × estoque de amanhã (posição lida + meta). É a régua do cliente
+   * ("18% das vendas, 7% do estoque"), e é a que decide quantas peças NOVAS
+   * o perfil recebe — variedade, não reposição do que já existe.
+   */
+  metaDeParidade: number;
+  /** max(0, metaDeParidade − posição) — a falta que a composição preenche. */
+  faltaParidade: number;
+  /** Unidades NOVAS sugeridas para o perfil. */
+  units: number;
+  situacao: SituacaoDoPerfil;
+  /** Frase pronta: "8 óculos de sol femininos de acetato com lente gatinho (R$ 500–1.000)". */
+  frase: string;
+  /** Os números por trás — item 07. */
+  justificativa: string;
+  /** Margem média do perfil, só para exibir. */
+  margemPct: number;
+}
+
+export interface CoberturaDoMix {
+  itens: number;
+  lidos: number;
+  semFicha: number;
+  foraDoEscopo: number;
+  vendasTotal: number;
+  vendasLidas: number;
+  vendasLidasPct: number;
+  estoqueTotal: number;
+  estoqueLido: number;
+  estoqueLidoPct: number;
+  faltando: { genero: number; formato: number; material: number; preco: number };
+  leitura: 'confiavel' | 'parcial' | 'sem-base';
+  aviso: string;
+}
+
+export interface MixPorPerfil {
+  modo: 'meta' | 'diagnostico';
+  meta: number;
+  alocado: number;
+  naoAlocado: number;
+  linhas: LinhaDoMix[];
+  cobertura: CoberturaDoMix;
+  resumo: string;
+}
+
+export interface ParametrosDoMix {
+  /** Unidades a distribuir. Ausente = diagnóstico (Σ falta líquida). */
+  metaDeUnidades?: number;
+  /** Vendas mínimas do perfil para receber compra. Padrão 3. */
+  minVendas?: number;
+  /** Janela das vendas, para a justificativa. */
+  days?: number;
+  /** Alvo de cobertura em dias, para a frase. */
+  targetCoverDays?: number;
+  /** De onde vem a ficha, para o aviso ("catálogo Luxottica"). */
+  origemDaFicha?: string;
+}
+
+const pct = (parte: number, todo: number) => (todo > 0 ? Math.round((parte / todo) * 1000) / 10 : 0);
+
+/** "óculos de sol femininos" / "armações femininas" — concordância de verdade. */
+function nomeDoPerfil(p: PerfilDoMix, plural: boolean): string {
+  const solar = p.familia === 'solar';
+  const cabeca = solar ? (plural ? 'óculos de sol' : 'óculos de sol') : plural ? 'armações' : 'armação';
+  const gen = (() => {
+    switch (p.genero) {
+      case 'FEMININO':
+        return solar ? (plural ? 'femininos' : 'feminino') : plural ? 'femininas' : 'feminina';
+      case 'MASCULINO':
+        return solar ? (plural ? 'masculinos' : 'masculino') : plural ? 'masculinas' : 'masculina';
+      case 'UNISSEX':
+        return 'unissex';
+      case 'MENINA':
+        return 'de menina';
+      case 'MENINO':
+        return 'de menino';
+      case 'INFANTIL':
+        return plural ? 'infantis' : 'infantil';
+    }
+  })();
+  // Sem o parêntese dos rótulos de lista ("Gatinho (cat-eye)"): na frase
+  // corrida ele vira ruído.
+  const curto = (r: string) => r.replace(/\s*\(.*\)$/, '').toLowerCase();
+  const material = curto(rotuloDoMaterial(p.material));
+  const formato = curto(rotuloDoFormato(p.formato));
+  const comLente = p.formato === 'OUTROS' ? 'com lente de outro formato' : `com lente ${formato}`;
+  return `${cabeca} ${gen} de ${material} ${comLente}`;
+}
+
+/**
+ * Compõe o mix por perfil. Chame com os planos do ESCOPO (a página de compras
+ * já recorta por loja/grupo/janela) e o Map de fichas por productId.
+ *
+ * Invariantes que os testes cobram:
+ *  · Σ units + naoAlocado === meta (no modo meta);
+ *  · perfil 'coberto'/'parado'/'evidencia-insuficiente' recebe 0;
+ *  · units ≤ ceil(faltaParidade) por linha;
+ *  · a cobertura é calculada ANTES de recomendar e 'sem-base' zera a alocação.
+ */
+export function comporMixPorPerfil(
+  plans: ProductPlan[],
+  fichas: ReadonlyMap<string, AtributosDaPeca>,
+  params: ParametrosDoMix = {},
+): MixPorPerfil {
+  const minVendas = params.minVendas ?? 3;
+  const cobertura: CoberturaDoMix = {
+    itens: plans.length,
+    lidos: 0,
+    semFicha: 0,
+    foraDoEscopo: 0,
+    vendasTotal: 0,
+    vendasLidas: 0,
+    vendasLidasPct: 0,
+    estoqueTotal: 0,
+    estoqueLido: 0,
+    estoqueLidoPct: 0,
+    faltando: { genero: 0, formato: 0, material: 0, preco: 0 },
+    leitura: 'sem-base',
+    aviso: '',
+  };
+
+  type Acum = LinhaDoMix & { receita: number; custo: number };
+  const porChave = new Map<string, Acum>();
+
+  for (const p of plans) {
+    const vendas = Math.max(0, p.unitsSold);
+    const estoque = Math.max(0, p.currentStock);
+    const fam = familiaDePeca(p.category);
+    if (fam !== 'solar' && fam !== 'armacao') {
+      // Relógio, lente, acessório: não é "sem ficha", é OUTRO mercado. Sem
+      // este balde eles inflariam a falta de ficha e o aviso mentiria.
+      cobertura.foraDoEscopo += 1;
+      continue;
+    }
+    cobertura.vendasTotal += vendas;
+    cobertura.estoqueTotal += estoque;
+
+    const f = fichas.get(p.productId);
+    const genero = normGenero(f?.genero);
+    const formato = f?.formatoLente ?? null;
+    const material = f?.materialArmacao ?? null;
+    const temPreco = p.unitPrice > 0;
+    const formatoOk = formato != null && formato !== NAO_IDENTIFICADO;
+    const materialOk = material != null && material !== NAO_IDENTIFICADO;
+    if (!genero || !formatoOk || !materialOk || !temPreco) {
+      cobertura.semFicha += 1;
+      if (!genero) cobertura.faltando.genero += 1;
+      if (!formatoOk) cobertura.faltando.formato += 1;
+      if (!materialOk) cobertura.faltando.material += 1;
+      if (!temPreco) cobertura.faltando.preco += 1;
+      continue;
+    }
+
+    cobertura.lidos += 1;
+    cobertura.vendasLidas += vendas;
+    cobertura.estoqueLido += estoque;
+
+    const faixa = faixaDePreco(p.unitPrice);
+    const perfil: PerfilDoMix = { familia: fam, genero, formato: formato!, material: material!, faixa };
+    const chave = `${fam}|${genero}|${formato}|${material}|${faixa.indice}`;
+    const reposicao = p.recommendation === 'BUY' ? Math.max(0, p.suggestedQty) : 0;
+    const onOrder = Math.max(0, p.onOrderQty);
+    const a =
+      porChave.get(chave) ??
+      ({
+        chave,
+        perfil,
+        rotulo: '',
+        skus: 0,
+        unitsSold: 0,
+        vendasPct: 0,
+        posicao: 0,
+        currentStock: 0,
+        onOrder: 0,
+        reposicaoPorSku: 0,
+        estoquePct: 0,
+        dailyDemand: 0,
+        coverageDays: null,
+        alvo: 0,
+        faltaCobertura: 0,
+        metaDeParidade: 0,
+        faltaParidade: 0,
+        units: 0,
+        situacao: 'coberto',
+        frase: '',
+        justificativa: '',
+        margemPct: 0,
+        receita: 0,
+        custo: 0,
+      } as Acum);
+    a.skus += 1;
+    a.unitsSold += vendas;
+    a.currentStock += estoque;
+    a.onOrder += onOrder;
+    a.reposicaoPorSku += reposicao;
+    a.dailyDemand += Math.max(0, p.dailyDemand);
+    a.alvo += Math.max(0, p.targetStock);
+    a.receita += vendas * p.unitPrice;
+    a.custo += vendas * p.unitCost;
+    porChave.set(chave, a);
+  }
+
+  cobertura.vendasLidasPct = pct(cobertura.vendasLidas, cobertura.vendasTotal);
+  cobertura.estoqueLidoPct = pct(cobertura.estoqueLido, cobertura.estoqueTotal);
+
+  const linhas = [...porChave.values()];
+  const totalVendasLidas = linhas.reduce((s, l) => s + l.unitsSold, 0);
+
+  // ── A posição e as duas réguas ──────────────────────────────────────────
+  //
+  // A posição do perfil já INCLUI a reposição por SKU sugerida: é o estoque
+  // de amanhã se a rede comprar o que a camada A manda. O que a composição
+  // pergunta é o que falta DEPOIS disso — e pela régua de cobertura a
+  // resposta é quase sempre zero, porque a reposição por SKU compra
+  // exatamente até o alvo. A falta que sobra é de VARIEDADE: o perfil vende
+  // 18% e, mesmo repondo tudo, segue com 7% do estoque. Essa é a régua da
+  // paridade, e é ela que decide.
+  for (const l of linhas) {
+    l.posicao = l.currentStock + l.onOrder + l.reposicaoPorSku;
+    l.coverageDays = l.dailyDemand > 0 ? Math.round((l.currentStock / l.dailyDemand) * 10) / 10 : null;
+    l.faltaCobertura = Math.max(0, Math.round(l.alvo - l.posicao));
+    l.vendasPct = pct(l.unitsSold, totalVendasLidas);
+    l.margemPct = l.receita > 0 ? Math.round(((l.receita - l.custo) / l.receita) * 1000) / 10 : 0;
+    l.rotulo = nomeDoPerfil(l.perfil, true);
+    l.rotulo = l.rotulo.charAt(0).toUpperCase() + l.rotulo.slice(1) + ` · ${l.perfil.faixa.rotulo}`;
+  }
+  const totalPosicao = linhas.reduce((s, l) => s + l.posicao, 0);
+
+  // ── As travas de leitura, ANTES de recomendar ───────────────────────────
+  const perfisLidos = linhas.length;
+  if (cobertura.vendasLidasPct < 5 || perfisLidos < 2) cobertura.leitura = 'sem-base';
+  else if (cobertura.vendasLidasPct < 50) cobertura.leitura = 'parcial';
+  else cobertura.leitura = 'confiavel';
+
+  const origem = params.origemDaFicha ? ` — hoje, ${params.origemDaFicha}` : '';
+  const f = cobertura.faltando;
+  cobertura.aviso =
+    `Leitura feita sobre ${cobertura.lidos} de ${cobertura.itens - cobertura.foraDoEscopo} peças com ficha completa` +
+    `${origem}, que respondem por ${cobertura.vendasLidasPct.toLocaleString('pt-BR')}% das vendas e ` +
+    `${cobertura.estoqueLidoPct.toLocaleString('pt-BR')}% do estoque deste recorte. ` +
+    `Sem gênero: ${f.genero} · sem formato: ${f.formato} · sem material: ${f.material} · sem preço: ${f.preco}. ` +
+    (cobertura.leitura === 'sem-base'
+      ? 'Base insuficiente para recomendar composição — as linhas abaixo são só leitura.'
+      : 'As demais peças não entram em nenhuma linha.') +
+    (cobertura.foraDoEscopo > 0 ? ` ${cobertura.foraDoEscopo} fora do escopo (relógio, lente, acessório).` : '');
+
+  // ── A meta de paridade e a situação de cada perfil ──────────────────────
+  //
+  // Base = posição lida + o que a meta acrescenta. No diagnóstico (sem meta)
+  // a base é a posição de hoje: "para espelhar a venda, este perfil deveria
+  // ter X; tem Y". Com meta, a base já conta as peças que vão entrar — e a
+  // identidade Σ(meta_p − posição_p) = meta garante que a meta sempre cabe
+  // na falta somada, sem empurrar perfil já em paridade.
+  const modo: MixPorPerfil['modo'] = params.metaDeUnidades != null ? 'meta' : 'diagnostico';
+  const metaPedida = modo === 'meta' ? Math.max(0, Math.trunc(params.metaDeUnidades!)) : 0;
+  const base = totalPosicao + metaPedida;
+  const alvoDias = params.targetCoverDays ?? 60;
+  for (const l of linhas) {
+    l.estoquePct = pct(l.posicao, totalPosicao);
+    l.metaDeParidade = Math.round((l.unitsSold / Math.max(1, totalVendasLidas)) * base);
+    l.faltaParidade = Math.max(0, l.metaDeParidade - l.posicao);
+    // Cobertura da POSIÇÃO (com o que vem), não só do estoque físico.
+    const coberturaDaPosicao = l.dailyDemand > 0 ? l.posicao / l.dailyDemand : null;
+    if (l.dailyDemand <= 0) l.situacao = l.currentStock > 0 ? 'parado' : 'coberto';
+    else if (l.unitsSold < minVendas) l.situacao = 'evidencia-insuficiente';
+    else if (l.faltaParidade < 1) l.situacao = 'coberto';
+    // As duas réguas discordando forte: a paridade pede mais, mas a posição já
+    // cobre o dobro do alvo em dias. Comprar variedade para um perfil com 120
+    // dias de estoque é encher a rede com outro nome — a linha diz isso.
+    else if (coberturaDaPosicao !== null && coberturaDaPosicao > alvoDias * 2) l.situacao = 'coberto';
+    else l.situacao = 'abaixo';
+  }
+
+  const elegiveis = linhas.filter((l) => l.situacao === 'abaixo');
+  const somaFalta = elegiveis.reduce((s, l) => s + l.faltaParidade, 0);
+  const meta = modo === 'meta' ? metaPedida : somaFalta;
+
+  let naoAlocado = meta;
+  if (cobertura.leitura !== 'sem-base' && elegiveis.length > 0 && meta > 0) {
+    const pesos = elegiveis.map((l) => l.faltaParidade);
+    const tetos = elegiveis.map((l) => Math.ceil(l.faltaParidade));
+    const r = repartirComTeto(pesos, meta, tetos, (i, j) => {
+      const a = elegiveis[i];
+      const b = elegiveis[j];
+      return b.faltaParidade - a.faltaParidade || (a.coverageDays ?? 1e9) - (b.coverageDays ?? 1e9) || a.chave.localeCompare(b.chave);
+    });
+    elegiveis.forEach((l, i) => (l.units = r.cotas[i]));
+    naoAlocado = r.naoAlocado;
+  }
+  const alocado = elegiveis.reduce((s, l) => s + l.units, 0);
+
+  // ── A frase e a justificativa ───────────────────────────────────────────
+  const num = (n: number, d = 0) => n.toLocaleString('pt-BR', { maximumFractionDigits: d });
+  for (const l of linhas) {
+    const nome = nomeDoPerfil(l.perfil, l.units !== 1);
+    l.frase = l.units > 0 ? `${l.units} ${nome} (${l.perfil.faixa.rotulo})` : '';
+    const paridade =
+      `Perfil com ${num(l.vendasPct, 1)}% das vendas lidas e ${num(l.estoquePct, 1)}% da posição de estoque` +
+      ` — para espelhar a venda teria ${num(l.metaDeParidade)} un.; tem ${num(l.posicao)}` +
+      ` (${num(l.currentStock)} em estoque, ${num(l.onOrder)} a caminho, ${num(l.reposicaoPorSku)} na reposição por SKU).`;
+    const regua =
+      l.dailyDemand > 0
+        ? ` Vendeu ${num(l.unitsSold)} un. em ${num(params.days ?? 0) === '0' ? 'no período' : `${num(params.days!)} dias`}, cobertura de ${num(l.coverageDays ?? 0)} dias` +
+          (params.targetCoverDays ? ` contra alvo de ${num(params.targetCoverDays)}` : '') +
+          `; falta de variedade de ${num(l.faltaParidade)} un.` +
+          (l.faltaCobertura > 0 ? ` e de cobertura de ${num(l.faltaCobertura)} un.` : '')
+        : ` Sem venda no período com ${num(l.currentStock)} un. paradas.`;
+    const decisao = (() => {
+      switch (l.situacao) {
+        case 'abaixo':
+          return l.units > 0
+            ? ` Sugeridas ${num(l.units)} un. novas neste perfil.`
+            : ' Falta reconhecida, mas a meta não alcançou esta linha.';
+        case 'coberto':
+          return l.faltaParidade >= 1
+            ? ' Coberto: a paridade pediria mais, mas a posição já passa do dobro do alvo em dias — variedade aqui seria estoque com outro nome.'
+            : ' Coberto: a posição já espelha a participação nas vendas — não é caso de compra.';
+        case 'parado':
+          return ' Parado: candidato a remanejamento ou liquidação, não a compra.';
+        case 'evidencia-insuficiente':
+          return ` Evidência insuficiente (menos de ${minVendas} vendas): falta informada, não alocada.`;
+      }
+    })();
+    l.justificativa = paridade + regua + decisao;
+  }
+
+  linhas.sort(
+    (a, b) =>
+      b.units - a.units ||
+      b.faltaParidade - a.faltaParidade ||
+      b.vendasPct - a.vendasPct ||
+      a.chave.localeCompare(b.chave),
+  );
+
+  const comUnidades = linhas.filter((l) => l.units > 0);
+  const resumo =
+    comUnidades.length === 0
+      ? cobertura.leitura === 'sem-base'
+        ? 'Sem base para compor o mix por perfil neste recorte.'
+        : 'Nenhum perfil com falta de variedade e evidência bastante — o estoque já espelha a venda.'
+      : (modo === 'meta' ? 'Sugestão de composição: ' : 'A rede absorve peças novas nestes perfis: ') +
+        comUnidades
+          .slice(0, 6)
+          .map((l) => l.frase)
+          .join('; ') +
+        (comUnidades.length > 6 ? ` e mais ${comUnidades.length - 6} perfis` : '') +
+        '.' +
+        (naoAlocado > 0 ? ` ${num(naoAlocado)} un. da meta não couberam em falta nenhuma.` : '');
+
+  return {
+    modo,
+    meta,
+    alocado,
+    naoAlocado,
+    linhas: linhas.map(({ receita: _r, custo: _c, ...l }) => l),
+    cobertura,
+    resumo,
+  };
 }

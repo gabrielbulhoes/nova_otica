@@ -11,7 +11,7 @@ import {
   margemPct,
   montarPlanoDetalhado,
   chaveDeGrifeParaCasar,
-  normBrandKey,
+  chaveDeAtributo,
   splitByNeed,
   type CandidatoDeCompra,
   type LinhaDoPlano,
@@ -88,7 +88,7 @@ export async function perfilDaRede(days = 365) {
     // `evidenciaDoPerfil`.
     soma(porTipoGenero, chaveDePerfil(p.category, f?.genero ?? null), p.unitsSold);
     soma(porTipoGenero, chaveDePerfil(p.category, null), p.unitsSold);
-    soma(porFormato, f?.formato ? normBrandKey(f.formato) : null, p.unitsSold);
+    soma(porFormato, f?.formato ? chaveDeAtributo(f.formato) : null, p.unitsSold);
   }
 
   // O RANKING do formato — é o que vira "2º formato do segmento" na frase, e
@@ -197,7 +197,7 @@ export async function planoDaFeira(fairId: string) {
 
   const plano = montarPlanoDetalhado(candidatos, metas, perfil, (c, seg, units) =>
     explicarLinha(c, seg, units, {
-      rankFormato: c.formato ? (rankFormato.get(normBrandKey(c.formato)) ?? null) : null,
+      rankFormato: c.formato ? (rankFormato.get(chaveDeAtributo(c.formato)) ?? null) : null,
       margemMedia,
     }),
   );

@@ -36,6 +36,7 @@ import {
   LINHAS_POR_PAGINA,
   matchesProductGroup,
   normBrandKey,
+  chaveDeAtributo,
   type AtributosDaPeca,
   type CandidatoDeCompra,
   type SegmentoDoPlano,
@@ -195,6 +196,7 @@ export async function planningInputs(
       where: { id: { in: ids } },
       select: {
         id: true,
+        sku: true,
         description: true,
         brand: true,
         category: true,
@@ -239,6 +241,7 @@ export async function planningInputs(
     };
     return {
       productId: p.id,
+      sku: p.sku,
       description: p.description,
       brand: p.brand,
       category: p.category,
@@ -898,7 +901,7 @@ async function detalharPlanoContinuo(
     // com gênero na ficha nunca casaria com o histórico, que não tem gênero.
     soma(porTipoGenero, chaveDePerfil(c.tipo, c.genero), c.unitsSold);
     soma(porTipoGenero, chaveDePerfil(c.tipo, null), c.unitsSold);
-    soma(porFormato, c.formato ? normBrandKey(c.formato) : null, c.unitsSold);
+    soma(porFormato, c.formato ? chaveDeAtributo(c.formato) : null, c.unitsSold);
   }
   const perfil = { porTipoGenero, porFormato, porCor: new Map<string, number>() };
 
@@ -921,7 +924,7 @@ async function detalharPlanoContinuo(
 
   const plano = montarPlanoDetalhado(candidatos, metas, perfil, (c, seg, units) =>
     explicarLinha(c, seg, units, {
-      rankFormato: c.formato ? (rankPorFormato.get(normBrandKey(c.formato)) ?? null) : null,
+      rankFormato: c.formato ? (rankPorFormato.get(chaveDeAtributo(c.formato)) ?? null) : null,
       margemMedia,
     }),
   );
