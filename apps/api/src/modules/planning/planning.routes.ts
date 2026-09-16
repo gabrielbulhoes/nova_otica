@@ -11,6 +11,10 @@ import {
   TETO_DE_CARDS,
   TETO_DE_LINHAS,
   recortePedido,
+  FORMATOS_DE_LENTE,
+  GENEROS,
+  MATERIAIS_DE_ARMACAO,
+  type FiltroDeSugestoes,
   type ProductGroup,
 } from './planning.math.js';
 import { requireRole, scopedStoreId } from '../auth/auth.middleware.js';
@@ -38,6 +42,8 @@ import {
   listSupplierSettings,
   planningOverview,
   purchaseOrderHistory,
+  mixPorPerfil,
+  opcoesDeFiltro,
   purchaseOrders,
   purchaseSuggestions,
   rebalancePlan,
@@ -48,6 +54,74 @@ import {
 } from './planning.service.js';
 
 export const planningRouter = Router();
+
+/*
+ * OS FILTROS COMBINÁVEIS DA LISTA DE COMPRAS — rodada final · item 08.
+ *
+ * "Filtros combináveis em compras: marca, SKU, modelo, gênero, formato,
+ *  material, categoria, faixa de preço, estoque, giro, período."
+ *
+ * Tudo opcional e tudo AND. Lista aceita tanto `?marca=a&marca=b` quanto
+ * `?marca=a,b` — as duas formas chegam de tela e de link compartilhado, e
+ * aceitar só uma transformaria um link colado numa busca silenciosamente
+ * diferente.
+ *
+ * Gênero, formato e material são VALIDADOS contra as listas fechadas: um valor
+ * fora delas nunca casaria com nada, e devolver lista vazia sem dizer por quê
+ * faria o comprador desconfiar do estoque em vez do filtro.
+ */
+const lista = (v: unknown): string[] | undefined => {
+  const bruto = Array.isArray(v) ? v : v === undefined ? [] : [v];
+  const itens = bruto
+    .flatMap((x) => String(x).split(','))
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return itens.length ? itens : undefined;
+};
+const texto1 = (v: unknown): string | undefined => {
+  const t = typeof v === 'string' ? v.trim() : '';
+  return t === '' ? undefined : t;
+};
+const numero = (v: unknown): number | undefined => {
+  if (v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+const CHAVES_DE_GENERO = GENEROS.map((g) => g.chave) as [string, ...string[]];
+const CHAVES_DE_FORMATO = FORMATOS_DE_LENTE.map((f) => f.chave) as [string, ...string[]];
+const CHAVES_DE_MATERIAL = MATERIAIS_DE_ARMACAO.map((m) => m.chave) as [string, ...string[]];
+
+const filtroSchema = z.object({
+  marca: z.array(z.string().max(120)).max(50).optional(),
+  sku: z.string().max(60).optional(),
+  modelo: z.string().max(120).optional(),
+  genero: z.array(z.enum(CHAVES_DE_GENERO)).max(10).optional(),
+  formato: z.array(z.enum(CHAVES_DE_FORMATO)).max(20).optional(),
+  material: z.array(z.enum(CHAVES_DE_MATERIAL)).max(20).optional(),
+  categoria: z.array(z.string().max(120)).max(50).optional(),
+  faixa: z.array(z.number().int().min(0).max(200)).max(30).optional(),
+  estoqueMin: z.number().min(0).max(1_000_000).optional(),
+  estoqueMax: z.number().min(0).max(1_000_000).optional(),
+  giroMin: z.number().min(0).max(10_000).optional(),
+  giroMax: z.number().min(0).max(10_000).optional(),
+});
+
+const filtroDaQuery = (q: Record<string, unknown>): FiltroDeSugestoes =>
+  filtroSchema.parse({
+    marca: lista(q.marca),
+    sku: texto1(q.sku),
+    modelo: texto1(q.modelo),
+    genero: lista(q.genero),
+    formato: lista(q.formato),
+    material: lista(q.material),
+    categoria: lista(q.categoria),
+    faixa: lista(q.faixa)?.map((x) => Number(x)),
+    estoqueMin: numero(q.estoqueMin),
+    estoqueMax: numero(q.estoqueMax),
+    giroMin: numero(q.giroMin),
+    giroMax: numero(q.giroMax),
+  }) as FiltroDeSugestoes;
 
 // Janela padrão do planejamento: 90 dias de histórico de vendas.
 const days = (v: unknown) => parseDays(v, 90);
@@ -137,6 +211,7 @@ planningRouter.get(
         group(req.query.group),
         req.user?.role === 'ADMIN',
         req.query.somenteAprovados === '1',
+        filtroDaQuery(req.query as Record<string, unknown>),
       ),
     );
   }),
@@ -211,11 +286,82 @@ planningRouter.get(
   }),
 );
 
+/**
+ * GET /api/planning/filtros — as opções disponíveis no escopo (item 08).
+ *
+ * Existe para que os seletores ofereçam só o que EXISTE no recorte: um filtro
+ * que oferece "Wayfarer" num escopo sem nenhuma produz busca vazia e faz o
+ * comprador desconfiar do filtro, não do estoque.
+ */
+planningRouter.get(
+  '/filtros',
+  asyncHandler(async (req, res) => {
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await opcoesDeFiltro(days(req.query.days), storeId, group(req.query.group)));
+  }),
+);
+
+/**
+ * GET /api/planning/mix-por-perfil — a composição do mix (rodada final · 05).
+ *
+ * ADMIN: a leitura cruza participação nas vendas com participação no estoque
+ * da REDE, que é visão de rede pela mesma razão do remanejamento. Um gerente
+ * de loja continua com a reposição por SKU da própria loja, que é a decisão
+ * que cabe a ele.
+ */
+planningRouter.get(
+  '/mix-por-perfil',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const meta = req.query.meta === undefined ? undefined : Number(req.query.meta);
+    res.json(
+      await mixPorPerfil(
+        days(req.query.days),
+        scopedStoreId(req, req.query.storeId as string | undefined),
+        group(req.query.group),
+        Number.isFinite(meta) && (meta as number) >= 0 ? Math.trunc(meta as number) : undefined,
+      ),
+    );
+  }),
+);
+
+/*
+ * O ITEM DO PEDIDO — rodada final · item 04.
+ *
+ * "Quantidade sugerida, quantidade efetiva (editável). A sugestão original
+ *  deve ser preservada."
+ *
+ * `quantity` é a EFETIVA (a que vai ao fornecedor) e continua com esse nome
+ * porque é assim que os pedidos já gravados a chamam. `suggestedQty` é o que o
+ * motor disse, e nunca é sobrescrito pela edição: é o que permite, meses
+ * depois, comparar o que o motor sugeriu com o que a rede comprou.
+ *
+ * Tudo isso mora no JSON `items` de `PurchaseOrderRecord` — sem DDL, e sem
+ * inventar colunas para dado que só é lido junto do pedido.
+ */
 const orderItemSchema = z.object({
   productId: z.string().min(1),
+  sku: z.string().max(60).nullish(),
   description: z.string().max(240).default(''),
   quantity: z.number().int().min(1).max(100_000),
+  /**
+   * Obrigatória: um item gravado sem ela é indistinguível de um item em que o
+   * comprador aceitou a sugestão, e essa diferença é a razão do campo existir.
+   * `min(0)` porque o motor pode ter sugerido zero numa linha que o comprador
+   * acrescentou à mão — e isso é informação, não erro.
+   */
+  suggestedQty: z.number().int().min(0).max(100_000),
   unitCost: z.number().nonnegative().default(0),
+  unitPrice: z.number().nonnegative().optional(),
+  faixa: z.number().int().min(0).max(200).optional(),
+  atributos: z
+    .object({
+      genero: z.enum(CHAVES_DE_GENERO).nullish(),
+      formatoLente: z.enum(CHAVES_DE_FORMATO).nullish(),
+      materialArmacao: z.enum(CHAVES_DE_MATERIAL).nullish(),
+      cor: z.string().max(80).nullish(),
+    })
+    .optional(),
   total: z.number().nonnegative().default(0),
 });
 

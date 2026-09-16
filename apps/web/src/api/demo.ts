@@ -41,6 +41,14 @@ import {
   familiaDePeca,
   familiasComGiro,
   faixaDePreco,
+  filtrarPedidos,
+  filtroVazio,
+  comporMixPorPerfil,
+  FORMATOS_DE_LENTE,
+  GENEROS,
+  MATERIAIS_DE_ARMACAO,
+  type AtributosDaPeca,
+  type FiltroDeSugestoes,
   rotuloDoFormato,
   rotuloDoGenero,
   rotuloDoMaterial,
@@ -288,6 +296,41 @@ interface FichaDemo {
   bestSeller: boolean;
   dimensoes: { tamanhoLente: number | null; alturaLente: number | null; tamanhoPonte: number | null; tamanhoHaste: number | null };
   ultimaCompra: (prod: { id: string; sku: string }, custo: number) => Record<string, unknown> | null;
+}
+
+/** Os filtros da lista de compras (item 08), lidos da query da demonstração. */
+function filtroDaQueryDemo(params: Record<string, unknown>): FiltroDeSugestoes {
+  const lista = (v: unknown): string[] | undefined => {
+    const bruto = Array.isArray(v) ? v : v === undefined || v === '' ? [] : [v];
+    const itens = bruto
+      .flatMap((x) => String(x).split(','))
+      .map((x) => x.trim())
+      .filter(Boolean);
+    return itens.length ? itens : undefined;
+  };
+  const txt = (v: unknown) => {
+    const t = typeof v === 'string' ? v.trim() : '';
+    return t === '' ? undefined : t;
+  };
+  const n = (v: unknown) => {
+    if (v === undefined || v === '') return undefined;
+    const x = Number(v);
+    return Number.isFinite(x) ? x : undefined;
+  };
+  return {
+    marca: lista(params.marca),
+    sku: txt(params.sku),
+    modelo: txt(params.modelo),
+    genero: lista(params.genero) as FiltroDeSugestoes['genero'],
+    formato: lista(params.formato) as FiltroDeSugestoes['formato'],
+    material: lista(params.material) as FiltroDeSugestoes['material'],
+    categoria: lista(params.categoria),
+    faixa: lista(params.faixa)?.map((x) => Number(x)),
+    estoqueMin: n(params.estoqueMin),
+    estoqueMax: n(params.estoqueMax),
+    giroMin: n(params.giroMin),
+    giroMax: n(params.giroMax),
+  };
 }
 
 function atributosDemo(prod: { id: string; sku: string; category: string }): FichaDemo {
@@ -2616,7 +2659,104 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         );
       }
     }
-    return buildPurchaseOrders(planos, planDays, undefined, lojaFiltrada ? undefined : posicoes);
+    /* ─── Fichas, filtros e composição · rodada final ───────────────────────
+       As fichas fictícias (derivadas do id, estáveis) entram aqui pelo mesmo
+       caminho da API: um Map por productId. Sem elas a lista de compras da
+       demonstração não teria gênero, formato nem material — e as seções de
+       filtro e de composição abririam vazias numa apresentação. */
+    const fichas = new Map<string, AtributosDaPeca>();
+    for (const p of planos) {
+      const prod = prodById(p.productId);
+      if (!prod) continue;
+      const at = atributosDemo(prod);
+      if (!at.ficha) continue;
+      fichas.set(p.productId, {
+        genero: at.generoTexto,
+        formato: at.formatoTexto,
+        material: at.materialTexto,
+        formatoLente: at.formatoLente,
+        materialArmacao: at.materialArmacao,
+        tamanhoLente: at.dimensoes.tamanhoLente,
+        bestSeller: at.bestSeller,
+      });
+    }
+    const plano = buildPurchaseOrders(
+      planos,
+      planDays,
+      undefined,
+      lojaFiltrada ? undefined : posicoes,
+      undefined,
+      fichas,
+    );
+    const filtro = filtroDaQueryDemo(params);
+    const filtrado = filtrarPedidos(plano, filtro);
+    return {
+      ...filtrado,
+      filtros: filtroVazio(filtro) ? null : filtro,
+      antesDoFiltro: {
+        items: plano.summary.items,
+        units: plano.summary.units,
+        total: plano.summary.total,
+      },
+    };
+  }
+  if (url === '/planning/filtros' && m === 'GET') {
+    const planos = planningPlans(planDays, one(params.storeId), planGroup).filter(
+      (p) => p.recommendation === 'BUY' && p.suggestedQty > 0,
+    );
+    const marcas = new Set<string>();
+    const categorias = new Set<string>();
+    const faixas = new Map<number, string>();
+    const generos = new Set<string>();
+    const formatos = new Set<string>();
+    const materiais = new Set<string>();
+    for (const p of planos) {
+      const marca = analysisBrand(p.description, p.category, p.brand);
+      if (marca) marcas.add(marca);
+      if (p.category) categorias.add(p.category);
+      const f = faixaDePreco(p.unitPrice);
+      faixas.set(f.indice, f.rotulo);
+      const prod = prodById(p.productId);
+      const at = prod ? atributosDemo(prod) : null;
+      if (at?.genero) generos.add(at.genero);
+      if (at?.formatoLente) formatos.add(at.formatoLente);
+      if (at?.materialArmacao) materiais.add(at.materialArmacao);
+    }
+    return {
+      marcas: [...marcas].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+      categorias: [...categorias].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+      faixas: [...faixas.entries()].sort((a, b) => a[0] - b[0]).map(([indice, rotulo]) => ({ indice, rotulo })),
+      generos: GENEROS.filter((g) => generos.has(g.chave)),
+      formatos: FORMATOS_DE_LENTE.filter((f) => formatos.has(f.chave)),
+      materiais: MATERIAIS_DE_ARMACAO.filter((x) => materiais.has(x.chave)),
+      itens: planos.length,
+    };
+  }
+  if (url === '/planning/mix-por-perfil' && m === 'GET') {
+    const planos = planningPlans(planDays, one(params.storeId), planGroup);
+    const fichas = new Map<string, AtributosDaPeca>();
+    for (const p of planos) {
+      const prod = prodById(p.productId);
+      if (!prod) continue;
+      const at = atributosDemo(prod);
+      if (!at.ficha) continue;
+      fichas.set(p.productId, {
+        genero: at.generoTexto,
+        formato: at.formatoTexto,
+        material: at.materialTexto,
+        formatoLente: at.formatoLente,
+        materialArmacao: at.materialArmacao,
+        tamanhoLente: at.dimensoes.tamanhoLente,
+        bestSeller: at.bestSeller,
+      });
+    }
+    const meta = one(params.meta);
+    return comporMixPorPerfil(planos, fichas, {
+      ...(meta === undefined || meta === '' ? {} : { metaDeUnidades: Number(meta) }),
+      days: planDays,
+      targetCoverDays: DEFAULT_PLANNING_CONFIG.targetCoverDays,
+      origemDaFicha: 'fichas da demonstração',
+    });
   }
   if (url === '/planning/purchase-orders' && m === 'POST') {
     const items = (body.items ?? []) as DemoOrderRecord['items'];

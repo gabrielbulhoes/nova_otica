@@ -4597,6 +4597,11 @@ export function normGenero(texto: string | null | undefined): GeneroChave | null
 
 export const rotuloDoGenero = (c: GeneroChave | null | undefined): string => (c ? ROTULO_GENERO[c] : '—');
 
+/** A lista de gêneros, na ordem em que a tela os oferece. */
+export const GENEROS: { chave: GeneroChave; rotulo: string }[] = (
+  ['FEMININO', 'MASCULINO', 'UNISSEX', 'MENINA', 'MENINO', 'INFANTIL'] as GeneroChave[]
+).map((chave) => ({ chave, rotulo: ROTULO_GENERO[chave] }));
+
 // ─── Item 04 · faixa de preço a cada R$ 500 ─────────────────────────────────
 
 export interface FaixaDePreco {

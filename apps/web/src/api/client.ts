@@ -793,12 +793,27 @@ export interface ItemDistribution {
 
 export interface PurchaseOrderItem {
   productId: string;
+  /** O código da peça como o fornecedor a reconhece (rodada final · item 04). */
+  sku: string | null;
   description: string;
   /** Marca real do produto (extraída da descrição). */
   brand: string | null;
   category: string | null;
+  /** A quantidade EFETIVA — a que vai no pedido; é a editável. */
   quantity: number;
+  /** O que o motor sugeriu. Nunca é sobrescrito pela edição (item 04). */
+  suggestedQty: number;
   unitCost: number;
+  unitPrice: number;
+  /** A faixa de R$ 500 em que o preço cai. */
+  faixa: { indice: number; de: number; ate: number; rotulo: string };
+  currentStock: number;
+  unitsSold: number;
+  /** Unidades por dia na janela. */
+  giro: number;
+  coverageDays: number | null;
+  /** Estoque, vendas e giro em uma frase (item 07). */
+  justificativa: string;
   total: number;
   orderByInDays: number | null;
   stockoutInDays: number | null;
@@ -822,6 +837,14 @@ export interface PurchaseOrderItem {
 export interface AtributosDaPeca {
   /** Feminino · Masculino · Unisex · Menina · Menino */
   genero: string | null;
+  /**
+   * As versões PADRONIZADAS (rodada final · item 03) — a lista fechada. É por
+   * elas que o motor agrupa; os campos de texto ao lado são como cada fonte
+   * escreveu, e é isso que a tela mostra. Ausentes enquanto a peça não passou
+   * pelo padronizador.
+   */
+  formatoLente?: string | null;
+  materialArmacao?: string | null;
   /** Retangular, Quadrado, Gatinho, Phantos… — o "tipo de óculos" do feedback. */
   formato: string | null;
   material: string | null;
@@ -859,6 +882,96 @@ export interface PurchaseOrdersPlan {
   days: number;
   summary: { suppliers: number; items: number; units: number; total: number };
   orders: PurchaseOrder[];
+  /** Os filtros em vigor (item 08); `null` quando nenhum. */
+  filtros?: FiltroDeCompras | null;
+  /** O tamanho do plano ANTES do filtro — o "de 340 itens" da tela. */
+  antesDoFiltro?: { items: number; units: number; total: number };
+}
+
+/* ─── Filtros combináveis da lista de compras · rodada final · item 08 ──────
+   Tudo opcional e tudo AND. Vive na URL para que um recorte seja um link que
+   se manda para outra pessoa — e não uma sequência de cliques a repetir. */
+export interface FiltroDeCompras {
+  marca?: string[];
+  sku?: string;
+  modelo?: string;
+  genero?: string[];
+  formato?: string[];
+  material?: string[];
+  categoria?: string[];
+  faixa?: number[];
+  estoqueMin?: number;
+  estoqueMax?: number;
+  giroMin?: number;
+  giroMax?: number;
+}
+
+export interface OpcoesDeFiltro {
+  marcas: string[];
+  categorias: string[];
+  faixas: { indice: number; rotulo: string }[];
+  generos: { chave: string; rotulo: string }[];
+  formatos: { chave: string; rotulo: string }[];
+  materiais: { chave: string; rotulo: string }[];
+  itens: number;
+}
+
+/* ─── Composição do mix por perfil · rodada final · item 05 ─────────────────
+   Gênero + formato + material + faixa de preço, cruzando participação nas
+   vendas com participação no estoque. */
+export interface LinhaDoMix {
+  chave: string;
+  perfil: {
+    familia: string;
+    genero: string;
+    formato: string;
+    material: string;
+    faixa: { indice: number; de: number; ate: number; rotulo: string };
+  };
+  rotulo: string;
+  skus: number;
+  unitsSold: number;
+  vendasPct: number;
+  posicao: number;
+  currentStock: number;
+  onOrder: number;
+  reposicaoPorSku: number;
+  estoquePct: number;
+  dailyDemand: number;
+  coverageDays: number | null;
+  alvo: number;
+  faltaCobertura: number;
+  metaDeParidade: number;
+  faltaParidade: number;
+  units: number;
+  situacao: 'abaixo' | 'coberto' | 'parado' | 'evidencia-insuficiente';
+  frase: string;
+  justificativa: string;
+  margemPct: number;
+}
+
+export interface MixPorPerfil {
+  modo: 'meta' | 'diagnostico';
+  meta: number;
+  alocado: number;
+  naoAlocado: number;
+  linhas: LinhaDoMix[];
+  cobertura: {
+    itens: number;
+    lidos: number;
+    semFicha: number;
+    foraDoEscopo: number;
+    vendasTotal: number;
+    vendasLidas: number;
+    vendasLidasPct: number;
+    estoqueTotal: number;
+    estoqueLido: number;
+    estoqueLidoPct: number;
+    faltando: { genero: number; formato: number; material: number; preco: number };
+    leitura: 'confiavel' | 'parcial' | 'sem-base';
+    aviso: string;
+  };
+  resumo: string;
 }
 
 export type DecisionType = 'COMPRA' | 'REMANEJAMENTO' | 'LIQUIDACAO';
@@ -1159,6 +1272,12 @@ export const getDecisionBoard = (params: PlanParams, signal?: AbortSignal) =>
   api.get<DecisionBoard>('/planning/decisions', { params, signal }).then((r) => r.data);
 export const getCommercialStrategy = (params: PlanParams) =>
   api.get<CommercialStrategy>('/planning/strategy', { params }).then((r) => r.data);
+export const getOpcoesDeFiltro = (params: PlanParams) =>
+  api.get<OpcoesDeFiltro>('/planning/filtros', { params }).then((r) => r.data);
+
+export const getMixPorPerfil = (params: PlanParams & { meta?: number }) =>
+  api.get<MixPorPerfil>('/planning/mix-por-perfil', { params }).then((r) => r.data);
+
 export const getPurchaseOrders = (params: PlanParams) =>
   api.get<PurchaseOrdersPlan>('/planning/purchase-orders', { params }).then((r) => r.data);
 

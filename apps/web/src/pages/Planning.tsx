@@ -16,6 +16,8 @@ import {
   getFilaDeDistribuicao,
   getReceivingUnits,
   distributeOrder,
+  getMixPorPerfil,
+  getOpcoesDeFiltro,
   getPurchaseOrders,
   getPurchaseSuggestions,
   getRebalancePlan,
@@ -29,13 +31,17 @@ import {
   declararMixDaGrife,
   settlePurchaseOrder,
   type MovementClass,
+  type LinhaDoMix,
+  type OpcoesDeFiltro,
   type PurchaseOrder,
+  type PurchaseOrderItem,
   type ProductGroup,
   type PurchaseOrderRecord,
   type Recommendation,
   type RateioLoja,
   type RebalanceSuggestion,
 } from '../api/client';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   PageHeader,
   Loading,
@@ -44,6 +50,7 @@ import {
   Botao,
   BotaoPrimario,
   AberturaDeSecao,
+  Codigo,
   Unidade,
   type TomDeSelo,
 } from '../components/ui';
@@ -537,9 +544,38 @@ function ComposicaoDoPedido({ order }: { order: PurchaseOrder }) {
 }
 
 /** Rascunho de ordem de compra de um fornecedor, com export CSV e envio. */
+/**
+ * A LISTA DE COMPRA POR SKU, com a quantidade editável — rodada final · item 04.
+ *
+ * "O pedido de compra deve ser por SKU específico, com marca, modelo, SKU,
+ *  variante/cor, estoque atual, vendido no período, giro, quantidade sugerida,
+ *  quantidade efetiva (editável), faixa de preço. A sugestão original deve ser
+ *  preservada."
+ *
+ * A EDIÇÃO MORA NA TELA, e o que vai para o banco são os DOIS números. O motor
+ * continua dizendo o que acha; o comprador diz o que comprou. Meses depois, a
+ * diferença entre os dois é a única forma de saber se o motor está ajudando —
+ * e ela desaparece se a edição sobrescrever a sugestão.
+ */
 function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(order.orderByInDays !== null && order.orderByInDays <= 7);
+  /*
+   * Só o que foi EDITADO mora aqui. Um mapa pré-preenchido com todas as
+   * sugestões ficaria velho na primeira invalidação da consulta — a tela
+   * mostraria a quantidade de um plano que o servidor já recalculou. Chave
+   * ausente significa "o comprador não mexeu", e o valor vem do item.
+   */
+  const [efetivas, setEfetivas] = useState<Record<string, number>>({});
+  const efetivaDe = (it: PurchaseOrderItem) => efetivas[it.productId] ?? it.quantity;
+  const editado = (it: PurchaseOrderItem) => efetivaDe(it) !== it.suggestedQty;
+  const itensDoPedido = order.items.map((it) => ({ it, efetiva: efetivaDe(it) }));
+  const unidades = itensDoPedido.reduce((a, x) => a + x.efetiva, 0);
+  // O total segue a quantidade efetiva: um pedido editado exibindo o total da
+  // sugestão manda o comprador assinar um número que não é o do pedido.
+  const totalEfetivo =
+    Math.round(itensDoPedido.reduce((a, x) => a + x.efetiva * x.it.unitCost, 0) * 100) / 100;
+  const houveEdicao = itensDoPedido.some((x) => x.efetiva !== x.it.suggestedQty);
   // Um rateio aberto por vez: cada um abre uma tabela de 16 linhas, e dois
   // abertos dentro de um pedido de 30 itens viram uma parede. Mesmo critério do
   // plano de recebimento, onde a decisão já tinha sido tomada.
@@ -551,13 +587,33 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
     await registerPurchaseOrder({
       supplier: order.supplier,
       leadTimeDays: order.leadTimeDays,
-      items: order.items.map((it) => ({
-        productId: it.productId,
-        description: it.description,
-        quantity: it.quantity,
-        unitCost: it.unitCost,
-        total: it.total,
-      })),
+      // Item com quantidade efetiva ZERO não vai: zerar é a forma de tirar a
+      // peça do pedido, e mandá-la com zero criaria uma linha de pedido que
+      // não pede nada.
+      items: itensDoPedido
+        .filter((x) => x.efetiva > 0)
+        .map(({ it, efetiva }) => ({
+          productId: it.productId,
+          sku: it.sku,
+          description: it.description,
+          quantity: efetiva,
+          // A SUGESTÃO ORIGINAL vai junto, intacta.
+          suggestedQty: it.suggestedQty,
+          unitCost: it.unitCost,
+          unitPrice: it.unitPrice,
+          faixa: it.faixa.indice,
+          ...(it.atributos
+            ? {
+                atributos: {
+                  genero: it.atributos.genero,
+                  formatoLente: it.atributos.formatoLente ?? null,
+                  materialArmacao: it.atributos.materialArmacao ?? null,
+                  cor: null,
+                },
+              }
+            : {}),
+          total: Math.round(efetiva * it.unitCost * 100) / 100,
+        })),
     });
     qc.invalidateQueries({ queryKey: ['planning-history'] });
     qc.invalidateQueries({ queryKey: ['planning-orders'] });
@@ -597,8 +653,9 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
           </div>
           <div className="muted" style={{ fontSize: 12 }}>
             {order.brands.length > 0 && <>marcas: {order.brands.join(', ')} · </>}
-            {order.items.length} {order.items.length === 1 ? 'item' : 'itens'} · {order.units} un. · entrega em{' '}
-            {order.leadTimeDays} dias
+            {order.items.length} {order.items.length === 1 ? 'item' : 'itens'} · {unidades} un.
+            {houveEdicao && <span title="quantidade sugerida pelo motor"> (sugeridas {order.units})</span>} · entrega
+            em {order.leadTimeDays} dias
             {order.stockoutInDays !== null && (
               <span style={{ color: 'var(--red)' }}> · vai faltar em ~{order.stockoutInDays}d se não pedir</span>
             )}
@@ -617,7 +674,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
             enviar {urgency}
           </Selo>
         )}
-        <strong style={{ whiteSpace: 'nowrap' }}>{formatBRL(order.total)}</strong>
+        <strong style={{ whiteSpace: 'nowrap' }}>{formatBRL(totalEfetivo)}</strong>
         {/* Era um <span role="button"> sem tabIndex e sem tecla: aparência de
             botão, nenhum comportamento de botão para quem navega por teclado. */}
         <Botao
@@ -634,7 +691,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
         <span onClick={(e) => e.stopPropagation()}>
           <TwoStepButton
             label="Registrar envio"
-            confirmLabel={`Confirmar envio (${formatBRL(order.total)})`}
+            confirmLabel={`Confirmar envio (${formatBRL(totalEfetivo)})`}
             doneLabel="Enviado"
             onConfirm={send}
           />
@@ -655,7 +712,14 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
               <th>Tipo</th>
               <th>Gênero</th>
               <th>Material</th>
-              <th className="num">Qtde</th>
+              <th>Faixa</th>
+              <th className="num">Estoque</th>
+              <th className="num">Vendido</th>
+              <th className="num">Giro/mês</th>
+              {/* SUGERIDA e EFETIVA lado a lado (item 04): a primeira é do
+                  motor e não muda; a segunda é do comprador. */}
+              <th className="num">Sugerida</th>
+              <th className="num">Efetiva</th>
               <th className="num">Custo unit.</th>
               <th className="num">Total</th>
               <th>Pedir até</th>
@@ -668,7 +732,15 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
               <Fragment key={it.productId}>
                 <tr>
                   <td>
-                    {it.description}{' '}
+                    {/* O SKU é o que o fornecedor reconhece, e é o que o
+                        comprador digita no pedido dele — vem junto do nome, em
+                        mono, não escondido numa coluna que some no scroll. */}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                      <Link to={`/admin/produtos/${it.productId}`} style={{ color: 'inherit' }}>
+                        {it.description}
+                      </Link>
+                      {it.sku && <Codigo>{it.sku}</Codigo>}
+                    </div>{' '}
                     {/* Marcação do FORNECEDOR, e o título diz isso em voz alta.
                         Quem decide o que gira nesta rede é o histórico dela,
                         não a campanha de quem vende para ela — o selo é
@@ -691,9 +763,57 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                   <td>{it.atributos?.formato ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.genero ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.material ?? <span className="muted">—</span>}</td>
-                  <td className="num">{it.quantity}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{it.faixa.rotulo}</td>
+                  <td className="num">{it.currentStock}</td>
+                  <td className="num">{it.unitsSold}</td>
+                  {/* Giro por MÊS: "0,03/dia" não diz nada a quem compra. */}
+                  <td className="num">{(it.giro * 30).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}</td>
+                  <td className="num">{it.suggestedQty}</td>
+                  <td className="num">
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100000}
+                        step={1}
+                        value={efetivaDe(it)}
+                        aria-label={`Quantidade efetiva de ${it.description}`}
+                        onChange={(e) => {
+                          const n = Math.max(0, Math.trunc(Number(e.target.value)));
+                          setEfetivas((m) => ({ ...m, [it.productId]: Number.isFinite(n) ? n : 0 }));
+                        }}
+                        style={{
+                          width: 72,
+                          textAlign: 'right',
+                          // O realce só aparece quando o número DIVERGE da
+                          // sugestão: um campo permanentemente destacado deixa
+                          // de destacar coisa nenhuma.
+                          borderColor: editado(it) ? 'var(--ouro)' : undefined,
+                          fontWeight: editado(it) ? 600 : undefined,
+                        }}
+                      />
+                      {editado(it) && (
+                        <Botao
+                          variante="discreto"
+                          pequeno
+                          icone="limpar"
+                          title={`Voltar à sugestão do motor (${it.suggestedQty} un.)`}
+                          onClick={() =>
+                            setEfetivas((m) => {
+                              const { [it.productId]: _fora, ...resto } = m;
+                              return resto;
+                            })
+                          }
+                        >
+                          {''}
+                        </Botao>
+                      )}
+                    </div>
+                  </td>
                   <td className="num">{formatBRL(it.unitCost)}</td>
-                  <td className="num">{formatBRL(it.total)}</td>
+                  <td className="num">
+                    {formatBRL(Math.round(efetivaDe(it) * it.unitCost * 100) / 100)}
+                  </td>
                   <td>
                     <OrderBy inDays={it.orderByInDays} leadTimeDays={order.leadTimeDays} />
                   </td>
@@ -726,14 +846,24 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                     )}
                   </td>
                 </tr>
+                {/* A JUSTIFICATIVA MÍNIMA — rodada final · item 07. Sempre
+                    visível, nunca atrás de um tooltip: "toda recomendação deve
+                    trazer justificativa mínima (estoque, vendas, giro)", e uma
+                    justificativa que exige passar o mouse não está na tela de
+                    quem decide — está escondida dela. */}
+                <tr>
+                  <td colSpan={16} style={{ paddingTop: 0, borderTop: 'none' }}>
+                    <span className="hint">{it.justificativa}</span>
+                  </td>
+                </tr>
                 {it.distribution && rateioAberto === it.productId && (
                   <tr>
                     {/* `--panel-2` é o fundo de segundo nível do tema; a linha
                         expandida precisa se destacar da linha do item sem virar
                         um bloco de outra tela. */}
-                    {/* 11 colunas desde que a ficha do fornecedor entrou
-                        (Tipo, Gênero, Material no lugar de Categoria). */}
-                    <td colSpan={11} style={{ background: 'var(--panel-2)' }}>
+                    {/* 16 colunas desde a rodada final: faixa de preço,
+                        estoque, vendido, giro e o par sugerida/efetiva. */}
+                    <td colSpan={16} style={{ background: 'var(--panel-2)' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
                         <Selo tom="blue" icone="ideia" title={it.distribution.basisLabel}>
                           por {it.distribution.basis}
@@ -742,7 +872,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                             parece sempre a mesma coisa, cubra ele a falta da
                             rede ou um vigésimo dela. */}
                         <span className="muted" style={{ fontSize: 12 }}>
-                          {it.quantity}
+                          {efetivaDe(it)}
                           <Unidade>un.</Unidade> a dividir
                           {/* Na reserva a falta é zero por definição, e "para
                               uma falta de 0 un." seria a tela explicando o
@@ -779,6 +909,399 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+
+/* ═══ Filtros combináveis da lista de compras · rodada final · item 08 ═══════
+   "Filtros combináveis em compras: marca, SKU, modelo, gênero, formato,
+    material, categoria, faixa de preço, estoque, giro, período."
+
+   O ESTADO MORA NA URL. Um recorte que o comprador montou com oito cliques
+   precisa ser um link que ele manda para o sócio — e precisa sobreviver ao F5
+   no meio de uma negociação. É também o que faz o botão "voltar" do navegador
+   desfazer um filtro, que é o gesto que todo mundo tenta.
+
+   E o filtro vai ao SERVIDOR: filtrar no cliente responderia "destes 200
+   itens, quais são femininos de acetato", que é uma pergunta sobre a página,
+   não sobre a compra. */
+const CHAVES_DE_FILTRO = [
+  'marca',
+  'sku',
+  'modelo',
+  'genero',
+  'formato',
+  'material',
+  'categoria',
+  'faixa',
+  'estoqueMin',
+  'estoqueMax',
+  'giroMin',
+  'giroMax',
+] as const;
+
+type ChaveDeFiltro = (typeof CHAVES_DE_FILTRO)[number];
+
+/** Os filtros como a URL os guarda: string única por chave, lista por vírgula. */
+type FiltrosNaUrl = Partial<Record<ChaveDeFiltro, string>>;
+
+const filtrosDaUrl = (sp: URLSearchParams): FiltrosNaUrl => {
+  const o: FiltrosNaUrl = {};
+  for (const k of CHAVES_DE_FILTRO) {
+    const v = sp.get(k);
+    if (v) o[k] = v;
+  }
+  return o;
+};
+
+const contarFiltros = (f: FiltrosNaUrl) => Object.values(f).filter(Boolean).length;
+
+/** Caixa de seleção múltipla enxuta — sem biblioteca nova. */
+function MultiSelecao({
+  rotulo,
+  opcoes,
+  valor,
+  aoMudar,
+}: {
+  rotulo: string;
+  opcoes: { chave: string; rotulo: string }[];
+  valor: string;
+  aoMudar: (v: string) => void;
+}) {
+  const marcadas = valor ? valor.split(',') : [];
+  const alternar = (c: string) => {
+    const nova = marcadas.includes(c) ? marcadas.filter((x) => x !== c) : [...marcadas, c];
+    aoMudar(nova.join(','));
+  };
+  if (opcoes.length === 0) return null;
+  return (
+    <details style={{ minWidth: 150 }}>
+      <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+        {rotulo}
+        {marcadas.length > 0 && <strong> ({marcadas.length})</strong>}
+      </summary>
+      <div
+        style={{
+          position: 'absolute',
+          zIndex: 5,
+          background: 'var(--panel)',
+          border: '1px solid var(--linha)',
+          borderRadius: 4,
+          padding: 8,
+          maxHeight: 260,
+          overflowY: 'auto',
+          boxShadow: 'var(--shadow-window)',
+        }}
+      >
+        {opcoes.map((o) => (
+          <label key={o.chave} style={{ display: 'block', fontSize: 13, whiteSpace: 'nowrap', padding: '2px 0' }}>
+            <input
+              type="checkbox"
+              checked={marcadas.includes(o.chave)}
+              onChange={() => alternar(o.chave)}
+              style={{ marginRight: 6 }}
+            />
+            {o.rotulo}
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function FiltrosDeCompra({
+  filtros,
+  aoMudar,
+  opcoes,
+  mostrando,
+  total,
+}: {
+  filtros: FiltrosNaUrl;
+  aoMudar: (chave: ChaveDeFiltro, valor: string) => void;
+  opcoes?: OpcoesDeFiltro;
+  mostrando: number;
+  total: number;
+}) {
+  const n = contarFiltros(filtros);
+  return (
+    <div className="card" style={{ padding: 12, marginBottom: 10 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          placeholder="SKU"
+          aria-label="Filtrar por SKU"
+          value={filtros.sku ?? ''}
+          onChange={(e) => aoMudar('sku', e.target.value)}
+          style={{ width: 120 }}
+        />
+        <input
+          placeholder="Modelo ou descrição"
+          aria-label="Filtrar por modelo"
+          value={filtros.modelo ?? ''}
+          onChange={(e) => aoMudar('modelo', e.target.value)}
+          style={{ width: 200 }}
+        />
+        <MultiSelecao
+          rotulo="Marca"
+          opcoes={(opcoes?.marcas ?? []).map((m: string) => ({ chave: m, rotulo: m }))}
+          valor={filtros.marca ?? ''}
+          aoMudar={(v) => aoMudar('marca', v)}
+        />
+        <MultiSelecao
+          rotulo="Categoria"
+          opcoes={(opcoes?.categorias ?? []).map((c: string) => ({ chave: c, rotulo: c }))}
+          valor={filtros.categoria ?? ''}
+          aoMudar={(v) => aoMudar('categoria', v)}
+        />
+        <MultiSelecao
+          rotulo="Gênero"
+          opcoes={opcoes?.generos ?? []}
+          valor={filtros.genero ?? ''}
+          aoMudar={(v) => aoMudar('genero', v)}
+        />
+        <MultiSelecao
+          rotulo="Formato"
+          opcoes={opcoes?.formatos ?? []}
+          valor={filtros.formato ?? ''}
+          aoMudar={(v) => aoMudar('formato', v)}
+        />
+        <MultiSelecao
+          rotulo="Material"
+          opcoes={opcoes?.materiais ?? []}
+          valor={filtros.material ?? ''}
+          aoMudar={(v) => aoMudar('material', v)}
+        />
+        <MultiSelecao
+          rotulo="Faixa de preço"
+          opcoes={(opcoes?.faixas ?? []).map((f: { indice: number; rotulo: string }) => ({
+            chave: String(f.indice),
+            rotulo: f.rotulo,
+          }))}
+          valor={filtros.faixa ?? ''}
+          aoMudar={(v) => aoMudar('faixa', v)}
+        />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+          estoque
+          <input
+            type="number"
+            min={0}
+            aria-label="Estoque mínimo"
+            placeholder="mín"
+            value={filtros.estoqueMin ?? ''}
+            onChange={(e) => aoMudar('estoqueMin', e.target.value)}
+            style={{ width: 62 }}
+          />
+          <input
+            type="number"
+            min={0}
+            aria-label="Estoque máximo"
+            placeholder="máx"
+            value={filtros.estoqueMax ?? ''}
+            onChange={(e) => aoMudar('estoqueMax', e.target.value)}
+            style={{ width: 62 }}
+          />
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+          giro/dia
+          <input
+            type="number"
+            min={0}
+            step="0.1"
+            aria-label="Giro mínimo por dia"
+            placeholder="mín"
+            value={filtros.giroMin ?? ''}
+            onChange={(e) => aoMudar('giroMin', e.target.value)}
+            style={{ width: 62 }}
+          />
+          <input
+            type="number"
+            min={0}
+            step="0.1"
+            aria-label="Giro máximo por dia"
+            placeholder="máx"
+            value={filtros.giroMax ?? ''}
+            onChange={(e) => aoMudar('giroMax', e.target.value)}
+            style={{ width: 62 }}
+          />
+        </span>
+        {n > 0 && (
+          <Botao
+            variante="discreto"
+            pequeno
+            icone="limpar"
+            onClick={() => CHAVES_DE_FILTRO.forEach((k) => aoMudar(k, ''))}
+          >
+            Limpar filtros
+          </Botao>
+        )}
+      </div>
+      {/* O CONTADOR é o que impede o filtro de mentir por omissão: sem ele,
+          uma lista de 12 itens parece a compra inteira da rede. */}
+      <p className="hint" style={{ margin: '8px 0 0' }}>
+        {n === 0
+          ? `${total.toLocaleString('pt-BR')} ${total === 1 ? 'item' : 'itens'} a comprar neste recorte.`
+          : `${mostrando.toLocaleString('pt-BR')} de ${total.toLocaleString('pt-BR')} itens · ${n} ${n === 1 ? 'filtro ativo' : 'filtros ativos'}. O período é o seletor de janela acima.`}
+      </p>
+    </div>
+  );
+}
+
+/* ═══ B · Oportunidades de composição do mix · itens 05 e 06 ════════════════
+   "Sugestões de compra por perfil: gênero + formato + material + faixa de
+    preço, cruzando participação nas vendas com participação no estoque."
+   "Separar visualmente: A. reposição de SKU / B. oportunidades de composição."
+
+   São duas perguntas diferentes e a tela precisa mostrar isso ANTES do
+   conteúdo: a seção A repõe o que a rede já vende, peça por peça; a B diz que
+   perfil está sub-representado no estoque em relação ao que vende. Misturar as
+   duas numa lista só foi exatamente a confusão que o cliente apontou. */
+const TOM_DA_SITUACAO: Record<LinhaDoMix['situacao'], EstadoOperacional> = {
+  abaixo: { tom: 'amber', icone: 'tendencia', label: 'abaixo da participação' },
+  coberto: { tom: 'green', icone: 'aprovar', label: 'coberto' },
+  parado: { tom: 'gray', icone: 'prazo', label: 'parado' },
+  'evidencia-insuficiente': { tom: 'gray', icone: 'atencao', label: 'evidência insuficiente' },
+};
+
+/** Duas barras sobrepostas: participação nas vendas × participação no estoque. */
+function BarraDeParidade({ vendas, estoque }: { vendas: number; estoque: number }) {
+  const escala = Math.max(1, vendas, estoque);
+  const larg = (v: number) => `${Math.round((v / escala) * 100)}%`;
+  return (
+    <div style={{ minWidth: 150 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5 }}>
+        <span className="muted" style={{ width: 52 }}>
+          vendas
+        </span>
+        <span style={{ flex: 1, background: 'var(--linha)', height: 8, borderRadius: 2 }}>
+          <span style={{ display: 'block', width: larg(vendas), height: 8, background: 'var(--ouro)', borderRadius: 2 }} />
+        </span>
+        <span style={{ width: 42, textAlign: 'right' }}>{vendas.toLocaleString('pt-BR')}%</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, marginTop: 3 }}>
+        <span className="muted" style={{ width: 52 }}>
+          estoque
+        </span>
+        <span style={{ flex: 1, background: 'var(--linha)', height: 8, borderRadius: 2 }}>
+          <span
+            style={{ display: 'block', width: larg(estoque), height: 8, background: 'var(--muted)', borderRadius: 2 }}
+          />
+        </span>
+        <span style={{ width: 42, textAlign: 'right' }}>{estoque.toLocaleString('pt-BR')}%</span>
+      </div>
+    </div>
+  );
+}
+
+function ComposicaoDoMix({ params }: { params: Record<string, string | number | undefined> }) {
+  const [meta, setMeta] = useState('');
+  const metaNum = meta === '' ? undefined : Math.max(0, Math.trunc(Number(meta)));
+  const mix = useQuery({
+    queryKey: ['mix-por-perfil', params, metaNum],
+    queryFn: () => getMixPorPerfil({ ...params, ...(metaNum === undefined ? {} : { meta: metaNum }) }),
+  });
+
+  if (mix.isLoading) return <Loading />;
+  if (mix.isError || !mix.data) return null;
+  const m = mix.data;
+  const tomDaLeitura =
+    m.cobertura.leitura === 'confiavel' ? 'green' : m.cobertura.leitura === 'parcial' ? 'amber' : 'red';
+
+  return (
+    <div
+      className="card"
+      style={{
+        // A seção B se separa da A por BORDA e FUNDO, não só por título: é
+        // outra pergunta, e uma linha de texto não impede que ela seja lida
+        // como continuação da lista de cima.
+        borderLeft: '3px solid var(--ouro)',
+        background: 'var(--panel-2)',
+      }}
+    >
+      <AberturaDeSecao
+        eyebrow="B · Oportunidades de composição"
+        titulo="O que falta no mix, por perfil"
+        descricao="Gênero, formato, material e faixa de preço: o que a rede vende contra o que ela tem em estoque. Não é reposição de peça — é variedade que está faltando."
+      />
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '6px 0 10px' }}>
+        <Selo tom={tomDaLeitura} icone={m.cobertura.leitura === 'confiavel' ? 'aprovar' : 'atencao'}>
+          leitura {m.cobertura.leitura === 'sem-base' ? 'sem base' : m.cobertura.leitura}
+        </Selo>
+        <label style={{ fontSize: 13 }}>
+          meta de unidades{' '}
+          <input
+            type="number"
+            min={0}
+            placeholder="livre"
+            value={meta}
+            onChange={(e) => setMeta(e.target.value)}
+            style={{ width: 90 }}
+            aria-label="Meta de unidades para a composição"
+          />
+        </label>
+        {m.naoAlocado > 0 && (
+          <span className="hint">
+            {m.naoAlocado.toLocaleString('pt-BR')} un. da meta não couberam em falta nenhuma — declaradas, não
+            espalhadas.
+          </span>
+        )}
+      </div>
+      {/* A COBERTURA VEM ANTES DO VEREDITO. Ler participação calculada sobre
+          meia base como se fosse a rede inteira é o erro que esta linha existe
+          para impedir. */}
+      <p className="hint" style={{ marginTop: 0 }}>
+        {m.cobertura.aviso}
+      </p>
+      <p style={{ fontSize: 13.5 }}>{m.resumo}</p>
+      {m.linhas.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Perfil</th>
+                <th>Participação</th>
+                <th className="num">SKUs</th>
+                <th className="num">Vendido</th>
+                <th className="num">Posição</th>
+                <th className="num">Sugeridas</th>
+                <th>Situação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {m.linhas.slice(0, 30).map((l: LinhaDoMix) => (
+                <Fragment key={l.chave}>
+                  <tr>
+                    <td>{l.rotulo}</td>
+                    <td>
+                      <BarraDeParidade vendas={l.vendasPct} estoque={l.estoquePct} />
+                    </td>
+                    <td className="num">{l.skus}</td>
+                    <td className="num">{l.unitsSold.toLocaleString('pt-BR')}</td>
+                    <td className="num">{l.posicao.toLocaleString('pt-BR')}</td>
+                    <td className="num">
+                      <strong>{l.units > 0 ? l.units : '—'}</strong>
+                    </td>
+                    <td>
+                      <Selo tom={TOM_DA_SITUACAO[l.situacao].tom} icone={TOM_DA_SITUACAO[l.situacao].icone}>
+                        {TOM_DA_SITUACAO[l.situacao].label}
+                      </Selo>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={7} style={{ paddingTop: 0, borderTop: 'none' }}>
+                      {/* Item 07 outra vez: nenhuma recomendação sem os
+                          números que a sustentam. */}
+                      <span className="hint">{l.justificativa}</span>
+                    </td>
+                  </tr>
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+          {m.linhas.length > 30 && (
+            <p className="hint">Mostrando os 30 primeiros perfis de {m.linhas.length}.</p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -2056,9 +2579,33 @@ export function Planning() {
     placeholderData: keepPreviousData,
   });
   const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
+  /*
+   * OS FILTROS (item 08) vivem na URL — ver `FiltrosDeCompra`. A consulta usa
+   * o objeto como parte da chave, então mudar um filtro refaz a busca no
+   * servidor; e `keepPreviousData` não entra aqui de propósito: o contador
+   * "12 de 340" precisa corresponder à tabela que está na tela, e mostrar a
+   * lista antiga com o número novo seria pior que um instante de carregamento.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filtros = filtrosDaUrl(searchParams);
+  const mudarFiltro = (chave: ChaveDeFiltro, valor: string) => {
+    const proximo = new URLSearchParams(searchParams);
+    if (valor) proximo.set(chave, valor);
+    else proximo.delete(chave);
+    setSearchParams(proximo, { replace: true });
+  };
+  const opcoes = useQuery({
+    queryKey: ['planning-filtros', days, storeId, group],
+    queryFn: () => getOpcoesDeFiltro(params),
+  });
   const orders = useQuery({
-    queryKey: ['planning-orders', days, storeId, group, somenteAprovados],
-    queryFn: () => getPurchaseOrders({ ...params, somenteAprovados: somenteAprovados ? 1 : undefined }),
+    queryKey: ['planning-orders', days, storeId, group, somenteAprovados, filtros],
+    queryFn: () =>
+      getPurchaseOrders({
+        ...params,
+        somenteAprovados: somenteAprovados ? 1 : undefined,
+        ...filtros,
+      }),
   });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
@@ -2289,11 +2836,38 @@ export function Planning() {
           </div>
         }
       />
+      {/* ── A · REPOSIÇÃO DE SKU ────────────────────────────────────────────
+          A separação visual que o cliente pediu (item 06) começa aqui: esta
+          seção repõe o que a rede JÁ vende, peça por peça. A de baixo fala de
+          variedade que falta. São perguntas diferentes, e a tela diz isso
+          antes do conteúdo em vez de deixar o comprador descobrir lendo. */}
+      <AberturaDeSecao
+        eyebrow="A · Reposição de SKU"
+        titulo="O que repor do que a rede já vende"
+        descricao="Peça por peça, com o que o motor sugere e o que você decide levar. A sugestão original fica guardada ao lado da quantidade efetiva."
+      />
+      <FiltrosDeCompra
+        filtros={filtros}
+        aoMudar={mudarFiltro}
+        opcoes={opcoes.data}
+        mostrando={orders.data?.summary.items ?? 0}
+        total={orders.data?.antesDoFiltro?.items ?? orders.data?.summary.items ?? 0}
+      />
       <div className="card" ref={ordersRef}>
         {orders.isLoading ? (
           <Loading />
         ) : (orders.data?.orders.length ?? 0) === 0 ? (
-          <TudoCerto>Nenhum pedido a fazer agora — estoque coberto para a demanda atual.</TudoCerto>
+          contarFiltros(filtros) > 0 ? (
+            // Vazio POR FILTRO é diferente de vazio por não haver o que
+            // comprar, e dizer "estoque coberto" aqui seria uma afirmação
+            // sobre a rede a partir de um recorte de oito cliques.
+            <div className="empty">
+              Nenhum item deste recorte. Os filtros ativos escondem{' '}
+              {(orders.data?.antesDoFiltro?.items ?? 0).toLocaleString('pt-BR')} itens a comprar.
+            </div>
+          ) : (
+            <TudoCerto>Nenhum pedido a fazer agora — estoque coberto para a demanda atual.</TudoCerto>
+          )
         ) : (
           <>
             <div className="muted" style={{ fontSize: 12.5, margin: '10px 0' }}>
@@ -2325,6 +2899,9 @@ export function Planning() {
           </>
         )}
       </div>
+
+      {/* ── B · OPORTUNIDADES DE COMPOSIÇÃO (itens 05 e 06) ─────────────── */}
+      {isAdmin && <ComposicaoDoMix params={params} />}
 
       {/* ── Ciclo: enviado → recebido, com pedidos em trânsito abatidos ── */}
       <OrderHistory />
