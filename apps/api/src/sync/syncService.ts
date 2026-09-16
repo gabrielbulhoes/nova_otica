@@ -12,6 +12,8 @@ import * as map from '../integrations/sellbie/mappers.js';
 import { emLotes, varrerPorJanelas } from '../integrations/sellbie/sweep.js';
 import type { SellbieEstoqueGrade } from '../integrations/sellbie/types.js';
 import { exportPaidOrdersToErp } from '../modules/commerce/erpExport.service.js';
+import { classificarTextos, devoGravar, ehPecaDeModa } from '../catalogo/padronizacao.js';
+import { esquecerStatusDosAtributos } from '../catalogo/status.js';
 
 const log = logger.child({ mod: 'sync' });
 
@@ -574,7 +576,149 @@ async function syncProducts(client: Client, range?: { date_start: string; date_e
     });
     written += 1;
   }
-  return { read: rows.length, written };
+  const atributos = await gravarAtributosDoErp(rows);
+  return { read: rows.length, written, atributos };
+}
+
+/**
+ * GRAVA OS ATRIBUTOS QUE O ERP JÁ MANDAVA — rodada final · item 03.
+ *
+ * O conector devolve gênero, formato, material, cor, dimensões e foto em todo
+ * produto, e nada disso era gravado: a ficha só existia pelo importador manual
+ * de planilha, que cobre 4.339 das ~61 mil peças. A fonte de maior cobertura
+ * chegava a cada sincronização e ia para o lixo.
+ *
+ * DUAS REGRAS GOVERNAM A ESCRITA:
+ *
+ *  · O ERP PREENCHE BURACO, NÃO SOBRESCREVE FICHA. A planilha do fornecedor é
+ *    cadastro do fabricante conferido por gente; o ERP tem cobertura alta e
+ *    preenchimento irregular. Onde a ficha já escreveu, o ERP passa ao largo —
+ *    e onde ela não escreveu, ele entra. A mesma regra por campo vale para as
+ *    chaves padronizadas, via `devoGravar`.
+ *  · CAMPO VAZIO NO ERP NÃO APAGA NADA. Uma peça que perdeu o gênero no
+ *    cadastro do CDS não pode zerar o gênero que a ficha trouxe.
+ *
+ * Em lote, e não uma linha por vez: são ~61 mil peças, e 61 mil ida-e-volta ao
+ * banco dentro da janela de sincronização é o tipo de custo que transforma
+ * "acabou às 06:12" em "ainda rodando às 09:00".
+ */
+async function gravarAtributosDoErp(rows: unknown[]): Promise<{ lidos: number; gravados: number }> {
+  const lidos = rows
+    .map((raw) => map.mapAtributosDoErp(raw as Parameters<typeof map.mapAtributosDoErp>[0]))
+    .filter((a) => a.externalId);
+  // Só vale escrever quando o ERP trouxe ALGUMA coisa: peça sem nenhum
+  // atributo não deve criar linha vazia em `ProductAttribute` — isso inflaria
+  // a contagem de cobertura do `/health` com linhas que não cobrem nada.
+  const comAlgo = lidos.filter(
+    (a) => a.genero || a.formato || a.material || a.cor || a.tamanhoLente || a.imagemUrl,
+  );
+  if (comAlgo.length === 0) return { lidos: lidos.length, gravados: 0 };
+
+  const produtos = await prisma.product.findMany({
+    where: { externalId: { in: comAlgo.map((a) => a.externalId) } },
+    select: { id: true, externalId: true, category: true },
+  });
+  const porExternal = new Map(produtos.map((p) => [p.externalId, p]));
+  const existentes = await prisma.productAttribute.findMany({
+    where: { productId: { in: produtos.map((p) => p.id) } },
+    select: {
+      productId: true,
+      genero: true,
+      formato: true,
+      material: true,
+      cor: true,
+      codigoCor: true,
+      tamanhoLente: true,
+      alturaLente: true,
+      tamanhoPonte: true,
+      tamanhoHaste: true,
+      imagemUrl: true,
+      formatoLente: true,
+      materialArmacao: true,
+      fonteFormato: true,
+      fonteMaterial: true,
+      cadastroEm: true,
+    },
+  });
+  const porProduto = new Map(existentes.map((e) => [e.productId, e]));
+
+  const agora = new Date();
+  const escritas: { productId: string; create: Record<string, unknown>; update: Record<string, unknown> }[] = [];
+  for (const a of comAlgo) {
+    const produto = porExternal.get(a.externalId);
+    if (!produto) continue;
+    const atual = porProduto.get(produto.id);
+    // A ficha do fornecedor manda nos campos de texto: onde ela escreveu, o
+    // ERP não encosta. Onde não há ficha, ele preenche o que estiver vazio.
+    const preencher = (campo: keyof typeof a, atualValor: unknown) =>
+      a[campo] !== undefined && a[campo] !== null && (atualValor === null || atualValor === undefined)
+        ? { [campo]: a[campo] }
+        : {};
+    const texto = {
+      ...preencher('genero', atual?.genero),
+      ...preencher('formato', atual?.formato),
+      ...preencher('material', atual?.material),
+      ...preencher('cor', atual?.cor),
+      ...preencher('codigoCor', atual?.codigoCor),
+      ...preencher('tamanhoLente', atual?.tamanhoLente),
+      ...preencher('alturaLente', atual?.alturaLente),
+      ...preencher('tamanhoPonte', atual?.tamanhoPonte),
+      ...preencher('tamanhoHaste', atual?.tamanhoHaste),
+      ...preencher('imagemUrl', atual?.imagemUrl),
+    };
+
+    // As chaves padronizadas: só para peça de moda, e pela regra de precedência.
+    const padronizado: Record<string, unknown> = {};
+    if (ehPecaDeModa(produto.category)) {
+      const { formatoLente, materialArmacao } = classificarTextos(
+        a.formato ?? atual?.formato ?? null,
+        a.material ?? atual?.material ?? null,
+      );
+      if (
+        formatoLente &&
+        devoGravar({ valor: atual?.formatoLente ?? null, fonte: atual?.fonteFormato ?? null }, { valor: formatoLente, fonte: 'erp' })
+      ) {
+        padronizado.formatoLente = formatoLente;
+        padronizado.fonteFormato = 'erp';
+      }
+      if (
+        materialArmacao &&
+        devoGravar(
+          { valor: atual?.materialArmacao ?? null, fonte: atual?.fonteMaterial ?? null },
+          { valor: materialArmacao, fonte: 'erp' },
+        )
+      ) {
+        padronizado.materialArmacao = materialArmacao;
+        padronizado.fonteMaterial = 'erp';
+      }
+    }
+
+    const mudou = Object.keys(texto).length > 0 || Object.keys(padronizado).length > 0;
+    // Sem mudança, não escreve: rodar duas vezes seguidas não pode produzir
+    // 61 mil escritas idênticas — e é isso que torna a sincronização
+    // idempotente de verdade, não só no resultado.
+    if (!mudou && atual) continue;
+    escritas.push({
+      productId: produto.id,
+      create: { productId: produto.id, ...texto, ...padronizado, erpEm: agora },
+      update: { ...texto, ...padronizado, erpEm: agora },
+    });
+  }
+
+  const LOTE_ATRIBUTOS = 500;
+  for (let i = 0; i < escritas.length; i += LOTE_ATRIBUTOS) {
+    await prisma.$transaction(
+      escritas.slice(i, i + LOTE_ATRIBUTOS).map((e) =>
+        prisma.productAttribute.upsert({
+          where: { productId: e.productId },
+          create: e.create as never,
+          update: e.update as never,
+        }),
+      ),
+    );
+  }
+  if (escritas.length > 0) esquecerStatusDosAtributos();
+  return { lidos: lidos.length, gravados: escritas.length };
 }
 
 /**

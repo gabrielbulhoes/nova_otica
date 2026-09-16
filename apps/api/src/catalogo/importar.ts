@@ -4,6 +4,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import { abrirPlanilha } from '../lib/xlsx.js';
 import { cruzar, lerCadastroFornecedor, lerTetoDeDesconto, reconhecerPlanilha } from './atributos.js';
+import { classificarTextos } from './padronizacao.js';
 import { esquecerStatusDosAtributos } from './status.js';
 
 const log = logger.child({ mod: 'catalogo' });
@@ -40,17 +41,29 @@ async function importarCadastro(caminho: string, buf: Buffer): Promise<void> {
   const entradas = [...encontrados.entries()];
   for (let i = 0; i < entradas.length; i += LOTE) {
     await prisma.$transaction(
-      entradas.slice(i, i + LOTE).map(([productId, a]) =>
-        prisma.productAttribute.upsert({
+      entradas.slice(i, i + LOTE).map(([productId, a]) => {
+        // A PADRONIZAÇÃO ACONTECE NA IMPORTAÇÃO (rodada final · item 03): o
+        // texto do fornecedor continua guardado (é a auditoria), e ao lado
+        // dele entram as chaves da lista fechada, com a procedência `ficha`.
+        // Deixar isso só para o comando `catalogo:padronizar` faria toda
+        // importação nova nascer sem perfil até alguém lembrar de rodá-lo.
+        const padrao = classificarTextos(a.formato, a.material);
+        const padronizado = {
+          ...(padrao.formatoLente ? { formatoLente: padrao.formatoLente, fonteFormato: 'ficha' } : {}),
+          ...(padrao.materialArmacao
+            ? { materialArmacao: padrao.materialArmacao, fonteMaterial: 'ficha' }
+            : {}),
+        };
+        return prisma.productAttribute.upsert({
           where: { productId },
           // O upsert atualiza SÓ o bloco do cadastro. `maxDiscountPct` e sua
           // procedência vêm da outra planilha e não podem ser apagados por
           // quem importa esta — foi assim que a marcação de fora-do-mix já se
           // perdeu uma vez, por escrita que não sabia o que estava sobrescrevendo.
-          create: { productId, ...a, fonteCadastro: arquivo, cadastroEm: agora },
-          update: { ...a, fonteCadastro: arquivo, cadastroEm: agora },
-        }),
-      ),
+          create: { productId, ...a, ...padronizado, fonteCadastro: arquivo, cadastroEm: agora },
+          update: { ...a, ...padronizado, fonteCadastro: arquivo, cadastroEm: agora },
+        });
+      }),
     );
   }
 

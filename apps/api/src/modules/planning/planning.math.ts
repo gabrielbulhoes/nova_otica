@@ -3903,6 +3903,18 @@ export interface CandidatoDeCompra {
   genero: string | null;
   /** Piloto, Quadrado, Gatinho… */
   formato: string | null;
+  /**
+   * Material da armação — o quarto eixo do perfil (rodada final · item 05).
+   * Opcional porque a oferta antiga não o trazia, e uma feira já importada não
+   * pode deixar de abrir por causa de um campo que não existia na época.
+   *
+   * O PESO do candidato ainda NÃO usa este campo, de propósito: peso por
+   * material só faz sentido quando o histórico da rede tiver material com
+   * cobertura comparável à do formato, e hoje ele está entrando agora, pela
+   * sincronização. Entra na tela e no perfil; entra no peso quando a cobertura
+   * justificar, e o número que autoriza isso é o do `/health`.
+   */
+  material?: string | null;
   cor: string | null;
   unitCost: number;
   unitPrice: number;

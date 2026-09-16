@@ -113,6 +113,38 @@ export const mapProduto = (p: SellbieProduto) => ({
   includedAt: date(p.data_cadastro),
 });
 
+/**
+ * OS ATRIBUTOS DE PEÇA QUE O ERP JÁ MANDA — rodada final · item 03.
+ *
+ * O conector devolve gênero, formato do aro, material do aro e das hastes, cor,
+ * dimensões e fotos em todo produto, e até esta rodada NADA disso era gravado:
+ * a `ProductAttribute` só existia pelo importador manual de planilha, que cobre
+ * 4.339 das ~61 mil peças. A fonte de maior cobertura estava na resposta e ia
+ * para o lixo a cada sincronização.
+ *
+ * Material das hastes só entra quando DIFERE do material do aro — aí a peça é
+ * combinada de verdade. Repetir "Acetato / Acetato" produziria COMBINADO em
+ * cima de uma armação inteira de acetato.
+ */
+export const mapAtributosDoErp = (p: SellbieProduto) => {
+  const aro = str(p.material_armacao);
+  const haste = str(p.material_hastes);
+  const material = aro && haste && aro.toLowerCase() !== haste.toLowerCase() ? `${aro} / ${haste}` : aro ?? haste;
+  return {
+    externalId: idStr(p.codigo_base),
+    genero: str(p.genero),
+    formato: str(p.formato_armacao),
+    material,
+    cor: str(p.cor_armacao),
+    codigoCor: str(p.codigo_cor),
+    tamanhoLente: num(p.tamanho_lente),
+    alturaLente: num(p.altura_lente),
+    tamanhoPonte: num(p.tamanho_ponte),
+    tamanhoHaste: num(p.comprimento_hast),
+    imagemUrl: str(p.foto1),
+  };
+};
+
 export const mapCliente = (c: SellbieCliente) => {
   const doc = digits(c.cpf);
   const email = str(c.email);

@@ -155,6 +155,7 @@ export async function planoDaFeira(fairId: string) {
       tipo: o.tipo,
       genero: o.genero,
       formato: o.formato,
+      material: o.material,
       cor: o.cor,
       unitCost: toNumber(o.unitCost) ?? 0,
       unitPrice: toNumber(o.unitPrice) ?? 0,
