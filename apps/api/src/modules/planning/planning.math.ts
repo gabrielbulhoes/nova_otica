@@ -4595,6 +4595,16 @@ export interface NoDeCaracteristica {
   filhos: NoDeCaracteristica[];
 }
 
+/**
+ * O GRUPO da peça como o cliente o nomeia — "óculos de sol" ou "armação".
+ *
+ * Exportado porque a tela do best-seller também agrupa por ele: ali a
+ * hierarquia era montada com o TEXTO do cadastro, então "OCULOS", "OCULOS DE
+ * SOL" e "Óculos Solar" viravam três grupos do mesmo produto.
+ */
+export const rotuloDoGrupoDePeca = (tipo: string | null | undefined): string =>
+  rotuloDoGrupo(familiaDePeca(tipo));
+
 const rotuloDoGrupo = (familia: string): string => {
   switch (familia) {
     case 'solar':

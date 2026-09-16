@@ -10,6 +10,7 @@ import type {
 } from '../api/client';
 import { AberturaDeSecao, Botao, Loading, PageHeader, Selo, StatCard, Unidade } from '../components/ui';
 import { Icon } from '../brand/Icon';
+import { generoProvavel, rotuloDoGenero, rotuloDoGrupoDePeca } from '@planning';
 
 /**
  * Cor de cada fatia da compra.
@@ -522,9 +523,18 @@ function SegmentoDoPlano({ linhas, compra }: { linhas: LinhaDoPlano[]; compra?: 
           units={marca.units}
           detalhe={`${marca.linhas.length} ${marca.linhas.length === 1 ? 'linha' : 'linhas'}`}
         >
-          {agrupar(marca.linhas, (l) => l.candidato.tipo ?? '—').map((tipo) => (
+          {/* GRUPO E GÊNERO CANÔNICOS, não o texto do cadastro.
+              "Dentro do pedido dos Best Sellers, unir categorias unisex e
+               unissex. Unir categorias menina e feminino." — 16/09/2026
+              Agrupando por texto, a grafia da Luxottica e a do CDS viravam dois
+              níveis do mesmo gênero, e "OCULOS" contra "OCULOS DE SOL", dois
+              grupos do mesmo produto. É o mesmo defeito que o motor tinha em
+              `chaveDePerfil`, aqui na camada de cima. */}
+          {agrupar(marca.linhas, (l) => rotuloDoGrupoDePeca(l.candidato.tipo)).map((tipo) => (
             <Nivel key={tipo.chave} titulo={tipo.chave} units={tipo.units}>
-              {agrupar(tipo.linhas, (l) => l.candidato.genero ?? 'Sem gênero na ficha').map((gen) => (
+              {agrupar(tipo.linhas, (l) =>
+                rotuloDoGenero(generoProvavel(l.candidato.genero, l.candidato.description).genero),
+              ).map((gen) => (
                 <Nivel key={gen.chave} titulo={gen.chave} units={gen.units}>
                   <table>
                     <thead>
