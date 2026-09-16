@@ -125,6 +125,7 @@ async function main(): Promise<void> {
             tipo: l.tipo,
             genero: l.genero,
             formato: l.formato,
+            material: l.material,
             cor: l.cor,
             unitCost: l.unitCost,
             unitPrice: l.unitPrice,

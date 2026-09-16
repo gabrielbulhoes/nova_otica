@@ -5,6 +5,10 @@ node_modules/
 
 # Builds
 dist/
+# `dist-demo/` é a build da DEMONSTRAÇÃO (`VITE_DEMO=1`), gerada para conferir a
+# interface e tirar as capturas dos pareceres. Saída de build como qualquer
+# outra — só não casava com `dist/` por causa do sufixo.
+dist-demo/
 build/
 *.tsbuildinfo
 
@@ -88,3 +92,8 @@ docs/marca/auditoria/evidencia-*/
 
 # PDF gerado do runbook — o fonte é o .md em docs/deploy/
 Runbook-Infra-*.pdf
+
+# Árvores de trabalho temporárias das frentes paralelas (o harness cria e
+# remove sozinho). São CÓPIAS do repositório dentro do repositório — versionar
+# isso duplicaria a base inteira a cada rodada.
+.claude/worktrees/

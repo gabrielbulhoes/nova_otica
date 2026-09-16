@@ -18,6 +18,17 @@ import {
   buildFairSplit,
   buildOverview,
   buildPurchaseOrders,
+  comporMixPorPerfil,
+  faixaDePreco,
+  rotuloDoFormato,
+  rotuloDoMaterial,
+  filtrarPedidos,
+  filtroVazio,
+  normGenero,
+  FORMATOS_DE_LENTE,
+  GENEROS,
+  MATERIAIS_DE_ARMACAO,
+  type FiltroDeSugestoes,
   buildRebalance,
   buildSuggestions,
   chaveDePerfil,
@@ -36,6 +47,7 @@ import {
   LINHAS_POR_PAGINA,
   matchesProductGroup,
   normBrandKey,
+  chaveDeAtributo,
   type AtributosDaPeca,
   type CandidatoDeCompra,
   type SegmentoDoPlano,
@@ -195,6 +207,7 @@ export async function planningInputs(
       where: { id: { in: ids } },
       select: {
         id: true,
+        sku: true,
         description: true,
         brand: true,
         category: true,
@@ -239,6 +252,7 @@ export async function planningInputs(
     };
     return {
       productId: p.id,
+      sku: p.sku,
       description: p.description,
       brand: p.brand,
       category: p.category,
@@ -305,9 +319,26 @@ async function monthlyHistoryByProduct(
 interface RecordItem {
   productId: string;
   description: string;
+  /** A quantidade EFETIVA — a que vai ao fornecedor. */
   quantity: number;
   unitCost: number;
   total: number;
+  /*
+   * O que a rodada final acrescentou ao item gravado (item 04). Tudo opcional:
+   * os pedidos já no banco não têm estes campos, e o histórico precisa
+   * continuar abrindo. Ausente é "pedido anterior a esta rodada", não zero.
+   */
+  sku?: string | null;
+  /** O que o motor sugeriu, preservado mesmo quando o comprador edita. */
+  suggestedQty?: number;
+  unitPrice?: number;
+  faixa?: number;
+  atributos?: {
+    genero?: string | null;
+    formatoLente?: string | null;
+    materialArmacao?: string | null;
+    cor?: string | null;
+  };
 }
 
 /** Unidades a caminho por produto (pedidos ENVIADOS e não recebidos). */
@@ -440,6 +471,16 @@ export async function purchaseOrders(
   group: ProductGroup = 'todos',
   comRateio = false,
   somenteAprovados = false,
+  /**
+   * Filtros combináveis da tela de compras (rodada final · item 08).
+   *
+   * Aplicados NO SERVIDOR, sobre o plano inteiro — não no cliente, sobre a
+   * página. Filtrar na tela responderia "destes 200 itens, quais são
+   * femininos de acetato", que é uma pergunta sobre a página, não sobre a
+   * compra. E o total exibido passaria a ser o da página filtrada, que não é
+   * o total de nada.
+   */
+  filtro?: FiltroDeSugestoes,
 ) {
   const [todosOsPlanos, catalog] = [await plans(days, storeId, group), loadBrandCatalog()];
 
@@ -545,7 +586,7 @@ export async function purchaseOrders(
     }
   }
 
-  return buildPurchaseOrders(
+  const plano = buildPurchaseOrders(
     productPlans,
     days,
     resolve,
@@ -553,6 +594,92 @@ export async function purchaseOrders(
     foraDoMix,
     await fichasDoFornecedor(productPlans),
   );
+
+  // O total ANTES do filtro acompanha a resposta: é o que permite à tela dizer
+  // "12 de 340 itens" em vez de só mostrar 12 e deixar o comprador achando que
+  // a rede só tem isso a comprar.
+  const filtrado = filtrarPedidos(plano, filtro);
+  return {
+    ...filtrado,
+    filtros: filtro && !filtroVazio(filtro) ? filtro : null,
+    antesDoFiltro: { items: plano.summary.items, units: plano.summary.units, total: plano.summary.total },
+  };
+}
+
+/**
+ * AS OPÇÕES DE FILTRO DISPONÍVEIS no escopo (rodada final · item 08).
+ *
+ * Só o que EXISTE no recorte: um seletor que oferece "Wayfarer" num escopo sem
+ * nenhuma wayfarer produz busca vazia e faz o comprador desconfiar do filtro,
+ * não do estoque. As listas fechadas vão inteiras, com rótulo, porque elas são
+ * vocabulário do produto e não do recorte.
+ */
+export async function opcoesDeFiltro(days: number, storeId?: string, group: ProductGroup = 'todos') {
+  const planos = await plans(days, storeId, group);
+  const deCompra = planos.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0);
+  const fichas = await fichasDoFornecedor(deCompra);
+
+  const marcas = new Set<string>();
+  const categorias = new Set<string>();
+  const faixas = new Map<number, string>();
+  const generos = new Set<string>();
+  const formatos = new Set<string>();
+  const materiais = new Set<string>();
+  for (const p of deCompra) {
+    const marca = analysisBrand(p.description, p.category, p.brand);
+    if (marca) marcas.add(marca);
+    if (p.category) categorias.add(p.category);
+    const f = faixaDePreco(p.unitPrice);
+    faixas.set(f.indice, f.rotulo);
+    const ficha = fichas.get(p.productId);
+    const g = normGenero(ficha?.genero);
+    if (g) generos.add(g);
+    if (ficha?.formatoLente) formatos.add(ficha.formatoLente);
+    if (ficha?.materialArmacao) materiais.add(ficha.materialArmacao);
+  }
+
+  const rotulados = <T extends string>(
+    presentes: Set<string>,
+    lista: readonly { chave: T; rotulo: string }[],
+  ) => lista.filter((x) => presentes.has(x.chave));
+
+  return {
+    marcas: [...marcas].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    categorias: [...categorias].sort((a, b) => a.localeCompare(b, 'pt-BR')),
+    faixas: [...faixas.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([indice, rotulo]) => ({ indice, rotulo })),
+    generos: rotulados(generos, GENEROS),
+    formatos: rotulados(formatos, FORMATOS_DE_LENTE),
+    materiais: rotulados(materiais, MATERIAIS_DE_ARMACAO),
+    itens: deCompra.length,
+  };
+}
+
+/**
+ * A COMPOSIÇÃO DO MIX POR PERFIL (rodada final · item 05).
+ *
+ * "Sugestões de compra por perfil: gênero + formato + material + faixa de
+ *  preço, cruzando participação nas vendas com participação no estoque."
+ *
+ * Lê o ESCOPO INTEIRO, e não só os itens de compra: a pergunta é sobre a
+ * participação de cada perfil no que a rede vende e no que ela tem — restringir
+ * aos BUY responderia "qual perfil já está em reposição", que é outra coisa.
+ */
+export async function mixPorPerfil(
+  days: number,
+  storeId?: string,
+  group: ProductGroup = 'principal',
+  meta?: number,
+) {
+  const planos = await plans(days, storeId, group);
+  const fichas = await fichasDoFornecedor(planos, true);
+  return comporMixPorPerfil(planos, fichas, {
+    ...(meta === undefined ? {} : { metaDeUnidades: meta }),
+    days,
+    targetCoverDays: DEFAULT_PLANNING_CONFIG.targetCoverDays,
+    origemDaFicha: 'ficha do fornecedor e cadastro do ERP',
+  });
 }
 
 /**
@@ -569,32 +696,77 @@ export async function purchaseOrders(
  * inteira para descartar 99% dela é o tipo de custo que não erra a saída e
  * derruba a rota, e esta rota já foi derrubada uma vez aqui por isso.
  */
-async function fichasDoFornecedor(planos: ProductPlan[]): Promise<Map<string, AtributosDaPeca>> {
-  const ids = planos.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId);
+async function fichasDoFornecedor(
+  planos: ProductPlan[],
+  todos = false,
+): Promise<Map<string, AtributosDaPeca>> {
+  // `todos` existe para a composição do mix (rodada final · item 05), que lê o
+  // ESCOPO INTEIRO e não só o que já está em compra: a pergunta dela é sobre a
+  // participação de cada perfil nas vendas e no estoque, e restringir aos BUY
+  // responderia outra coisa.
+  const ids = todos
+    ? planos.map((p) => p.productId)
+    : planos.filter((p) => p.recommendation === 'BUY' && p.suggestedQty > 0).map((p) => p.productId);
   const fichas = new Map<string, AtributosDaPeca>();
   if (ids.length === 0) return fichas;
 
-  const linhas = await prisma.productAttribute.findMany({
-    where: { productId: { in: ids }, cadastroEm: { not: null } },
-    select: {
-      productId: true,
-      genero: true,
-      formato: true,
-      material: true,
-      tamanhoLente: true,
-      bestSeller: true,
-    },
-  });
+  const linhas = await buscarFichas(ids);
   for (const l of linhas) {
     fichas.set(l.productId, {
       genero: l.genero,
       formato: l.formato,
       material: l.material,
+      cor: l.cor,
+      formatoLente: l.formatoLente as AtributosDaPeca['formatoLente'],
+      materialArmacao: l.materialArmacao as AtributosDaPeca['materialArmacao'],
       tamanhoLente: l.tamanhoLente,
       bestSeller: l.bestSeller,
     });
   }
   return fichas;
+}
+
+/** Quantos ids cabem num `IN` sem estourar o limite de parâmetros do driver. */
+const LOTE_DE_FICHAS = 5_000;
+
+/**
+ * Busca as fichas em lotes. O escopo do mix pode ter dezenas de milhares de
+ * peças, e um `IN` com 61 mil parâmetros não é uma consulta lenta: é uma
+ * consulta que o driver recusa.
+ *
+ * O `where` aceita ficha do fornecedor OU do ERP. Era só `cadastroEm`, e com a
+ * sincronização passando a escrever atributos (item 03), exigir a planilha
+ * deixaria de fora justamente a fonte de maior cobertura da rede.
+ */
+async function buscarFichas(ids: string[]) {
+  const select = {
+    productId: true,
+    genero: true,
+    formato: true,
+    material: true,
+    cor: true,
+    formatoLente: true,
+    materialArmacao: true,
+    tamanhoLente: true,
+    bestSeller: true,
+  } as const;
+  const linhas: Awaited<ReturnType<typeof prisma.productAttribute.findMany<{ select: typeof select }>>> = [];
+  for (let i = 0; i < ids.length; i += LOTE_DE_FICHAS) {
+    const parte = await prisma.productAttribute.findMany({
+      where: {
+        productId: { in: ids.slice(i, i + LOTE_DE_FICHAS) },
+        // AS TRÊS PROCEDÊNCIAS. Era só ficha e ERP, e a peça classificada a
+        // partir da DESCRIÇÃO — que é justamente a que não tem nenhuma das
+        // duas — ficava fora: o padronizador gravava, o `/health` contava, e
+        // a composição do mix nunca via. O pipeline inteiro do item 03 parava
+        // um passo antes de chegar à tela.
+        OR: [{ cadastroEm: { not: null } }, { erpEm: { not: null } }, { padronizadoEm: { not: null } }],
+      },
+      select,
+    });
+    linhas.push(...parte);
+  }
+  return linhas;
 }
 
 /** Recorte da resposta do quadro: página + filtros de vista. */
@@ -863,7 +1035,16 @@ async function detalharPlanoContinuo(
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
       tipo: p.category,
       genero: f?.genero ?? null,
-      formato: f?.formato ?? null,
+      /*
+       * O FORMATO DO CANDIDATO É A LISTA FECHADA quando ela existe (rodada
+       * final · item 03), com o texto da ficha como reserva declarada para a
+       * peça ainda não classificada. Enquanto o perfil era montado por texto,
+       * "Cat eye" e "Gatinho" eram dois formatos diferentes para o motor: a
+       * evidência da rede saía dividida em dois e o lançamento herdava metade
+       * do peso que merecia.
+       */
+      formato: f?.formatoLente ? rotuloDoFormato(f.formatoLente) : (f?.formato ?? null),
+      material: f?.materialArmacao ? rotuloDoMaterial(f.materialArmacao) : (f?.material ?? null),
       cor: null,
       unitCost: p.unitCost,
       unitPrice: p.unitPrice,
@@ -898,7 +1079,7 @@ async function detalharPlanoContinuo(
     // com gênero na ficha nunca casaria com o histórico, que não tem gênero.
     soma(porTipoGenero, chaveDePerfil(c.tipo, c.genero), c.unitsSold);
     soma(porTipoGenero, chaveDePerfil(c.tipo, null), c.unitsSold);
-    soma(porFormato, c.formato ? normBrandKey(c.formato) : null, c.unitsSold);
+    soma(porFormato, c.formato ? chaveDeAtributo(c.formato) : null, c.unitsSold);
   }
   const perfil = { porTipoGenero, porFormato, porCor: new Map<string, number>() };
 
@@ -921,7 +1102,7 @@ async function detalharPlanoContinuo(
 
   const plano = montarPlanoDetalhado(candidatos, metas, perfil, (c, seg, units) =>
     explicarLinha(c, seg, units, {
-      rankFormato: c.formato ? (rankPorFormato.get(normBrandKey(c.formato)) ?? null) : null,
+      rankFormato: c.formato ? (rankPorFormato.get(chaveDeAtributo(c.formato)) ?? null) : null,
       margemMedia,
     }),
   );

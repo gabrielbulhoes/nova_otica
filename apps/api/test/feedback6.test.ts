@@ -197,6 +197,7 @@ describe('item 04 · prioridade composta', () => {
         stockoutInDays: 0,
         reason: '',
         friendlyReason: '',
+        justificativa: 'Estoque 0 un. · vendeu 0 un. em 90 dias · sem giro no período.',
         confidence: conf,
       });
       planos.push({ ...(analyzeProduct(peca({ productId: `p${conf}` }), JANELA) as ProductPlan) });

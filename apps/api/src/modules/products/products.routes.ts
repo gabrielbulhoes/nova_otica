@@ -5,6 +5,7 @@ import { asyncHandler, notFound, parsePaging } from '../../http/helpers.js';
 import { scopedStoreWhere } from '../auth/auth.middleware.js';
 import { stockVisibleWhere } from '../stores/store.scope.js';
 import { parseGroup, productWhereForGroup, scopeCategories } from './product.scope.js';
+import { fichaTecnica } from './ficha.service.js';
 
 export const productsRouter = Router();
 
@@ -58,6 +59,25 @@ productsRouter.get(
       orderBy: { category: 'asc' },
     });
     res.json(rows.map((r) => r.category).filter(Boolean));
+  }),
+);
+
+/**
+ * GET /api/products/:id/ficha — a FICHA TÉCNICA (rodada final · item 02).
+ *
+ * Declarada ANTES de `/:id` de propósito: o Express casa na ordem, e um
+ * `/:id` acima capturaria "ficha" como se fosse parte do identificador. É o
+ * mesmo cuidado que o dispatcher da demonstração exige do outro lado.
+ */
+productsRouter.get(
+  '/:id/ficha',
+  asyncHandler(async (req, res) => {
+    // O MESMO recorte de lojas das outras rotas de produto: gestor de loja vê
+    // a posição da própria, ADMIN vê a rede. E o escopo da PLATAFORMA junto —
+    // filial em outro ERP tem saldo desatualizado e não entra na conta.
+    const ficha = await fichaTecnica(req.params.id, { ...scopedStoreWhere(req), ...stockVisibleWhere });
+    if (!ficha) throw notFound('Produto não encontrado');
+    res.json(ficha);
   }),
 );
 

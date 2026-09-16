@@ -40,12 +40,24 @@ export function normalizarCabecalho(s: string): string {
  * carrega as formas completas que os fornecedores usam.
  */
 export const SINONIMOS: Record<CampoDaOferta, string[]> = {
-  sku: ['sku', 'referencia', 'ref', 'codigo', 'cod', 'codigo do produto', 'modelo', 'material'],
+  /*
+   * "material" SAIU DAQUI — rodada final · item 05.
+   *
+   * Entrou como sinônimo de SKU porque alguns fornecedores chamam o código da
+   * peça de "material" (herança de ERP industrial). A partir desta rodada a
+   * oferta tem uma coluna PRÓPRIA de material da armação, e manter o sinônimo
+   * faria uma planilha com "Material: Acetato" virar o SKU da linha — todos os
+   * SKUs da coleção lidos como "Acetato", "Metal", "Titânio". Quem usa
+   * "material" como código continua atendido por `codigo`, `cod`, `ref` e
+   * `referencia`, que são o que aparece nas planilhas que temos.
+   */
+  sku: ['sku', 'referencia', 'ref', 'codigo', 'cod', 'codigo do produto', 'modelo'],
   description: ['descricao', 'produto', 'nome', 'descricao do produto', 'item'],
   brand: ['marca', 'grife', 'brand', 'colecao', 'linha'],
   tipo: ['tipo', 'categoria', 'grupo', 'segmento', 'familia'],
   genero: ['genero', 'sexo', 'publico', 'gender'],
-  formato: ['formato', 'formato do aro', 'shape', 'modelo do aro', 'tipo de aro'],
+  formato: ['formato', 'formato do aro', 'shape', 'modelo do aro', 'tipo de aro', 'formato da lente'],
+  material: ['material', 'material da armacao', 'material do aro', 'materia prima', 'frame material'],
   cor: ['cor', 'cor da armacao', 'color', 'colorido', 'descricao da cor'],
   unitCost: ['custo', 'preco de custo', 'custo unitario', 'valor de custo', 'preco de compra', 'atacado'],
   unitPrice: ['preco', 'preco de venda', 'preco sugerido', 'venda', 'varejo', 'pvp', 'preco final'],
@@ -58,6 +70,7 @@ export type CampoDaOferta =
   | 'tipo'
   | 'genero'
   | 'formato'
+  | 'material'
   | 'cor'
   | 'unitCost'
   | 'unitPrice';
@@ -72,6 +85,8 @@ export interface LinhaDaOferta {
   tipo: string | null;
   genero: string | null;
   formato: string | null;
+  /** Material da armação — o quarto eixo do perfil (item 05). */
+  material: string | null;
   cor: string | null;
   unitCost: number;
   unitPrice: number;
@@ -204,6 +219,7 @@ export function lerOfertaDeFeira(planilha: Planilha, aba = 0): RelatorioDaOferta
       tipo: texto(l, indice.tipo),
       genero: texto(l, indice.genero),
       formato: texto(l, indice.formato),
+      material: texto(l, indice.material),
       cor: texto(l, indice.cor),
       // Custo ausente NÃO é zero: zero daria margem de 100% e faria a peça
       // parecer a melhor da feira. Estima em 45% do preço — a mesma margem

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getProducts, getCategories, formatBRL } from '../api/client';
 import { PageHeader, Loading, Codigo } from '../components/ui';
@@ -25,7 +26,7 @@ export function Products() {
       <PageHeader
         eyebrow="Consulta"
         title="Produtos"
-        subtitle="Catálogo sincronizado da fonte (Sellbie)."
+        subtitle="Catálogo sincronizado da fonte (Sellbie). Clique no código para abrir a ficha técnica."
       />
 
       <div className="toolbar">
@@ -80,10 +81,21 @@ export function Products() {
                       comparação caractere a caractere, e é a largura fixa que
                       faz a diferença saltar. Caixa normal, entreletras zero —
                       caixa alta espaçada atrapalharia essa mesma comparação. */}
+                  {/* O CÓDIGO VIRA O LINK para a ficha técnica (rodada final ·
+                      item 02): "ao clicar em um SKU, deve abrir uma ficha
+                      técnica completa". É o código, e não a linha inteira, que
+                      leva: linha clicável rouba a seleção de texto da descrição
+                      — que é o que se copia para procurar a peça no ERP. */}
                   <td>
-                    <Codigo>{p.externalId}</Codigo>
+                    <Link to={`/admin/produtos/${p.id}`} title="Abrir a ficha técnica">
+                      <Codigo>{p.externalId}</Codigo>
+                    </Link>
                   </td>
-                  <td>{p.description}</td>
+                  <td>
+                    <Link to={`/admin/produtos/${p.id}`} style={{ color: 'inherit' }}>
+                      {p.description}
+                    </Link>
+                  </td>
                   {/* ONDA 6 · A COLUNA "MARCA" TRAZ A RAZÃO SOCIAL, NÃO A MARCA.
                       Medido nesta build, a 1440px: a fonte devolve "LUXOTTICA
                       BRASIL PRODUTOS OTICOS E ESPORTIVOS LTDA" (50 caracteres)

@@ -85,6 +85,12 @@ model User {
   /// LIQUIDACAO). Vazio = todos — é o comportamento anterior, então nenhum
   /// usuário existente perde acesso na migração.
   allowedCardTypes String[]         @default([])
+  /// Preferências de interface DESTE usuário (rodada final · item 01): posição
+  /// do menu (`lateral` | `horizontal`) e sidebar recolhida. É JSON de
+  /// propósito — cada nova preferência não pode custar uma migração, e a tela
+  /// trata chave ausente como padrão. Vai junto no `/me` para a interface não
+  /// abrir num layout e pular para outro depois da primeira resposta.
+  preferences      Json             @default("{}")
 
   @@index([role])
 }
@@ -853,9 +859,75 @@ model ProductAttribute {
   fonteDesconto  String?
   descontoEm     DateTime?
 
+  // ── Padronização (rodada final · item 03) ─────────────────────────────────
+  //
+  // `formato` e `material` acima são o TEXTO como cada fonte escreveu — e cada
+  // fonte escreve de um jeito ("Cat eye", "Gatinho", "CAT-EYE"). O motor não
+  // pode agrupar por texto livre: "gatinho" e "cat eye" viravam dois perfis, e
+  // a participação de cada um saía pela metade. Estes dois campos são a LISTA
+  // FECHADA do cliente; o texto original fica guardado para auditoria.
+  //
+  // `null` = ninguém classificou ainda. `NAO_IDENTIFICADO` = alguém tentou e o
+  // dado não permitiu dizer. São situações diferentes, com respostas
+  // diferentes (rodar o padronizador × pedir a ficha ao fornecedor), e por
+  // isso não se misturam num campo só.
+  formatoLente    FormatoLente?
+  materialArmacao MaterialArmacao?
+  /// De onde saiu a classificação: `ficha` (planilha do fornecedor), `erp`
+  /// (campos do CDS), `descricao` (lido do nome da peça) — por campo, porque
+  /// numa mesma peça o formato pode vir da ficha e o material da descrição.
+  fonteFormato  String?
+  fonteMaterial String?
+  /// Quando a sincronização com o ERP escreveu os campos de cadastro aqui pela
+  /// última vez. Separado de `cadastroEm` (ficha do fornecedor) pela mesma
+  /// razão que separa `fonteCadastro` de `fonteDesconto`: são fontes distintas
+  /// e "importado em" precisa dizer de qual.
+  erpEm DateTime?
+  /// Quando o padronizador classificou esta peça. É a terceira data pelo mesmo
+  /// motivo das outras duas: a classificação LIDA DA DESCRIÇÃO não tem ficha
+  /// nem cadastro do ERP por trás, e sem marca própria ela ficava invisível
+  /// para quem consulta "peças com atributo" — gravada no banco e fora de
+  /// todas as leituras.
+  padronizadoEm DateTime?
+
   @@index([bestSeller])
   @@index([genero])
   @@index([marcaCatalogo])
+  @@index([formatoLente])
+  @@index([materialArmacao])
+}
+
+/// Formato da lente (a lista fechada do cliente — rodada final · item 03).
+/// "Não identificado" é valor de verdade: a peça foi olhada e não deu para
+/// dizer. Nunca texto livre.
+enum FormatoLente {
+  RETANGULAR
+  QUADRADA
+  REDONDA
+  OVAL
+  AVIADOR
+  GATINHO
+  GEOMETRICA
+  WAYFARER
+  MASCARA
+  OUTROS
+  NAO_IDENTIFICADO
+}
+
+/// Material da armação (a lista fechada do cliente — rodada final · item 03).
+enum MaterialArmacao {
+  ACETATO
+  METAL
+  TITANIO
+  ACO_INOX
+  ALUMINIO
+  INJETADO
+  TR90
+  NYLON
+  MADEIRA
+  COMBINADO
+  OUTROS
+  NAO_IDENTIFICADO
 }
 
 /// UMA FEIRA — o evento de compra de uma coleção junto a um fornecedor.
@@ -923,6 +995,10 @@ model PurchaseFairOffer {
   genero      String?
   formato     String?
   cor         String?
+  /// Material da armação, como a planilha do fornecedor escreve. Entrou na
+  /// rodada final (item 05): o perfil que compõe o mix é gênero + formato +
+  /// material + faixa de preço, e a oferta precisa trazer os quatro.
+  material    String?
 
   unitCost  Decimal @db.Decimal(12, 2)
   unitPrice Decimal @db.Decimal(12, 2)

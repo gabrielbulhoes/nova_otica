@@ -111,10 +111,23 @@ export function lerCadastroFornecedor(
   const dados = planilha.linhas(aba);
   if (dados.length === 0) return { linhas: new Map(), marcas: new Set(), ignoradas: 0, repetidas: 0 };
 
-  const cab = dados[0].map((c) => c.trim().toLowerCase());
+  /*
+   * O CABEÇALHO CASA SEM ACENTO. Era `trim().toLowerCase()` dos dois lados, e
+   * "Gênero" só encontrava "gênero" — bastava o fornecedor mandar "Genero"
+   * (que é o que a exportação de alguns ERPs faz) para a coluna inteira sumir
+   * em silêncio, com a peça entrando sem gênero e saindo do mix por perfil.
+   */
+  const sem = (c: string) =>
+    c
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+  const cab = dados[0].map(sem);
   const col = (...nomes: string[]): number => {
     for (const n of nomes) {
-      const i = cab.indexOf(n.toLowerCase());
+      const i = cab.indexOf(sem(n));
       if (i >= 0) return i;
     }
     return -1;
@@ -127,10 +140,27 @@ export function lerCadastroFornecedor(
     referencia: col('referência', 'referencia'),
     gtin: col('gtin'),
     marca: col('marca'),
-    genero: col('gênero', 'genero'),
-    formato: col('formato da armação', 'formato da armacao'),
-    material: col('material da armação', 'material da armacao'),
-    cor: col('cor da armação', 'cor da armacao'),
+    genero: col('gênero', 'genero', 'sexo', 'publico', 'gender'),
+    // Cada fornecedor nomeia estas duas colunas do seu jeito, e a lista cresce
+    // com o que CHEGA — não com o que se imagina que possa chegar.
+    formato: col(
+      'formato da armação',
+      'formato da armacao',
+      'formato',
+      'formato do aro',
+      'formato da lente',
+      'shape',
+      'frame shape',
+    ),
+    material: col(
+      'material da armação',
+      'material da armacao',
+      'material',
+      'material do aro',
+      'materia prima',
+      'frame material',
+    ),
+    cor: col('cor da armação', 'cor da armacao', 'cor', 'color'),
     codigoCor: col('código da cor', 'codigo da cor'),
     tamanhoLente: col('tamanho da lente'),
     alturaLente: col('altura da lente'),
