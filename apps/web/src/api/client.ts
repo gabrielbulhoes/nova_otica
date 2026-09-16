@@ -411,7 +411,6 @@ export interface FichaTecnica {
     custoEstimado: boolean;
     preco: number | null;
     margemPct: number | null;
-    faixa: { indice: number; de: number; ate: number; rotulo: string } | null;
     descontoMaximoPct: number | null;
   };
   estoque: {
@@ -805,8 +804,6 @@ export interface PurchaseOrderItem {
   suggestedQty: number;
   unitCost: number;
   unitPrice: number;
-  /** A faixa de R$ 500 em que o preço cai. */
-  faixa: { indice: number; de: number; ate: number; rotulo: string };
   currentStock: number;
   unitsSold: number;
   /** Unidades por dia na janela. */
@@ -901,7 +898,6 @@ export interface FiltroDeCompras {
   formato?: string[];
   material?: string[];
   categoria?: string[];
-  faixa?: number[];
   estoqueMin?: number;
   estoqueMax?: number;
   giroMin?: number;
@@ -911,7 +907,6 @@ export interface FiltroDeCompras {
 export interface OpcoesDeFiltro {
   marcas: string[];
   categorias: string[];
-  faixas: { indice: number; rotulo: string }[];
   generos: { chave: string; rotulo: string }[];
   formatos: { chave: string; rotulo: string }[];
   materiais: { chave: string; rotulo: string }[];
@@ -919,8 +914,10 @@ export interface OpcoesDeFiltro {
 }
 
 /* ─── Composição do mix por perfil · rodada final · item 05 ─────────────────
-   Gênero + formato + material + faixa de preço, cruzando participação nas
-   vendas com participação no estoque. */
+   Gênero + formato + material, cruzando participação nas vendas com
+   participação no estoque. A faixa de preço era o quarto eixo e saiu a pedido
+   do cliente em 16/09/2026 — ela quadruplicava o número de perfis sem mudar
+   decisão nenhuma. */
 export interface LinhaDoMix {
   chave: string;
   perfil: {
@@ -928,7 +925,6 @@ export interface LinhaDoMix {
     genero: string;
     formato: string;
     material: string;
-    faixa: { indice: number; de: number; ate: number; rotulo: string };
   };
   rotulo: string;
   skus: number;
@@ -969,7 +965,7 @@ export interface MixPorPerfil {
     estoqueTotal: number;
     estoqueLido: number;
     estoqueLidoPct: number;
-    faltando: { genero: number; formato: number; material: number; preco: number };
+    faltando: { genero: number; formato: number; material: number };
     leitura: 'confiavel' | 'parcial' | 'sem-base';
     aviso: string;
   };
@@ -1158,8 +1154,11 @@ export async function getDecisionStats(days = 30): Promise<DecisionStats> {
 
 export type RiskProfile = 'conservador' | 'equilibrado' | 'agressivo';
 
+/** DOIS segmentos — "unir as categorias Lançamentos e Apostas" (16/09/2026). */
+export type SegmentoDoPlano = 'best-seller' | 'lancamento';
+
 export interface StrategySegment {
-  key: 'best-seller' | 'lancamento' | 'aposta';
+  key: SegmentoDoPlano;
   label: string;
   rationale: string;
   units: number;
@@ -1227,12 +1226,33 @@ export interface LinhaDoPlano {
   comprado?: number;
 }
 
+/**
+ * Um nível do detalhamento por características — Marca → Grupo → Gênero →
+ * Formato → Cor. É o pedido SEM SKU da aba de lançamentos (16/09/2026).
+ */
+export interface NoDeCaracteristica {
+  eixo: 'marca' | 'grupo' | 'genero' | 'formato' | 'cor';
+  chave: string;
+  rotulo: string;
+  /** O valor foi presumido por falta de informação no cadastro. */
+  presumido: boolean;
+  units: number;
+  pecas: number;
+  filhos: NoDeCaracteristica[];
+}
+
 export interface PlanoDetalhado {
   segmentos: {
     segmento: StrategySegment['key'];
     meta: number;
     alocado: number;
     linhas: LinhaDoPlano[];
+    /**
+     * As mesmas unidades das `linhas`, agrupadas pelas características.
+     * Preenchido só no segmento de LANÇAMENTO: no best-seller o SKU é a
+     * resposta, porque repor o que vendeu exige repor AQUELA peça.
+     */
+    detalhamento: NoDeCaracteristica[];
   }[];
   /** O total que cada filial recebe — a leitura de quem monta o malote. */
   porLoja: { storeId: string; storeName: string; units: number }[];
@@ -1328,12 +1348,47 @@ export const registrarCompraDeFeira = (offerId: string, bought: number) =>
 
 export type PurchaseOrderRecordStatus = 'SENT' | 'RECEIVED' | 'CANCELLED';
 
+/**
+ * O destino por loja CONGELADO no momento da compra (16/09/2026).
+ *
+ * Distinto de `DistributionItem` mais abaixo, que é o rateio RECALCULADO no
+ * recebimento. Os dois existem de propósito e a tela mostra os dois: entre a
+ * compra e a chegada passam de 14 a 60 dias, e a venda da rede muda nesse
+ * intervalo.
+ */
+export interface DistribuicaoDaCompra {
+  base: string;
+  baseRotulo: string;
+  faltaNaRede: number;
+  lojas: { storeId: string; storeName: string; quantidade: number }[];
+  semLoja: number;
+}
+
+export interface ItemDoPedidoRegistrado {
+  productId: string;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  total: number;
+  sku?: string | null;
+  suggestedQty?: number;
+  unitPrice?: number;
+  atributos?: {
+    genero?: string | null;
+    formatoLente?: string | null;
+    materialArmacao?: string | null;
+    cor?: string | null;
+  };
+  /** Ausente em pedido anterior a esta rodada — distinto de lista vazia. */
+  distribuicao?: DistribuicaoDaCompra;
+}
+
 export interface PurchaseOrderRecord {
   id: string;
   supplier: string;
   leadTimeDays: number;
   status: PurchaseOrderRecordStatus;
-  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  items: ItemDoPedidoRegistrado[];
   units: number;
   total: string | number;
   sentAt: string;
@@ -1344,7 +1399,7 @@ export interface PurchaseOrderRecord {
 export const registerPurchaseOrder = (body: {
   supplier: string;
   leadTimeDays: number;
-  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  items: (Omit<ItemDoPedidoRegistrado, 'sku'> & { sku?: string | null })[];
 }) => api.post<PurchaseOrderRecord>('/planning/purchase-orders', body).then((r) => r.data);
 export const getPurchaseOrderHistory = () =>
   api.get<{ total: number; rows: PurchaseOrderRecord[] }>('/planning/purchase-orders/history').then((r) => r.data);

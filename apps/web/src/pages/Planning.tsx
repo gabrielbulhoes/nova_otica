@@ -57,7 +57,7 @@ import {
 import { Icon, type IconName } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { downloadCsv } from '../bi/csv';
-import { deadlineDate, orderCsv, rotuloDoPeso, slug } from '../lib/rateio';
+import { deadlineDate, orderCsv, reescalarRateio, rotuloDoPeso, slug } from '../lib/rateio';
 import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
 import { recarregarDoTopo } from '../lib/consultaPaginada';
 import {
@@ -552,6 +552,10 @@ function ComposicaoDoPedido({ order }: { order: PurchaseOrder }) {
  *  quantidade efetiva (editável), faixa de preço. A sugestão original deve ser
  *  preservada."
  *
+ * A FAIXA DE PREÇO saiu na rodada seguinte, a pedido do mesmo cliente: ela
+ * aparecia como se fosse um sexto critério de decisão. O preço unitário e o
+ * total continuam nas colunas de sempre.
+ *
  * A EDIÇÃO MORA NA TELA, e o que vai para o banco são os DOIS números. O motor
  * continua dizendo o que acha; o comprador diz o que comprou. Meses depois, a
  * diferença entre os dois é a única forma de saber se o motor está ajudando —
@@ -637,7 +641,6 @@ function PurchaseOrderCard({
           suggestedQty: it.suggestedQty,
           unitCost: it.unitCost,
           unitPrice: it.unitPrice,
-          faixa: it.faixa.indice,
           ...(it.atributos
             ? {
                 atributos: {
@@ -645,6 +648,30 @@ function PurchaseOrderCard({
                   formatoLente: it.atributos.formatoLente ?? null,
                   materialArmacao: it.atributos.materialArmacao ?? null,
                   cor: it.atributos.cor ?? null,
+                },
+              }
+            : {}),
+          /*
+           * O DESTINO POR LOJA VAI JUNTO — item de 16/09/2026.
+           *
+           * O rateio já aparecia na tela e já saía no CSV; o que se perdia era
+           * exatamente aqui, no clique de "Registrar envio". Ao receber a
+           * caixa 30 ou 60 dias depois, a aba de distribuição recalculava com
+           * a venda daquele dia, e não havia como comparar com o que foi
+           * decidido na compra.
+           *
+           * As quantidades são REESCALADAS quando o comprador edita o total:
+           * gravar o rateio da sugestão ao lado de uma quantidade diferente
+           * daria uma soma que não fecha — e uma tabela cuja soma não bate com
+           * o próprio cabeçalho é lida como defeito, com razão.
+           */
+          ...(it.distribution
+            ? {
+                distribuicao: {
+                  base: it.distribution.basis,
+                  baseRotulo: it.distribution.basisLabel,
+                  faltaNaRede: it.distribution.totalNeed,
+                  ...reescalarRateio(it.distribution.rows, it.suggestedQty, efetiva),
                 },
               }
             : {}),
@@ -666,14 +693,14 @@ function PurchaseOrderCard({
           if (e.key === 'Enter' || e.key === ' ') setOpen(!open);
         }}
         aria-expanded={open}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          width: '100%',
-          padding: '14px 18px',
-          cursor: 'pointer',
-        }}
+        /*
+         * `cabecalho-do-pedido` em vez de estilo embutido: a linha precisa
+         * QUEBRAR no celular, e regra de media query não cabe num objeto de
+         * estilo. Encontrado abrindo a tela em 390px — os selos e o total
+         * empurravam o nome do fornecedor para uma coluna de ~30px, e
+         * "entrega em 30 dias" saía uma palavra por linha.
+         */
+        className="cabecalho-do-pedido"
       >
         {/* Este glifo era ÍCONE DE ESTADO (aberto/fechado), não pontuação: vira
             desenho da grade 24. Quem anuncia o estado ao leitor de tela é o
@@ -683,7 +710,10 @@ function PurchaseOrderCard({
           size={16}
           style={{ color: 'var(--muted)' }}
         />
-        <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Classe em vez de estilo embutido pelo motivo de sempre: estilo
+            embutido ganha da folha, e era ele que impedia a faixa de texto de
+            ocupar a linha inteira no celular. */}
+        <div className="cabecalho-do-pedido-texto">
           <div style={{ fontWeight: 600 }}>
             <span className="muted" style={{ fontWeight: 500, fontSize: 12 }}>Fornecedor:</span> {order.supplier}
           </div>
@@ -754,7 +784,9 @@ function PurchaseOrderCard({
               {/* A VARIANTE (item 04): RB3025 Havana e RB3025 Preto são duas
                   peças, e sem esta coluna eram duas linhas iguais. */}
               <th>Cor</th>
-              <th>Faixa</th>
+              {/* A COLUNA "FAIXA" SAIU com o resto das aparições da faixa de
+                  R$ 500 (16/09/2026). O preço unitário e o total continuam nas
+                  colunas de sempre — o que deixou de existir é a gaveta. */}
               <th className="num">Estoque</th>
               <th className="num">Vendido</th>
               <th className="num">Giro/mês</th>
@@ -806,7 +838,6 @@ function PurchaseOrderCard({
                   <td>{it.atributos?.genero ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.material ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.cor ?? <span className="muted">—</span>}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{it.faixa.rotulo}</td>
                   <td className="num">{it.currentStock}</td>
                   <td className="num">{it.unitsSold}</td>
                   {/* Giro por MÊS: "0,03/dia" não diz nada a quem compra. */}
@@ -915,9 +946,11 @@ function PurchaseOrderCard({
                     {/* `--panel-2` é o fundo de segundo nível do tema; a linha
                         expandida precisa se destacar da linha do item sem virar
                         um bloco de outra tela. */}
-                    {/* 17 colunas desde a rodada final: cor, faixa de preço,
-                        estoque, vendido, giro e o par sugerida/efetiva. */}
-                    <td colSpan={17} style={{ background: 'var(--panel-2)' }}>
+                    {/* 16 colunas: eram 17 até a faixa de preço sair da linha
+                        (16/09/2026). `colSpan` a mais deixa a linha expandida
+                        empurrando a tabela um passo à direita — e é o tipo de
+                        erro que nenhum teste de tipo pega. */}
+                    <td colSpan={16} style={{ background: 'var(--panel-2)' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
                         <Selo tom="blue" icone="ideia" title={it.distribution.basisLabel}>
                           por {it.distribution.basis}
@@ -971,7 +1004,8 @@ function PurchaseOrderCard({
 
 /* ═══ Filtros combináveis da lista de compras · rodada final · item 08 ═══════
    "Filtros combináveis em compras: marca, SKU, modelo, gênero, formato,
-    material, categoria, faixa de preço, estoque, giro, período."
+    material, categoria, estoque, giro, período." (a faixa de preço saiu em
+    16/09/2026, com o resto das aparições dela nas recomendações)
 
    O ESTADO MORA NA URL. Um recorte que o comprador montou com oito cliques
    precisa ser um link que ele manda para o sócio — e precisa sobreviver ao F5
@@ -1013,6 +1047,77 @@ const filtrosDaUrl = (sp: URLSearchParams): FiltrosNaUrl => {
 const contarFiltros = (f: FiltrosNaUrl) => Object.values(f).filter(Boolean).length;
 
 /** Caixa de seleção múltipla enxuta — sem biblioteca nova. */
+/**
+ * O TRILHO DE FORNECEDORES — rodada final final · item 02.
+ *
+ * "Agrupar todos os pedidos por fornecedor. Dentro dessa página, criar filtro
+ *  de compra na barra de menu lateral, com um botão para cada fornecedor onde
+ *  aparecerá apenas o pedido desse fornecedor."        — Galbe, 16/09/2026
+ *
+ * O AGRUPAMENTO já existia: `buildPurchaseOrders` sempre devolveu um pedido por
+ * fornecedor. O que não existia era a PORTA — os pedidos vinham empilhados numa
+ * rolagem só, e achar o da Luxottica numa rede com dezoito fornecedores era
+ * rolar até encontrar.
+ *
+ * Cada botão carrega o que decide a escolha: quantos itens, quanto custa e se
+ * o prazo aperta. Sem isso o trilho seria uma lista de nomes, e o comprador
+ * teria de abrir um a um para descobrir qual é o urgente — que é a rolagem de
+ * novo, com mais cliques.
+ *
+ * "Todos" fica em primeiro e é o padrão: é a visão que a tela sempre teve, e
+ * tirá-la obrigaria a escolher um fornecedor antes de ver o tamanho da compra.
+ */
+function TrilhoDeFornecedores({
+  orders,
+  escolhido,
+  aoEscolher,
+}: {
+  orders: PurchaseOrder[];
+  escolhido: string | null;
+  aoEscolher: (supplier: string | null) => void;
+}) {
+  if (orders.length <= 1) return null;
+  const totalGeral = orders.reduce((a, o) => a + o.total, 0);
+  const itensGerais = orders.reduce((a, o) => a + o.items.length, 0);
+
+  const botao = (
+    chave: string,
+    ativo: boolean,
+    titulo: string,
+    itens: number,
+    total: number,
+    prazo: number | null,
+  ) => (
+    <button
+      key={chave}
+      type="button"
+      className={`trilho-item${ativo ? ' active' : ''}`}
+      aria-pressed={ativo}
+      onClick={() => aoEscolher(chave === '__todos' ? null : chave)}
+      title={`${titulo} · ${itens} ${itens === 1 ? 'item' : 'itens'} · ${formatBRL(total)}`}
+    >
+      <span className="trilho-nome">{titulo}</span>
+      <span className="trilho-numeros">
+        {itens} {itens === 1 ? 'item' : 'itens'} · {formatBRL(total)}
+      </span>
+      {/* O prazo só aparece quando aperta: um selo em todo botão vira papel de
+          parede e deixa de sinalizar o que é urgente. */}
+      {prazo !== null && prazo <= 7 && (
+        <span className="trilho-prazo">{prazo <= 0 ? 'pedir hoje' : `em ${prazo}d`}</span>
+      )}
+    </button>
+  );
+
+  return (
+    <nav className="trilho" aria-label="Filtro por fornecedor">
+      {botao('__todos', escolhido === null, 'Todos os fornecedores', itensGerais, totalGeral, null)}
+      {orders.map((o) =>
+        botao(o.supplier, escolhido === o.supplier, o.supplier, o.items.length, o.total, o.orderByInDays),
+      )}
+    </nav>
+  );
+}
+
 function MultiSelecao({
   rotulo,
   opcoes,
@@ -1169,15 +1274,10 @@ function FiltrosDeCompra({
           valor={filtros.material ?? ''}
           aoMudar={(v) => aoMudar('material', v)}
         />
-        <MultiSelecao
-          rotulo="Faixa de preço"
-          opcoes={(opcoes?.faixas ?? []).map((f: { indice: number; rotulo: string }) => ({
-            chave: String(f.indice),
-            rotulo: f.rotulo,
-          }))}
-          valor={filtros.faixa ?? ''}
-          aoMudar={(v) => aoMudar('faixa', v)}
-        />
+        {/* A FAIXA DE PREÇO era um filtro aqui, e saiu com o resto das
+            aparições dela nas recomendações (16/09/2026). Quem compra escolhe
+            grife, formato e cor; a faixa aparecia como se fosse um sexto
+            critério de decisão. O preço continua em toda linha da tabela. */}
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
           estoque
           <input
@@ -1346,7 +1446,7 @@ function ComposicaoDoMix({ params }: { params: Record<string, string | number | 
       <AberturaDeSecao
         eyebrow="B · Oportunidades de composição"
         titulo="O que falta no mix, por perfil"
-        descricao="Gênero, formato, material e faixa de preço: o que a rede vende contra o que ela tem em estoque. Não é reposição de peça — é variedade que está faltando."
+        descricao="Gênero, formato e material: o que a rede vende contra o que ela tem em estoque. Não é reposição de peça — é variedade que está faltando."
       />
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '6px 0 10px' }}>
         <Selo tom={tomDaLeitura} icone={m.cobertura.leitura === 'confiavel' ? 'aprovar' : 'atencao'}>
@@ -1770,12 +1870,123 @@ function FilaDeDistribuicao() {
 }
 
 /** Histórico do ciclo de compras: enviado → recebido (ou cancelado). */
+/**
+ * O DESTINO DE CADA SKU, congelado na compra — item de 16/09/2026.
+ *
+ * "Eu preciso saber, da compra, que a sugestão acompanhe a distribuição por
+ *  loja: cada quantidade de cada SKU para cada loja em cada compra."
+ *
+ * É a tabela cruzada que o CSV já exportava e que a tela não mostrava depois
+ * do envio: uma linha por peça, uma coluna por loja. O rateio da SUGESTÃO já
+ * aparecia na aba de compras antes de registrar; o que se perdia era o depois.
+ *
+ * As colunas saem da união das lojas citadas em qualquer item, e não das lojas
+ * da rede: uma loja que não recebe nada deste pedido não precisa de coluna, e
+ * dezesseis colunas vazias empurram as que importam para fora da tela.
+ */
+function DestinoDoPedidoRegistrado({ pedido }: { pedido: PurchaseOrderRecord }) {
+  const comRateio = pedido.items.filter((it) => it.distribuicao);
+  if (comRateio.length === 0) {
+    return (
+      <div className="hint" style={{ margin: '8px 0' }}>
+        Este pedido foi registrado antes de a plataforma guardar o destino por loja, ou foi montado
+        na visão de uma loja só — onde não há rateio a fazer. O plano de distribuição continua
+        disponível no botão “Como distribuir”, calculado com a posição de hoje.
+      </div>
+    );
+  }
+
+  const lojas: { id: string; nome: string }[] = [];
+  for (const it of comRateio)
+    for (const l of it.distribuicao!.lojas)
+      if (!lojas.some((x) => x.id === l.storeId)) lojas.push({ id: l.storeId, nome: l.storeName });
+  lojas.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+  const semLoja = comRateio.reduce((a, it) => a + it.distribuicao!.semLoja, 0);
+  const totalPorLoja = (id: string) =>
+    comRateio.reduce(
+      (a, it) => a + (it.distribuicao!.lojas.find((l) => l.storeId === id)?.quantidade ?? 0),
+      0,
+    );
+
+  return (
+    <div style={{ margin: '6px 0 4px' }}>
+      <div className="hint" style={{ marginBottom: 8 }}>
+        O destino decidido <strong>no momento da compra</strong>. O plano de distribuição do
+        recebimento é recalculado com a venda do dia da chegada — entre um e outro passam{' '}
+        {pedido.leadTimeDays} dias, e por isso os dois números existem lado a lado.
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Peça</th>
+              <th>SKU</th>
+              <th className="num">Comprado</th>
+              {lojas.map((l) => (
+                <th key={l.id} className="num">{l.nome}</th>
+              ))}
+              {semLoja > 0 && <th className="num">Sem loja</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {comRateio.map((it) => (
+              <tr key={it.productId}>
+                <td>{it.description}</td>
+                <td>{it.sku ? <Codigo>{it.sku}</Codigo> : <span className="muted">—</span>}</td>
+                <td className="num"><strong>{it.quantity}</strong></td>
+                {lojas.map((l) => {
+                  const q = it.distribuicao!.lojas.find((x) => x.storeId === l.id)?.quantidade ?? 0;
+                  return (
+                    <td key={l.id} className="num">
+                      {/* Zero em cinza, e não em branco: branco seria "ninguém
+                          calculou", e aqui alguém calculou e deu zero. */}
+                      {q > 0 ? q : <span className="muted">0</span>}
+                    </td>
+                  );
+                })}
+                {semLoja > 0 && (
+                  <td className="num">
+                    {it.distribuicao!.semLoja > 0 ? (
+                      it.distribuicao!.semLoja
+                    ) : (
+                      <span className="muted">0</span>
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))}
+            <tr>
+              <td colSpan={2}><strong>Total</strong></td>
+              <td className="num">
+                <strong>{comRateio.reduce((a, it) => a + it.quantity, 0)}</strong>
+              </td>
+              {lojas.map((l) => (
+                <td key={l.id} className="num"><strong>{totalPorLoja(l.id)}</strong></td>
+              ))}
+              {semLoja > 0 && <td className="num"><strong>{semLoja}</strong></td>}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {semLoja > 0 && (
+        <p className="hint" style={{ marginTop: 6 }}>
+          {semLoja} un. sem loja definida na compra: nenhuma filial elegível estava abaixo do alvo
+          de cobertura dessas peças. Ficam para divisão manual na chegada.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function OrderHistory() {
   const qc = useQueryClient();
   const history = useQuery({ queryKey: ['planning-history'], queryFn: getPurchaseOrderHistory });
   // Qual pedido está com o plano de distribuição aberto. Um por vez: o plano
   // tem uma tabela por item, e dois abertos viram uma parede.
   const [distribuindo, setDistribuindo] = useState<string | null>(null);
+  /** Pedido cujo destino CONGELADO na compra está aberto. */
+  const [destino, setDestino] = useState<string | null>(null);
 
   const settle = async (id: string, action: 'receive' | 'cancel') => {
     await settlePurchaseOrder(id, action);
@@ -1827,6 +2038,20 @@ function OrderHistory() {
                   </Selo>
                 </td>
                 <td className="right" style={{ whiteSpace: 'nowrap' }}>
+                  {/* O DESTINO CONGELADO vale em qualquer estado do pedido —
+                      enviado, recebido ou cancelado. É o registro do que se
+                      decidiu ao comprar, e cancelar uma compra não apaga a
+                      decisão que foi tomada. */}
+                  <Botao
+                    variante="discreto"
+                    pequeno
+                    icone="loja"
+                    aria-expanded={destino === r.id}
+                    onClick={() => setDestino((v) => (v === r.id ? null : r.id))}
+                    title="Quanto de cada SKU foi para cada loja, como decidido na compra"
+                  >
+                    {destino === r.id ? 'Fechar destino' : 'Destino por loja'}
+                  </Botao>{' '}
                   {r.status === 'SENT' ? (
                     <span style={{ display: 'inline-flex', gap: 6 }}>
                       <TwoStepButton
@@ -1862,6 +2087,15 @@ function OrderHistory() {
                 </td>
               </tr>
             ))}
+            {history.data!.rows
+              .filter((r) => r.id === destino)
+              .map((r) => (
+                <tr key={`${r.id}-destino`}>
+                  <td colSpan={8} style={{ background: 'var(--surface-2, transparent)' }}>
+                    <DestinoDoPedidoRegistrado pedido={r} />
+                  </td>
+                </tr>
+              ))}
             {history.data!.rows
               .filter((r) => r.id === distribuindo)
               .map((r) => (
@@ -2631,13 +2865,57 @@ function FairSplit() {
   );
 }
 
+/**
+ * OS PARÂMETROS SÃO UM RASCUNHO ATÉ ALGUÉM CONFIRMAR — rodada final final · 01.
+ *
+ * "Os gráficos e tabelas da página de sugestão de compra estão demorando a
+ *  carregar. Sugestão: adicionar um botão para que os parâmetros possam ser
+ *  escolhidos antes de iniciar o carregamento dos gráficos, evitando assim o
+ *  retrabalho/travamento."                             — Galbe, 16/09/2026
+ *
+ * O diagnóstico dele está certo e a causa é de arquitetura, não de servidor
+ * lento: as seis consultas desta tela têm os parâmetros na CHAVE, então trocar
+ * o período disparava seis recálculos completos — e trocar o recorte logo em
+ * seguida disparava outros seis, com os primeiros ainda em voo. Quem muda três
+ * campos antes de olhar o resultado paga dezoito recálculos para ver um.
+ *
+ * Agora há duas cópias dos parâmetros: o RASCUNHO, que os controles mexem à
+ * vontade sem custo nenhum, e o APLICADO, que é o que as consultas leem.
+ *
+ * `aplicado: null` é o estado de chegada, e nada carrega nele. É uma escolha
+ * contra a regra que esta base repete ("tela vazia é lida como quebrada") — e
+ * ela vale aqui porque a tela NÃO chega vazia: chega com o painel de
+ * parâmetros e um botão dizendo o que vai acontecer. O que se evitou é o que o
+ * cliente descreveu: abrir a página e esperar o carregamento de um recorte que
+ * ele ia trocar de qualquer jeito.
+ */
+interface ParametrosDaTela {
+  days: string;
+  storeId: string;
+  group: ProductGroup;
+}
+
+const mesmosParametros = (a: ParametrosDaTela, b: ParametrosDaTela | null): boolean =>
+  b !== null && a.days === b.days && a.storeId === b.storeId && a.group === b.group;
+
 export function Planning() {
   const { isAdmin } = useAuth();
-  const [days, setDays] = useState(() => periodoInicial(PERIODOS_ANALISE, 90));
-  const [storeId, setStoreId] = useState('');
-  // Recorte de cobertura: a operação fala de "cobertura" como óculos + grau +
-  // relógio (principal); lentes são acompanhadas à parte; consolidado é tudo.
-  const [group, setGroup] = useState<ProductGroup>('principal');
+  const [rascunho, setRascunho] = useState<ParametrosDaTela>(() => ({
+    days: periodoInicial(PERIODOS_ANALISE, 90),
+    storeId: '',
+    // Recorte de cobertura: a operação fala de "cobertura" como óculos + grau +
+    // relógio (principal); lentes são acompanhadas à parte; consolidado é tudo.
+    group: 'principal',
+  }));
+  const [aplicado, setAplicado] = useState<ParametrosDaTela | null>(null);
+  const carregado = aplicado !== null;
+  const pendente = !mesmosParametros(rascunho, aplicado);
+  // As consultas leem o APLICADO. Antes do primeiro "Carregar" elas não rodam,
+  // e o rascunho serve de valor de leitura para não espalhar `?? ''` na tela.
+  const { days, storeId, group } = aplicado ?? rascunho;
+  const setDays = (v: string) => setRascunho((r) => ({ ...r, days: v }));
+  const setStoreId = (v: string) => setRascunho((r) => ({ ...r, storeId: v }));
+  const setGroup = (v: ProductGroup) => setRascunho((r) => ({ ...r, group: v }));
   const [filter, setFilter] = useState<Filter>('ALL');
   const rebalanceRef = useRef<HTMLDivElement>(null);
   const ordersRef = useRef<HTMLDivElement>(null);
@@ -2689,7 +2967,11 @@ export function Planning() {
     recomendacao: filter === 'ALL' ? undefined : filter,
   };
 
-  const overview = useQuery({ queryKey: ['planning-overview', days, storeId, group], queryFn: () => getPlanningOverview(params) });
+  const overview = useQuery({
+    queryKey: ['planning-overview', days, storeId, group],
+    queryFn: () => getPlanningOverview(params),
+    enabled: carregado,
+  });
   // Mesmo conserto do quadro de decisões, pela mesma razão: "ver mais" pedia um
   // `pageSize` cada vez maior e nunca mandava `page`. A rota prende o tamanho
   // em 2.000 linhas, então a partir do 20º clique a tabela parava de crescer,
@@ -2704,13 +2986,18 @@ export function Planning() {
     queryKey: ['purchase-suggestions', sugParams],
     queryFn: ({ pageParam, signal }) =>
       getPurchaseSuggestions({ ...sugParams, ...pageParam, pageSize: LINHAS_POR_CLIQUE }, signal),
+    enabled: carregado,
     initialPageParam: { page: 1 } as PedidoDePagina,
     // Âncora: o SKU da última linha desta resposta — ver `proximoPedido`.
     getNextPageParam: (ultima) =>
       proximoPedido(ultima.pagina, ultima.rows[ultima.rows.length - 1]?.productId),
     placeholderData: keepPreviousData,
   });
-  const rebalance = useQuery({ queryKey: ['planning-rebalance', days, group], queryFn: () => getRebalancePlan({ days, group }) });
+  const rebalance = useQuery({
+    queryKey: ['planning-rebalance', days, group],
+    queryFn: () => getRebalancePlan({ days, group }),
+    enabled: carregado,
+  });
   /*
    * OS FILTROS (item 08) vivem na URL — ver `FiltrosDeCompra`. A consulta usa
    * o objeto como parte da chave, então mudar um filtro refaz a busca no
@@ -2728,6 +3015,13 @@ export function Planning() {
    * diferentes e as duas edições são independentes.
    */
   const [edicoes, setEdicoes] = useState<EdicoesDeQuantidade>({});
+  /*
+   * O FORNECEDOR ESCOLHIDO no trilho (item 02). Mora aqui e não dentro do
+   * trilho porque quem usa é a lista de cards, e porque trocar de frente ou de
+   * período não pode deixar a tela mostrando um fornecedor que já não existe
+   * no recorte novo — ver o `useEffect` logo abaixo.
+   */
+  const [fornecedor, setFornecedor] = useState<string | null>(null);
   const mudarFiltro = (chave: ChaveDeFiltro, valor: string) => {
     const proximo = new URLSearchParams(searchParams);
     if (valor) proximo.set(chave, valor);
@@ -2737,6 +3031,7 @@ export function Planning() {
   const opcoes = useQuery({
     queryKey: ['planning-filtros', days, storeId, group],
     queryFn: () => getOpcoesDeFiltro(params),
+    enabled: carregado,
   });
   const orders = useQuery({
     queryKey: ['planning-orders', days, storeId, group, somenteAprovados, filtros],
@@ -2746,6 +3041,7 @@ export function Planning() {
         somenteAprovados: somenteAprovados ? 1 : undefined,
         ...filtros,
       }),
+    enabled: carregado,
   });
   const suppliers = useQuery({ queryKey: ['planning-suppliers'], queryFn: getSupplierSettings });
 
@@ -2765,6 +3061,27 @@ export function Planning() {
   // "Risco de faltar" vem CONTADO do servidor. A tela percorria as 13 mil
   // linhas para chegar a este inteiro, o que obrigava a baixar as 13 mil.
   const urgentCount = ultimaSug?.summary.emRisco ?? 0;
+
+  /*
+   * Fornecedor escolhido que SAIU do recorte volta para "todos".
+   *
+   * Sem isto, trocar o período ou aplicar um filtro que elimine a Luxottica
+   * deixava a tela num estado que não existe: o trilho sem nenhum botão aceso
+   * e a lista vazia, indistinguível de "nada a comprar". É o mesmo defeito que
+   * a aba de distribuição trouxe três rodadas seguidas.
+   */
+  const fornecedoresNoRecorte = orders.data?.orders.map((o) => o.supplier) ?? [];
+  const chaveDosFornecedores = fornecedoresNoRecorte.join('|');
+  useEffect(() => {
+    if (fornecedor !== null && !fornecedoresNoRecorte.includes(fornecedor)) setFornecedor(null);
+    // `chaveDosFornecedores` no lugar do array: o array é novo a cada render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chaveDosFornecedores, fornecedor]);
+
+  /** Os pedidos que o trilho deixa passar. */
+  const pedidosVisiveis = (orders.data?.orders ?? []).filter(
+    (o) => fornecedor === null || o.supplier === fornecedor,
+  );
 
   const goTo = (ref: typeof purchaseRef, f?: Filter) => {
     if (f) setFilter(f);
@@ -2803,7 +3120,11 @@ export function Planning() {
           ))}
         </select>
         {isAdmin && (
-          <select value={storeId} onChange={(e) => setStoreId(e.target.value)} aria-label="Escopo de loja">
+          <select
+            value={rascunho.storeId}
+            onChange={(e) => setStoreId(e.target.value)}
+            aria-label="Escopo de loja"
+          >
             <option value="">Toda a rede</option>
             {stores.data?.rows.map((s) => (
               <option key={s.id} value={s.id}>
@@ -2812,11 +3133,64 @@ export function Planning() {
             ))}
           </select>
         )}
+        {/* O BOTÃO QUE O CLIENTE PEDIU. Preenchido (ação primária) enquanto há
+            algo a aplicar; desabilitado — e não escondido — quando não há, para
+            a barra não mudar de tamanho a cada clique. */}
+        <Botao
+          variante={pendente ? 'primario' : 'discreto'}
+          icone={carregado ? 'fluxo' : 'check'}
+          onClick={() => setAplicado(rascunho)}
+          disabled={!pendente}
+          title={
+            pendente
+              ? 'Calcula a tela inteira com os parâmetros escolhidos'
+              : 'Os parâmetros na tela são os que estão valendo'
+          }
+        >
+          {carregado ? 'Aplicar' : 'Carregar'}
+        </Botao>
       </div>
 
       <div className="muted" style={{ fontSize: 12.5, margin: '-14px 0 18px' }}>
-        {GROUP_OPTIONS.find((g) => g.value === group)!.hint}
+        {GROUP_OPTIONS.find((g) => g.value === rascunho.group)!.hint}
       </div>
+
+      {/* ── ANTES DO PRIMEIRO CARREGAMENTO ──────────────────────────────────
+          A tela não chega vazia: chega com os parâmetros e com a frase que diz
+          o que o botão vai fazer. É a diferença entre "ainda não pedi" e
+          "pedi e não veio", que a tela precisa deixar clara sozinha. */}
+      {!carregado ? (
+        <div className="card" style={{ textAlign: 'center', padding: '34px 20px' }}>
+          <Icon name="filtro" size={28} style={{ color: 'var(--muted)' }} />
+          <h3 style={{ margin: '12px 0 6px' }}>Escolha o recorte e carregue</h3>
+          <p className="muted" style={{ maxWidth: 560, margin: '0 auto 16px', fontSize: 13.5 }}>
+            Esta tela cruza as vendas do período com o estoque de cada loja e monta os pedidos —
+            é a conta mais pesada da plataforma. Ela só roda quando você pede, para você poder
+            trocar período, recorte e loja sem esperar um cálculo a cada clique.
+          </p>
+          <Botao variante="primario" icone="check" onClick={() => setAplicado(rascunho)}>
+            Carregar {GROUP_OPTIONS.find((g) => g.value === rascunho.group)!.label.toLowerCase()} ·{' '}
+            {opcoesDePeriodo(PERIODOS_ANALISE).find((o) => o.value === rascunho.days)?.label ?? rascunho.days}
+          </Botao>
+        </div>
+      ) : (
+      <>
+
+      {/* Parâmetros mexidos e ainda não aplicados: o conteúdo abaixo continua
+          sendo o do recorte ANTIGO, e dizer isso é obrigação — número velho
+          sob rótulo novo é a forma mais convincente de uma tela mentir. */}
+      {pendente && (
+        <div className="banner warn" style={{ alignItems: 'center' }}>
+          <Icon name="atencao" size={18} />
+          <span style={{ flex: 1 }}>
+            Os números abaixo ainda são do recorte anterior. Clique em <strong>Aplicar</strong> para
+            recalcular.
+          </span>
+          <Botao variante="primario" pequeno icone="fluxo" onClick={() => setAplicado(rascunho)}>
+            Aplicar
+          </Botao>
+        </div>
+      )}
 
       <LegendaDaAmostra days={days} />
 
@@ -3045,16 +3419,36 @@ export function Planning() {
                 quantidade sugerida já é a dessa loja e não há o que repartir.
               </div>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {orders.data!.orders.map((o) => (
-                <PurchaseOrderCard
-                  key={o.supplier}
-                  order={o}
-                  dias={orders.data!.days}
-                  edicoes={edicoes}
-                  setEdicoes={setEdicoes}
-                />
-              ))}
+            {/* O TRILHO — item 02. Um botão por fornecedor, e só o pedido dele.
+                Coluna à esquerda no desktop; no celular vira uma fita rolável
+                acima da lista, porque 240px de trilho numa tela de 360 não
+                deixariam o pedido caber em lugar nenhum. */}
+            <div className="compras-com-trilho">
+              <TrilhoDeFornecedores
+                orders={orders.data!.orders}
+                escolhido={fornecedor}
+                aoEscolher={setFornecedor}
+              />
+              <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {fornecedor !== null && (
+                  <div className="hint" style={{ margin: 0 }}>
+                    Mostrando só <strong>{fornecedor}</strong>.{' '}
+                    {orders.data!.orders.length === 2
+                      ? 'O outro fornecedor continua'
+                      : `Os outros ${orders.data!.orders.length - 1} fornecedores continuam`}{' '}
+                    no recorte — o total do cabeçalho é o da compra inteira.
+                  </div>
+                )}
+                {pedidosVisiveis.map((o) => (
+                  <PurchaseOrderCard
+                    key={o.supplier}
+                    order={o}
+                    dias={orders.data!.days}
+                    edicoes={edicoes}
+                    setEdicoes={setEdicoes}
+                  />
+                ))}
+              </div>
             </div>
           </>
         )}
@@ -3441,6 +3835,8 @@ export function Planning() {
           </div>
         </div>
         </>
+      )}
+      </>
       )}
     </>
   );

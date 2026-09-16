@@ -1706,10 +1706,16 @@ export interface PurchaseOrderItem {
    */
   suggestedQty: number;
   unitCost: number;
-  /** Preço de venda unitário — de onde sai a faixa de preço. */
+  /**
+   * Preço de venda unitário.
+   *
+   * A FAIXA DE R$ 500 saiu daqui na rodada seguinte — "retirar faixa de preço
+   * das recomendações de compra" (16/09/2026). Ela tinha sido pedida para
+   * descrever o perfil e virou ruído: quem compra escolhe grife, formato e
+   * cor, e a faixa aparecia como se fosse um sexto critério de decisão. O
+   * preço continua na linha; o que saiu foi a gaveta em que ele caía.
+   */
   unitPrice: number;
-  /** A faixa de R$ 500 em que o preço cai (rodada final · item 04). */
-  faixa: FaixaDePreco;
   /** Estoque atual (on-hand) da peça no escopo. */
   currentStock: number;
   /** Vendido na janela analisada. */
@@ -2102,7 +2108,6 @@ export function buildPurchaseOrders(
       suggestedQty: p.suggestedQty,
       unitCost: p.unitCost,
       unitPrice: p.unitPrice,
-      faixa: faixaDePreco(p.unitPrice),
       currentStock: p.currentStock,
       unitsSold: p.unitsSold,
       giro: p.dailyDemand,
@@ -3770,7 +3775,7 @@ export interface StrategyParams {
 }
 
 export interface StrategySegment {
-  key: 'best-seller' | 'lancamento' | 'aposta';
+  key: SegmentoDoPlano;
   label: string;
   rationale: string;
   units: number;
@@ -3789,17 +3794,32 @@ export interface CommercialStrategy {
   viable: boolean;
   /** Unidades do piso acima da demanda projetada (0 quando viável). */
   withoutBacking: number;
-  /** % com lastro = best-seller + lançamento (aposta é especulação). */
+  /**
+   * % da compra com LASTRO NA PRÓPRIA PEÇA — ou seja, a fatia best-seller.
+   *
+   * Era `best-seller + lançamento`, contra a aposta. Com os dois baldes de
+   * peça nova unidos, essa conta daria 100% sempre — um indicador que não
+   * mede nada é pior que indicador nenhum, porque ocupa o lugar de um que
+   * mediria. O que sobrou é a pergunta que continua tendo resposta: quanto
+   * desta compra vai para peça que ESTA rede já vendeu.
+   */
   backedPct: number;
   segments: StrategySegment[];
   /** Texto da "decisão do motor". */
   verdict: string;
 }
 
-const RISK_SPLIT: Record<RiskProfile, { bs: number; lanc: number; aposta: number }> = {
-  conservador: { bs: 0.6, lanc: 0.3, aposta: 0.1 },
-  equilibrado: { bs: 0.45, lanc: 0.35, aposta: 0.2 },
-  agressivo: { bs: 0.3, lanc: 0.4, aposta: 0.3 },
+/**
+ * A divisão do piso por perfil de risco — DOIS baldes desde 16/09/2026.
+ *
+ * As porcentagens são as de antes com a aposta somada ao lançamento (30+10,
+ * 35+20, 40+30): unir as categorias não podia mudar quanto se compra de peça
+ * nova, só parar de dividir essa compra em duas listas.
+ */
+const RISK_SPLIT: Record<RiskProfile, { bs: number; lanc: number }> = {
+  conservador: { bs: 0.6, lanc: 0.4 },
+  equilibrado: { bs: 0.45, lanc: 0.55 },
+  agressivo: { bs: 0.3, lanc: 0.7 },
 };
 
 const clampInt = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(n)));
@@ -3818,18 +3838,19 @@ export function buildCommercialStrategy(plans: ProductPlan[], params: StrategyPa
 
   const split = RISK_SPLIT[risk];
   const bs = Math.round(floorUnits * split.bs);
-  const lanc = Math.round(floorUnits * split.lanc);
-  const aposta = Math.max(0, floorUnits - bs - lanc); // resto fecha o total exato
+  // O lançamento é o RESTO, e não `round(floor * split.lanc)`: com dois baldes
+  // os dois arredondamentos podiam fechar uma unidade acima ou abaixo do piso,
+  // e o piso é o número que o cliente digitou.
+  const lanc = Math.max(0, floorUnits - bs);
   const pctOf = (n: number) => (floorUnits > 0 ? round1((n / floorUnits) * 100) : 0);
 
   const segments: StrategySegment[] = [
     { key: 'best-seller', label: 'Best-seller', rationale: 'reposição do que já vende', units: bs, pct: pctOf(bs) },
-    { key: 'lancamento', label: 'Lançamento', rationale: 'quota por segmento', units: lanc, pct: pctOf(lanc) },
-    { key: 'aposta', label: 'Aposta', rationale: 'especulação dirigida', units: aposta, pct: pctOf(aposta) },
+    { key: 'lancamento', label: 'Lançamento', rationale: 'peça nova, por perfil que vende', units: lanc, pct: pctOf(lanc) },
   ];
 
   const withoutBacking = Math.max(0, floorUnits - capacity);
-  const backedPct = floorUnits > 0 ? round1(((bs + lanc) / floorUnits) * 100) : 0;
+  const backedPct = floorUnits > 0 ? round1((bs / floorUnits) * 100) : 0;
   const capacityUsedPct = capacity > 0 ? round1((floorUnits / capacity) * 100) : 0;
   const viable = capacity > 0 && floorUnits <= capacity;
 
@@ -4076,7 +4097,17 @@ export interface CandidatoDeCompra {
   absorcao?: number | null;
 }
 
-export type SegmentoDoPlano = 'best-seller' | 'lancamento' | 'aposta';
+/**
+ * DOIS segmentos — "unir as categorias Lançamentos e Apostas" (16/09/2026).
+ *
+ * `aposta` saiu do vocabulário inteiro em vez de virar um apelido de
+ * `lancamento`: um valor que a tela não mostra mas o banco ainda aceita é a
+ * forma mais confiável de ele voltar sozinho daqui a três meses.
+ */
+export type SegmentoDoPlano = 'best-seller' | 'lancamento';
+
+/** Os segmentos na ordem em que o plano e a tela os apresentam. */
+export const SEGMENTOS_DO_PLANO = ['best-seller', 'lancamento'] as const satisfies readonly SegmentoDoPlano[];
 
 /** Uma linha do plano: quanto comprar desta peça, e por quê. */
 export interface LinhaDoPlano {
@@ -4151,8 +4182,25 @@ export function familiaDePeca(tipo: string | null | undefined): string {
   return t;
 }
 
+/**
+ * A chave de um perfil (família + gênero) — e o gênero entra CANÔNICO.
+ *
+ * Era `normCategory(genero)`, ou seja, o texto cru em minúsculas e sem acento.
+ * Com isso "Unisex" (como a Luxottica escreve) e "Unissex" (como o CDS
+ * escreve) viravam DUAS chaves, a mesma peça somava participação em dois
+ * perfis pela metade, e a tela listava as duas categorias lado a lado — foi
+ * exatamente o que o cliente viu no pedido dos best-sellers.
+ *
+ * É o mesmo defeito que `porFormato` tinha na rodada passada, uma casa ao
+ * lado: gravar com uma régua e ler com outra. A régua agora é uma só, e é a
+ * lista fechada de três valores.
+ *
+ * O gênero que `normGenero` não reconhece vira `-` (e não o texto original):
+ * um perfil "sem gênero" é uma resposta, "Óculos|xyz" é lixo com cara de
+ * resposta.
+ */
 export const chaveDePerfil = (tipo: string | null, genero: string | null): string =>
-  `${familiaDePeca(tipo)}|${normCategory(genero ?? '')}`;
+  `${familiaDePeca(tipo)}|${normGenero(genero) ?? '-'}`;
 
 /**
  * As famílias que TÊM giro no histórico da rede.
@@ -4196,7 +4244,11 @@ export function evidenciaDoPerfil(
   genero: string | null,
   perfil: PerfilQueVende,
 ): number {
-  const comGenero = perfil.porTipoGenero.get(chaveDePerfil(tipo, genero)) ?? 0;
+  // Gênero que a lista fechada não reconhece NÃO tenta o casamento fino: com a
+  // chave canônica ele viraria `-`, que é a mesma chave do "só o tipo", e a
+  // peça sem gênero legível empataria com a peça cujo gênero casou de verdade
+  // — perdendo a meia-evidência que a cascata existe para cobrar.
+  const comGenero = normGenero(genero) ? (perfil.porTipoGenero.get(chaveDePerfil(tipo, genero)) ?? 0) : 0;
   if (comGenero > 0) return comGenero;
   // Só o tipo. Meia evidência vale meio peso: o gênero é informação de verdade
   // quando existe, e quem casa nos dois não pode empatar com quem casa em um.
@@ -4205,21 +4257,24 @@ export function evidenciaDoPerfil(
 }
 
 /**
- * Classifica um candidato nos três segmentos do cliente.
+ * Classifica um candidato nos DOIS segmentos do cliente.
  *
- * A ordem das perguntas é a regra, e cada uma existe por um motivo:
+ * "Unir as categorias Lançamentos e Apostas." — Galbe, 16/09/2026
  *
- *  1. VENDEU? → best-seller. É a única classe com lastro na própria peça, e
- *     "best-seller" não significa outra coisa.
- *  2. O PERFIL vende? → lançamento. A peça é nova, mas piloto masculino em
- *     Havana já é o que sai — a aderência é real, não é torcida.
- *  3. Nada disso → aposta. Grife de baixa cobertura, fora do envelope de
- *     demanda provada. É a definição do concorrente, e é honesta.
+ * Eram três. A pergunta que sobrou é a única que o comprador respondia
+ * olhando: **esta peça já vendeu nesta rede?** Se vendeu, é reposição do que
+ * gira e chama-se best-seller. Se não vendeu, é peça nova — e a rede não tem
+ * como saber, pela PEÇA, se ela vai vender.
+ *
+ * A distinção entre "lançamento" (o perfil já vende) e "aposta" (nem o perfil)
+ * NÃO se perdeu: ela continua inteira em `pesoDoCandidato`, que é onde ela
+ * sempre decidiu alguma coisa de verdade — quantas unidades cada peça leva.
+ * O que sai é o terceiro BALDE na tela, que dividia uma compra pequena em três
+ * pilhas e obrigava o comprador a conciliar duas listas de peças novas.
  */
-export function classificarCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): SegmentoDoPlano {
+export function classificarCandidato(c: CandidatoDeCompra, _perfil: PerfilQueVende): SegmentoDoPlano {
   if (c.unitsSold > 0) return 'best-seller';
-  if (evidenciaDoPerfil(c.tipo, c.genero, perfil) > 0) return 'lancamento';
-  return 'aposta';
+  return 'lancamento';
 }
 
 /**
@@ -4242,6 +4297,7 @@ export function pesoDoCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): n
       // sinais em vez de somar: um piloto masculino numa cor que não sai não
       // deve herdar o peso inteiro do "masculino".
       const base = evidenciaDoPerfil(c.tipo, c.genero, perfil);
+      if (base <= 0) return pesoSemEvidencia(c, margem);
       // A MESMA chave que os serviços usam para gravar `porFormato` — era
       // `normCategory` aqui e `normBrandKey` lá (minúscula contra maiúscula), e
       // o formato nunca casava: todo lançamento saía com peso de formato 1,
@@ -4251,13 +4307,34 @@ export function pesoDoCandidato(c: CandidatoDeCompra, perfil: PerfilQueVende): n
       const fCor = c.cor ? 1 + (perfil.porCor.get(chaveDeAtributo(c.cor)) ?? 0) : 1;
       return base * Math.log1p(fFormato) * Math.log1p(fCor);
     }
-
-    case 'aposta':
-      // Sem giro e sem perfil, sobra a MARGEM — é o único sinal que resta, e
-      // é o que compensa o risco. Cobertura baixa da grife favorece: aposta é
-      // exatamente onde a rede tem pouco, não onde já está cheia.
-      return Math.max(1, margem) * (c.coberturaDaGrifeMeses === null ? 1 : 1 / (1 + c.coberturaDaGrifeMeses));
   }
+}
+
+/**
+ * O peso de quem NÃO tem evidência nenhuma — o que era o balde "aposta".
+ *
+ * Unir lançamento e aposta na tela não podia apagar estas peças da compra, e
+ * quase apagou: sem este caminho, `evidenciaDoPerfil` zero fazia o produto
+ * inteiro dar 0, e uma grife nova — exatamente aquela que a rede ainda não
+ * vendeu e o cliente quer testar — nunca receberia uma unidade.
+ *
+ * A fórmula é a mesma de antes: sobra a MARGEM, e cobertura baixa da grife
+ * favorece, porque especular é justamente onde a rede tem pouco.
+ *
+ * O que mudou foi a ESCALA. Antes os dois grupos tinham baldes separados e
+ * nunca disputavam; agora dividem a mesma meta, e o fator abaixo os põe uma
+ * ordem de grandeza abaixo do candidato com evidência mais fraca que existe
+ * (uma peça cujo perfil vendeu uma unidade pesa ~0,5; uma aposta de 60% de
+ * margem pesa ~0,06). Na prática isso troca a cota fixa de especulação por uma
+ * regra melhor: a aposta recebe o que SOBRA depois que os candidatos com
+ * lastro batem no teto por linha e na absorção — e sobra de verdade, porque
+ * esses tetos existem e mordem.
+ */
+const PESO_SEM_EVIDENCIA_DE_PERFIL = 0.001;
+
+function pesoSemEvidencia(c: CandidatoDeCompra, margem: number): number {
+  const cobertura = c.coberturaDaGrifeMeses === null ? 1 : 1 / (1 + c.coberturaDaGrifeMeses);
+  return PESO_SEM_EVIDENCIA_DE_PERFIL * Math.max(1, margem) * cobertura;
 }
 
 /** Margem sobre o PREÇO (0–100). Preço zero não vira divisão por zero. */
@@ -4344,7 +4421,26 @@ export function repartirComTeto(
 }
 
 export interface PlanoDetalhado {
-  segmentos: { segmento: SegmentoDoPlano; meta: number; alocado: number; linhas: LinhaDoPlano[] }[];
+  segmentos: {
+    segmento: SegmentoDoPlano;
+    meta: number;
+    alocado: number;
+    linhas: LinhaDoPlano[];
+    /**
+     * O MESMO conteúdo das linhas, agrupado por Marca → Grupo → Gênero →
+     * Formato → Cor (rodada final final · item 08 e a mensagem de 16/09).
+     *
+     * Vem calculado aqui, junto das linhas, e não na tela: são dois jeitos de
+     * ler UM pedido, e calculá-los em lugares diferentes é como o total do
+     * cabeçalho passa a discordar da soma da tabela.
+     *
+     * Preenchido só no segmento de LANÇAMENTO. O best-seller mantém o padrão
+     * por SKU — "a aba best-seller mantém o padrão da versão anterior" —, e
+     * ali o SKU não é um detalhe de exibição: repor o que vendeu exige repor
+     * AQUELA peça.
+     */
+    detalhamento: NoDeCaracteristica[];
+  }[];
   /**
    * Unidades da meta que o plano NÃO conseguiu alocar — declaradas, nunca
    * sumidas. Duas causas, e as duas são informação para quem compra:
@@ -4378,14 +4474,13 @@ export function montarPlanoDetalhado(
   const porSegmento = new Map<SegmentoDoPlano, CandidatoDeCompra[]>([
     ['best-seller', []],
     ['lancamento', []],
-    ['aposta', []],
   ]);
   for (const c of candidatos) porSegmento.get(classificarCandidato(c, perfil))!.push(c);
 
   const segmentos: PlanoDetalhado['segmentos'] = [];
   let naoAlocado = 0;
 
-  for (const segmento of ['best-seller', 'lancamento', 'aposta'] as const) {
+  for (const segmento of SEGMENTOS_DO_PLANO) {
     const meta = Math.max(0, Math.trunc(metasPorSegmento[segmento] ?? 0));
     const elegiveis = porSegmento.get(segmento)!;
 
@@ -4394,7 +4489,7 @@ export function montarPlanoDetalhado(
     // tem o que oferecer para o balde de lançamento.
     if (meta === 0 || elegiveis.length === 0) {
       naoAlocado += meta;
-      segmentos.push({ segmento, meta, alocado: 0, linhas: [] });
+      segmentos.push({ segmento, meta, alocado: 0, linhas: [], detalhamento: [] });
       continue;
     }
 
@@ -4421,7 +4516,13 @@ export function montarPlanoDetalhado(
       .filter((l) => l.units > 0)
       .sort((a, b) => b.units - a.units || a.candidato.description.localeCompare(b.candidato.description, 'pt-BR'));
 
-    segmentos.push({ segmento, meta, alocado: linhas.reduce((a, l) => a + l.units, 0), linhas });
+    segmentos.push({
+      segmento,
+      meta,
+      alocado: linhas.reduce((a, l) => a + l.units, 0),
+      linhas,
+      detalhamento: segmento === 'lancamento' ? detalharPorCaracteristicas(linhas) : [],
+    });
   }
 
   return {
@@ -4429,6 +4530,222 @@ export function montarPlanoDetalhado(
     naoAlocado,
     total: segmentos.reduce((a, s) => a + s.alocado, 0),
   };
+}
+
+// ─── O pedido SEM SKU: detalhar a peça pelas características ────────────────
+//
+// "Na aba de lançamentos, como não iremos especificar sobre SKU's, devemos
+//  orientar detalhando ao máximo as características daquele pedido/quantidade.
+//  Seguindo a seguinte ordem de prioridade: Marca - Grupo (óculos ou armação) -
+//  Gênero - Formato da Lente - Cor. Esse detalhamento só se aplica à aba de
+//  lançamentos. A aba best-seller mantém o padrão da versão anterior."
+//                                                     — Galbe, 16/09/2026
+//
+// A distinção é a do mundo real, não de tela. O best-seller É um SKU: a rede
+// vendeu AQUELA peça, e pedir outra coisa não repõe o que saiu. O lançamento
+// não é peça nenhuma ainda — o comprador vai à feira, ou liga para o
+// representante, e o que ele leva é uma DESCRIÇÃO: "doze Ray-Ban solares
+// femininos gatinho pretos". Pedir SKU ali é pedir um número que ninguém
+// escolheu, e a plataforma escolheria por ele.
+//
+// A ordem dos eixos é a do cliente, e é ordem de PRIORIDADE: a marca fecha a
+// conversa com o fornecedor, o grupo diz que produto é, o gênero é a prateleira
+// e só então vêm formato e cor. Não é alfabética nem estatística — é a ordem
+// em que um comprador de ótica decide.
+
+export type EixoDeCaracteristica = 'marca' | 'grupo' | 'genero' | 'formato' | 'cor';
+
+/** Os cinco eixos, na ordem de prioridade do cliente. Não reordenar. */
+export const EIXOS_DO_DETALHAMENTO = [
+  'marca',
+  'grupo',
+  'genero',
+  'formato',
+  'cor',
+] as const satisfies readonly EixoDeCaracteristica[];
+
+export const ROTULO_DO_EIXO: Record<EixoDeCaracteristica, string> = {
+  marca: 'Marca',
+  grupo: 'Grupo',
+  genero: 'Gênero',
+  formato: 'Formato da lente',
+  cor: 'Cor',
+};
+
+/** Um nível da árvore de características, com o total de peças abaixo dele. */
+export interface NoDeCaracteristica {
+  eixo: EixoDeCaracteristica;
+  /** Chave canônica — estável entre execuções, serve de `key` na tela. */
+  chave: string;
+  /** Como a tela escreve. */
+  rotulo: string;
+  /**
+   * O valor foi PRESUMIDO por falta de informação no cadastro.
+   *
+   * O cliente pediu para "ajustar ao mais provável quando necessário por falta
+   * de informação". Ajustar sem marcar seria transformar um palpite em fato
+   * dentro de um documento que vira pedido de compra — e o comprador não teria
+   * como saber de quais linhas desconfiar.
+   */
+  presumido: boolean;
+  /** Unidades a comprar somadas abaixo deste nó. */
+  units: number;
+  /** Quantas peças distintas da oferta sustentam este nó. */
+  pecas: number;
+  filhos: NoDeCaracteristica[];
+}
+
+/**
+ * O GRUPO da peça como o cliente o nomeia — "óculos de sol" ou "armação".
+ *
+ * Exportado porque a tela do best-seller também agrupa por ele: ali a
+ * hierarquia era montada com o TEXTO do cadastro, então "OCULOS", "OCULOS DE
+ * SOL" e "Óculos Solar" viravam três grupos do mesmo produto.
+ */
+export const rotuloDoGrupoDePeca = (tipo: string | null | undefined): string =>
+  rotuloDoGrupo(familiaDePeca(tipo));
+
+const rotuloDoGrupo = (familia: string): string => {
+  switch (familia) {
+    case 'solar':
+      return 'Óculos de sol';
+    case 'armacao':
+      return 'Armação';
+    case 'relogio':
+      return 'Relógio';
+    case 'lente':
+      return 'Lente';
+    case 'acessorio':
+      return 'Acessório';
+    case '':
+      return 'Não identificado';
+    default:
+      // Família que a ponte não reconheceu: o texto do cadastro, com inicial
+      // maiúscula. Aparece no relatório em vez de sumir — ver o texto de
+      // `familiasComGiro`, que existe para essa falha ser alta e não baixa.
+      return familia.charAt(0).toUpperCase() + familia.slice(1);
+  }
+};
+
+/** O valor de um eixo para uma peça: chave canônica, rótulo e se foi palpite. */
+function valorDoEixo(
+  eixo: EixoDeCaracteristica,
+  c: CandidatoDeCompra,
+): { chave: string; rotulo: string; presumido: boolean } {
+  switch (eixo) {
+    case 'marca': {
+      const m = (c.brand ?? '').trim();
+      return m
+        ? { chave: chaveDeAtributo(m), rotulo: m, presumido: false }
+        : { chave: '-', rotulo: 'Sem grife', presumido: false };
+    }
+    case 'grupo': {
+      const fam = familiaDePeca(c.tipo);
+      return { chave: fam || '-', rotulo: rotuloDoGrupo(fam), presumido: false };
+    }
+    case 'genero': {
+      const { genero, presumido } = generoProvavel(c.genero, c.description);
+      return { chave: genero, rotulo: rotuloDoGenero(genero), presumido };
+    }
+    case 'formato': {
+      // A LISTA FECHADA, nunca o texto do fornecedor: "Cat-Eye", "gatinho" e
+      // "CAT EYE" são um pedido de 81 peças, não três de 27.
+      const f = normFormatoLente(c.formato);
+      return f && f !== NAO_IDENTIFICADO
+        ? { chave: f, rotulo: rotuloDoFormato(f), presumido: false }
+        : { chave: NAO_IDENTIFICADO, rotulo: 'Não identificado', presumido: false };
+    }
+    case 'cor': {
+      // A cor NÃO tem lista fechada — o cliente nunca pediu uma, e inventá-la
+      // aqui reduziria "Havana claro" e "Havana" a uma coisa só sem que
+      // ninguém tivesse decidido isso. O que se faz é casar as GRAFIAS (caixa
+      // e acento), que é o mesmo que já se faz com grife e formato.
+      const cor = (c.cor ?? '').trim();
+      return cor
+        ? { chave: chaveDeAtributo(cor), rotulo: cor, presumido: false }
+        : { chave: NAO_IDENTIFICADO, rotulo: 'Não identificado', presumido: false };
+    }
+  }
+}
+
+/**
+ * Agrupa as linhas de um segmento pelos cinco eixos, na ordem de prioridade.
+ *
+ * Devolve uma ÁRVORE e não uma tabela plana porque os dois usos existem: a
+ * tela abre marca por marca, e o pedido que vai ao fornecedor é a folha. A
+ * folha sai de `folhasDeCaracteristicas`, sobre esta mesma árvore — uma
+ * estrutura só, para as duas não divergirem.
+ *
+ * Ordena por UNIDADES, decrescente, em cada nível: o comprador lê de cima, e o
+ * que ele precisa decidir primeiro é o que pesa mais no pedido. Empate cai no
+ * alfabeto, para a ordem não depender da ordem de chegada.
+ */
+export function detalharPorCaracteristicas(
+  linhas: readonly LinhaDoPlano[],
+  eixos: readonly EixoDeCaracteristica[] = EIXOS_DO_DETALHAMENTO,
+): NoDeCaracteristica[] {
+  if (eixos.length === 0) return [];
+  const [eixo, ...resto] = eixos;
+  const baldes = new Map<string, { no: NoDeCaracteristica; linhas: LinhaDoPlano[] }>();
+
+  for (const l of linhas) {
+    if (l.units <= 0) continue;
+    const v = valorDoEixo(eixo, l.candidato);
+    let b = baldes.get(v.chave);
+    if (!b) {
+      b = {
+        no: { eixo, chave: v.chave, rotulo: v.rotulo, presumido: v.presumido, units: 0, pecas: 0, filhos: [] },
+        linhas: [],
+      };
+      baldes.set(v.chave, b);
+    }
+    // Um balde só é PRESUMIDO se todas as peças dele foram palpite. Uma peça
+    // com gênero declarado no meio de dez presumidas torna o balde afirmável —
+    // e o contrário faria o selo aparecer em quase tudo, até parar de ser lido.
+    b.no.presumido = b.no.presumido && v.presumido;
+    b.no.units += l.units;
+    b.no.pecas += 1;
+    b.linhas.push(l);
+  }
+
+  return [...baldes.values()]
+    .map(({ no, linhas: dentro }) => ({ ...no, filhos: detalharPorCaracteristicas(dentro, resto) }))
+    .sort((a, b) => b.units - a.units || a.rotulo.localeCompare(b.rotulo, 'pt-BR'));
+}
+
+/** Uma folha do detalhamento: o pedido como ele sai para o fornecedor. */
+export interface FolhaDeCaracteristicas {
+  /** O caminho completo, eixo a eixo, na ordem de prioridade. */
+  caminho: { eixo: EixoDeCaracteristica; rotulo: string; presumido: boolean }[];
+  /** "Ray-Ban · Óculos de sol · Feminino · Gatinho · Preto" */
+  descricao: string;
+  units: number;
+  pecas: number;
+  /** Eixos cujo valor foi presumido — vazio quando tudo veio do cadastro. */
+  presumidos: EixoDeCaracteristica[];
+}
+
+/** Achata a árvore nas folhas — o que de fato vira linha de pedido. */
+export function folhasDeCaracteristicas(
+  arvore: readonly NoDeCaracteristica[],
+  prefixo: FolhaDeCaracteristicas['caminho'] = [],
+): FolhaDeCaracteristicas[] {
+  const saida: FolhaDeCaracteristicas[] = [];
+  for (const no of arvore) {
+    const caminho = [...prefixo, { eixo: no.eixo, rotulo: no.rotulo, presumido: no.presumido }];
+    if (no.filhos.length === 0) {
+      saida.push({
+        caminho,
+        descricao: caminho.map((p) => p.rotulo).join(' · '),
+        units: no.units,
+        pecas: no.pecas,
+        presumidos: caminho.filter((p) => p.presumido).map((p) => p.eixo),
+      });
+    } else {
+      saida.push(...folhasDeCaracteristicas(no.filhos, caminho));
+    }
+  }
+  return saida;
 }
 
 /**
@@ -4532,9 +4849,9 @@ export function explicarLinha(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RODADA FINAL DE AJUSTES — padronização, faixa de preço, filtros e o mix por
-// perfil. Tudo puro, como o resto do arquivo: o serviço traz os Maps, a
-// interface reaproveita pelo alias `@planning`.
+// RODADA FINAL DE AJUSTES — padronização, filtros e o mix por perfil. Tudo
+// puro, como o resto do arquivo: o serviço traz os Maps, a interface
+// reaproveita pelo alias `@planning`.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── Item 03 · listas fechadas ───────────────────────────────────────────────
@@ -4741,77 +5058,102 @@ export function normMaterialArmacao(texto: string | null | undefined): MaterialA
   return /\boutr[ao]s?\b|\bother\b/.test(t) ? 'OUTROS' : NAO_IDENTIFICADO;
 }
 
-export type GeneroChave = 'FEMININO' | 'MASCULINO' | 'UNISSEX' | 'MENINA' | 'MENINO' | 'INFANTIL';
+/**
+ * TRÊS GÊNEROS, E SÓ TRÊS — rodada final final · itens 03 a 05.
+ *
+ * "unir categorias unisex e unissex · unir menina e feminino · definir como
+ *  padrão apenas masculino, feminino e unisex · ajustar ao mais provável
+ *  quando necessário por falta de informação"  — Galbe, 16/09/2026
+ *
+ * Eram seis. As três que saíram não desapareceram: MENINA vira FEMININO,
+ * MENINO vira MASCULINO e INFANTIL — que é a criança SEM gênero declarado —
+ * vira UNISSEX. A dobra é do cliente e é a que o balcão usa: a vitrine
+ * infantil é organizada por menina/menino, a COMPRA não.
+ *
+ * "Unisex" e "Unissex" nunca foram duas categorias de verdade: eram duas
+ * grafias, uma da Luxottica e outra do CDS, e a tela mostrava as duas porque a
+ * chave de agrupamento era o texto. Ver `chaveDePerfil`.
+ */
+export type GeneroChave = 'FEMININO' | 'MASCULINO' | 'UNISSEX';
 
 const ROTULO_GENERO: Record<GeneroChave, string> = {
   FEMININO: 'Feminino',
   MASCULINO: 'Masculino',
   UNISSEX: 'Unissex',
-  MENINA: 'Menina',
-  MENINO: 'Menino',
-  INFANTIL: 'Infantil',
 };
 
 /**
  * O gênero como cada fonte escreve — "Unisex" (Luxottica), "Unissex" (CDS),
- * "Feminina", "Woman", "Kids" — reduzido a uma chave. `null` quando não há
- * texto ou não dá para dizer: gênero errado num perfil é pior que gênero
- * ausente, porque se soma à participação de outro.
+ * "Feminina", "Woman", "Kids" — reduzido a uma das três chaves. `null` quando
+ * não há texto ou não dá para dizer; quem precisa de um valor em toda peça
+ * chama `generoProvavel`, que declara o palpite em vez de escondê-lo.
  */
 export function normGenero(texto: string | null | undefined): GeneroChave | null {
   if (texto == null) return null;
   const t = textoParaCasar(texto);
   if (!t) return null;
   if (/\bunis+ex\b|\bunisex\b|\bu\b/.test(t)) return 'UNISSEX';
+  // A criança vem ANTES do adulto: "menina" contém "men" e cairia em
+  // masculino se a ordem fosse outra — e caía, até esta rodada.
   if (/\bmenin[ao]s?\b|\bboy\w*|\bgirl\w*|\bkid\w*|\binfant\w*|\bcrianc\w*|\bjunior\b/.test(t)) {
-    if (/\bmenina\b|\bgirl\w*/.test(t)) return 'MENINA';
-    if (/\bmenino\b|\bboy\w*/.test(t)) return 'MENINO';
-    return 'INFANTIL';
+    if (/\bmenina\b|\bmeninas\b|\bgirl\w*/.test(t)) return 'FEMININO';
+    if (/\bmenino\b|\bmeninos\b|\bboy\w*/.test(t)) return 'MASCULINO';
+    // Criança sem gênero declarado ("Kids", "Infantil", "Junior") é o caso do
+    // "ajustar ao mais provável": a peça existe e vai para a prateleira de
+    // alguém. UNISSEX é o único dos três que não INVENTA um gênero.
+    return 'UNISSEX';
   }
   if (/\bfem\w*|\bwom[ae]n\b|\bmulher\b|\bladies\b|\blady\b|\bf\b/.test(t)) return 'FEMININO';
   if (/\bmasc\w*|\bm[ae]n\b|\bhomem\b|\bmale\b|\bm\b/.test(t)) return 'MASCULINO';
   return null;
 }
 
+/**
+ * O GÊNERO DE TODA PEÇA, inclusive a que não tem gênero no cadastro —
+ * "ajustar ao mais provável quando necessário por falta de informação".
+ *
+ * A ordem é a mesma disciplina de procedência da padronização: o que alguém
+ * DECLAROU vale mais que o que se leu de uma descrição, e ler a descrição vale
+ * mais que chutar. O chute, quando sobra, é UNISSEX — e vai marcado.
+ *
+ * `presumido: true` não é detalhe de implementação: é o que permite a tela
+ * dizer "presumido" ao lado do rótulo. A rodada passada estabeleceu que não se
+ * inventa dado; esta pede um valor em toda peça. As duas coisas cabem juntas
+ * desde que o palpite se declare palpite.
+ */
+export function generoProvavel(
+  generoTexto: string | null | undefined,
+  descricao?: string | null,
+): { genero: GeneroChave; presumido: boolean } {
+  const declarado = normGenero(generoTexto);
+  if (declarado) return { genero: declarado, presumido: false };
+  const lido = normGenero(descricao);
+  if (lido) return { genero: lido, presumido: true };
+  return { genero: 'UNISSEX', presumido: true };
+}
+
 export const rotuloDoGenero = (c: GeneroChave | null | undefined): string => (c ? ROTULO_GENERO[c] : '—');
 
 /** A lista de gêneros, na ordem em que a tela os oferece. */
 export const GENEROS: { chave: GeneroChave; rotulo: string }[] = (
-  ['FEMININO', 'MASCULINO', 'UNISSEX', 'MENINA', 'MENINO', 'INFANTIL'] as GeneroChave[]
+  ['FEMININO', 'MASCULINO', 'UNISSEX'] as GeneroChave[]
 ).map((chave) => ({ chave, rotulo: ROTULO_GENERO[chave] }));
 
-// ─── Item 04 · faixa de preço a cada R$ 500 ─────────────────────────────────
-
-export interface FaixaDePreco {
-  /** floor(preço / passo) — estável, serve de chave. */
-  indice: number;
-  /** Início da faixa (inclusive). */
-  de: number;
-  /** Fim da faixa (exclusive): [de, ate). */
-  ate: number;
-  /** "R$ 500–1.000" — em pt-BR, pronto para a tela. */
-  rotulo: string;
-}
-
-export const PASSO_DA_FAIXA = 500;
-
-const reais = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 0 });
-
-/**
- * A faixa de preço FIXA, de R$ 500 em R$ 500 (rodada final · item 04). Fixa, e
- * não por quartil, porque a faixa é vocabulário do comprador ("a peça de 500 a
- * 1.000") e precisa significar a mesma coisa em qualquer recorte — um quartil
- * muda quando a lista muda, e "faixa alta" passaria a ser outra coisa a cada
- * filtro. R$ 500,00 cai em 500–1.000; R$ 499,99 em 0–500. Preço zero ou
- * inválido cai na faixa 0, e a tela sabe que preço zero é dado faltando.
- */
-export function faixaDePreco(preco: number, passo: number = PASSO_DA_FAIXA): FaixaDePreco {
-  const p = Number.isFinite(preco) && preco > 0 ? preco : 0;
-  const indice = Math.floor(p / passo);
-  const de = indice * passo;
-  const ate = de + passo;
-  return { indice, de, ate, rotulo: `R$ ${reais(de)}–${reais(ate)}` };
-}
+// A FAIXA DE PREÇO DE R$ 500 MOROU AQUI, e saiu inteira — "retirar faixa de
+// preço das recomendações de compra" (16/09/2026).
+//
+// Ela foi pedida na rodada anterior como quinto eixo do perfil e, vista em
+// tela contra o catálogo real, fazia o oposto do que o perfil existe para
+// fazer: multiplicava cada perfil por quantas faixas a grife ocupasse, então
+// "Ray-Ban solar feminino gatinho acetato" virava quatro linhas de nove peças
+// em vez de uma de trinta e seis. Uma recomendação picada por preço não é mais
+// precisa — é mais difícil de somar.
+//
+// Removida, e não escondida atrás de uma bandeira: preço continua em toda
+// linha (`unitPrice`, `total`) e continua sendo o que decide capital. O que
+// deixou de existir é a GAVETA de R$ 500 como critério de agrupamento e como
+// filtro. O agrupamento do pedido é o do cliente: marca, grupo, gênero,
+// formato e cor — ver `EIXOS_DO_DETALHAMENTO`.
 
 // ─── Item 08 · filtros combináveis da lista de compras ──────────────────────
 
@@ -4829,8 +5171,6 @@ export interface FiltroDeSugestoes {
   formato?: FormatoLenteChave[];
   material?: MaterialArmacaoChave[];
   categoria?: string[];
-  /** Índices de faixa (ver `faixaDePreco`). */
-  faixa?: number[];
   estoqueMin?: number;
   estoqueMax?: number;
   giroMin?: number;
@@ -4870,7 +5210,6 @@ export function passaNoFiltro(linha: LinhaFiltravel, f: FiltroDeSugestoes): bool
   if (f.genero?.length && !f.genero.includes(normGenero(linha.atributos?.genero) as GeneroChave)) return false;
   if (f.formato?.length && !f.formato.includes(linha.atributos?.formatoLente as FormatoLenteChave)) return false;
   if (f.material?.length && !f.material.includes(linha.atributos?.materialArmacao as MaterialArmacaoChave)) return false;
-  if (f.faixa?.length && !f.faixa.includes(faixaDePreco(linha.unitPrice).indice)) return false;
   if (f.estoqueMin != null && linha.currentStock < f.estoqueMin) return false;
   if (f.estoqueMax != null && linha.currentStock > f.estoqueMax) return false;
   if (f.giroMin != null && linha.giro < f.giroMin) return false;
@@ -4938,11 +5277,14 @@ export function filtrarPedidos(plan: PurchaseOrdersPlan, f: FiltroDeSugestoes | 
 // ─── Item 05 · composição do mix por perfil ─────────────────────────────────
 //
 // A pergunta do cliente: "sugestões de compra por perfil — gênero + formato +
-// material + faixa de preço — cruzando participação nas vendas com
-// participação no estoque". O que sai daqui NÃO é reposição de SKU (isso é
-// `buildPurchaseOrders`): é a leitura de que "óculos de sol femininos de
-// acetato com lente gatinho, de R$ 500 a 1.000, são 18% do que vende e 7% do
-// que há em estoque" — e quantas peças NOVAS desse perfil a rede absorve.
+// material — cruzando participação nas vendas com participação no estoque".
+// O que sai daqui NÃO é reposição de SKU (isso é `buildPurchaseOrders`): é a
+// leitura de que "óculos de sol femininos de acetato com lente gatinho são 18%
+// do que vende e 7% do que há em estoque" — e quantas peças NOVAS desse perfil
+// a rede absorve.
+//
+// A FAIXA DE PREÇO era o quinto eixo e saiu em 16/09/2026, a pedido do cliente:
+// ela quadruplicava o número de perfis sem mudar nenhuma decisão de compra.
 //
 // Desenho (painel de três propostas, três juízes): a FALTA se mede com a
 // mesma régua da recomendação por SKU (alvo de cobertura menos posição), para
@@ -4961,14 +5303,13 @@ export interface PerfilDoMix {
   genero: GeneroChave;
   formato: FormatoLenteChave;
   material: MaterialArmacaoChave;
-  faixa: FaixaDePreco;
 }
 
 export interface LinhaDoMix {
-  /** "solar|FEMININO|GATINHO|ACETATO|1" — estável. */
+  /** "solar|FEMININO|GATINHO|ACETATO" — estável. */
   chave: string;
   perfil: PerfilDoMix;
-  /** "Óculos de sol femininos de acetato com lente gatinho · R$ 500–1.000" */
+  /** "Óculos de sol femininos de acetato com lente gatinho" */
   rotulo: string;
   skus: number;
   unitsSold: number;
@@ -5023,7 +5364,15 @@ export interface CoberturaDoMix {
   estoqueTotal: number;
   estoqueLido: number;
   estoqueLidoPct: number;
-  faltando: { genero: number; formato: number; material: number; preco: number };
+  /**
+   * Por que cada peça ficou de fora — uma contagem por campo ausente.
+   *
+   * `preco` saiu junto com a faixa de R$ 500: preço zero excluía a peça do mix
+   * porque a faixa precisava dele. Sem faixa, gênero + formato + material
+   * descrevem o perfil inteiro, e uma peça com preço zerado no cadastro passou
+   * a ENTRAR na composição (a margem dela sai 0, que é o que se pode afirmar).
+   */
+  faltando: { genero: number; formato: number; material: number };
   leitura: 'confiavel' | 'parcial' | 'sem-base';
   aviso: string;
 }
@@ -5065,12 +5414,6 @@ function nomeDoPerfil(p: PerfilDoMix, plural: boolean): string {
         return solar ? (plural ? 'masculinos' : 'masculino') : plural ? 'masculinas' : 'masculina';
       case 'UNISSEX':
         return 'unissex';
-      case 'MENINA':
-        return 'de menina';
-      case 'MENINO':
-        return 'de menino';
-      case 'INFANTIL':
-        return plural ? 'infantis' : 'infantil';
     }
   })();
   // Sem o parêntese dos rótulos de lista ("Gatinho (cat-eye)"): na frase
@@ -5109,7 +5452,7 @@ export function comporMixPorPerfil(
     estoqueTotal: 0,
     estoqueLido: 0,
     estoqueLidoPct: 0,
-    faltando: { genero: 0, formato: 0, material: 0, preco: 0 },
+    faltando: { genero: 0, formato: 0, material: 0 },
     leitura: 'sem-base',
     aviso: '',
   };
@@ -5134,15 +5477,13 @@ export function comporMixPorPerfil(
     const genero = normGenero(f?.genero);
     const formato = f?.formatoLente ?? null;
     const material = f?.materialArmacao ?? null;
-    const temPreco = p.unitPrice > 0;
     const formatoOk = formato != null && formato !== NAO_IDENTIFICADO;
     const materialOk = material != null && material !== NAO_IDENTIFICADO;
-    if (!genero || !formatoOk || !materialOk || !temPreco) {
+    if (!genero || !formatoOk || !materialOk) {
       cobertura.semFicha += 1;
       if (!genero) cobertura.faltando.genero += 1;
       if (!formatoOk) cobertura.faltando.formato += 1;
       if (!materialOk) cobertura.faltando.material += 1;
-      if (!temPreco) cobertura.faltando.preco += 1;
       continue;
     }
 
@@ -5150,9 +5491,8 @@ export function comporMixPorPerfil(
     cobertura.vendasLidas += vendas;
     cobertura.estoqueLido += estoque;
 
-    const faixa = faixaDePreco(p.unitPrice);
-    const perfil: PerfilDoMix = { familia: fam, genero, formato: formato!, material: material!, faixa };
-    const chave = `${fam}|${genero}|${formato}|${material}|${faixa.indice}`;
+    const perfil: PerfilDoMix = { familia: fam, genero, formato: formato!, material: material! };
+    const chave = `${fam}|${genero}|${formato}|${material}`;
     const reposicao = p.recommendation === 'BUY' ? Math.max(0, p.suggestedQty) : 0;
     const onOrder = Math.max(0, p.onOrderQty);
     const a =
@@ -5217,7 +5557,7 @@ export function comporMixPorPerfil(
     l.vendasPct = pct(l.unitsSold, totalVendasLidas);
     l.margemPct = l.receita > 0 ? Math.round(((l.receita - l.custo) / l.receita) * 1000) / 10 : 0;
     l.rotulo = nomeDoPerfil(l.perfil, true);
-    l.rotulo = l.rotulo.charAt(0).toUpperCase() + l.rotulo.slice(1) + ` · ${l.perfil.faixa.rotulo}`;
+    l.rotulo = l.rotulo.charAt(0).toUpperCase() + l.rotulo.slice(1);
   }
   const totalPosicao = linhas.reduce((s, l) => s + l.posicao, 0);
 
@@ -5233,7 +5573,7 @@ export function comporMixPorPerfil(
     `Leitura feita sobre ${cobertura.lidos} de ${cobertura.itens - cobertura.foraDoEscopo} peças com ficha completa` +
     `${origem}, que respondem por ${cobertura.vendasLidasPct.toLocaleString('pt-BR')}% das vendas e ` +
     `${cobertura.estoqueLidoPct.toLocaleString('pt-BR')}% do estoque deste recorte. ` +
-    `Sem gênero: ${f.genero} · sem formato: ${f.formato} · sem material: ${f.material} · sem preço: ${f.preco}. ` +
+    `Sem gênero: ${f.genero} · sem formato: ${f.formato} · sem material: ${f.material}. ` +
     (cobertura.leitura === 'sem-base'
       ? 'Base insuficiente para recomendar composição — as linhas abaixo são só leitura.'
       : 'As demais peças não entram em nenhuma linha.') +
@@ -5288,7 +5628,7 @@ export function comporMixPorPerfil(
   const num = (n: number, d = 0) => n.toLocaleString('pt-BR', { maximumFractionDigits: d });
   for (const l of linhas) {
     const nome = nomeDoPerfil(l.perfil, l.units !== 1);
-    l.frase = l.units > 0 ? `${l.units} ${nome} (${l.perfil.faixa.rotulo})` : '';
+    l.frase = l.units > 0 ? `${l.units} ${nome}` : '';
     const paridade =
       `Perfil com ${num(l.vendasPct, 1)}% das vendas lidas e ${num(l.estoquePct, 1)}% da posição de estoque` +
       ` — para espelhar a venda teria ${num(l.metaDeParidade)} un.; tem ${num(l.posicao)}` +

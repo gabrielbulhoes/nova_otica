@@ -26,12 +26,13 @@ const pedidos = (params: Record<string, unknown> = {}) => pedir('/planning/purch
 const itens = (r: Record<string, any>) => r.orders.flatMap((o: any) => o.items);
 
 describe('item 04 · pedido por SKU, com sugerida e efetiva', () => {
-  it('cada item traz SKU, faixa de preço, estoque, vendido, giro e a sugestão do motor', () => {
+  it('cada item traz SKU, preço, estoque, vendido, giro e a sugestão do motor', () => {
     const r = pedidos();
     const it = itens(r)[0];
     expect(it).toBeTruthy();
     expect(it.quantity).toBe(it.suggestedQty);
-    expect(it.faixa.rotulo).toMatch(/^R\$ /);
+    // A faixa de R$ 500 saiu da linha em 16/09/2026, a pedido do cliente.
+    expect('faixa' in it).toBe(false);
     expect(typeof it.currentStock).toBe('number');
     expect(typeof it.unitsSold).toBe('number');
     expect(typeof it.giro).toBe('number');
@@ -56,12 +57,12 @@ describe('item 08 · filtros combináveis', () => {
   it('o filtro corta, refaz os totais do pedido e preserva o total anterior', () => {
     const todos = pedidos();
     const alvo = itens(todos)[0];
-    const so = pedidos({ faixa: String(alvo.faixa.indice) });
+    const so = pedidos({ categoria: alvo.category });
     expect(so.filtros).toBeTruthy();
     expect(so.antesDoFiltro.items).toBe(todos.summary.items);
     expect(so.summary.items).toBeLessThanOrEqual(todos.summary.items);
     for (const o of so.orders) {
-      expect(o.items.every((x: any) => x.faixa.indice === alvo.faixa.indice)).toBe(true);
+      expect(o.items.every((x: any) => x.category === alvo.category)).toBe(true);
       // Totais refeitos: um pedido filtrado com o total antigo diria
       // "R$ 82 mil" sobre três linhas.
       expect(o.units).toBe(o.items.reduce((a: number, x: any) => a + x.quantity, 0));
@@ -72,7 +73,7 @@ describe('item 08 · filtros combináveis', () => {
     const alvo = itens(pedidos()).find((x: any) => x.brand);
     if (!alvo) return;
     const umSo = pedidos({ marca: alvo.brand });
-    const dois = pedidos({ marca: alvo.brand, faixa: String(alvo.faixa.indice) });
+    const dois = pedidos({ marca: alvo.brand, categoria: alvo.category });
     expect(dois.summary.items).toBeLessThanOrEqual(umSo.summary.items);
   });
 
@@ -108,7 +109,7 @@ describe('item 05 · composição do mix por perfil', () => {
       expect(l.perfil.genero).toBeTruthy();
       expect(l.perfil.formato).toBeTruthy();
       expect(l.perfil.material).toBeTruthy();
-      expect(l.perfil.faixa.rotulo).toMatch(/^R\$ /);
+      expect('faixa' in l.perfil).toBe(false);
       expect(l.vendasPct).toBeGreaterThanOrEqual(0);
       expect(l.estoquePct).toBeGreaterThanOrEqual(0);
       // Item 07 aqui também: nenhuma linha sem os números que a sustentam.

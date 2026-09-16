@@ -14,6 +14,8 @@ import type { SellbieEstoqueGrade } from '../integrations/sellbie/types.js';
 import { exportPaidOrdersToErp } from '../modules/commerce/erpExport.service.js';
 import { classificarTextos, devoGravar, ehPecaDeModa } from '../catalogo/padronizacao.js';
 import { esquecerStatusDosAtributos } from '../catalogo/status.js';
+import { ehDevolucao } from '../vendas/devolucao.js';
+import { esquecerContagemDeDevolucoes } from '../vendas/escopo.js';
 
 const log = logger.child({ mod: 'sync' });
 
@@ -1325,6 +1327,11 @@ async function syncSales(client: Client, range?: { date_start: string; date_end:
       total: d.total,
       discount: d.discount,
       status: d.status,
+      // A venda inteira cancelada — o par de `SaleItem.devolvido`, um nível
+      // acima. O faturamento sem recorte de produto soma `Sale.total`, não os
+      // itens: sem esta coluna, o cabeçalho do BI contaria uma venda estornada
+      // que a tabela logo abaixo, essa sim filtrada por item, não conta.
+      cancelada: ehDevolucao(null, d.status),
       syncedAt: new Date(),
     };
     await prisma.sale.upsert({
@@ -1351,14 +1358,18 @@ async function syncSaleItems(client: Client, range?: { date_start: string; date_
     (j) => client.getDetalhesVendas(j),
     (d) => map.mapDetalheVenda(d).externalId,
   );
-  const sales = await prisma.sale.findMany({ select: { id: true, externalId: true } });
-  const saleMap = new Map(sales.map((s) => [s.externalId, s.id]));
+  // O STATUS DA VENDA entra no veredito do item: uma venda cancelada não tem
+  // item válido dentro, e o ERP nem sempre repete o cancelamento linha a
+  // linha. Por isso o `select` traz o status junto do id.
+  const sales = await prisma.sale.findMany({ select: { id: true, externalId: true, status: true } });
+  const saleMap = new Map(sales.map((s) => [s.externalId, s]));
   const products = await productIdMap();
   let written = 0;
   for (const raw of rows) {
     const d = map.mapDetalheVenda(raw);
-    const saleId = saleMap.get(d.externalSaleId);
-    if (!saleId) continue;
+    const venda = saleMap.get(d.externalSaleId);
+    if (!venda) continue;
+    const saleId = venda.id;
     const productId = d.externalProductId ? products.get(d.externalProductId) ?? null : null;
     const data = {
       saleId,
@@ -1367,6 +1378,8 @@ async function syncSaleItems(client: Client, range?: { date_start: string; date_
       unitPrice: d.unitPrice,
       discount: d.discount,
       total: d.total,
+      statusItem: d.statusItem ?? null,
+      devolvido: ehDevolucao(d.statusItem, venda.status),
     };
     if (d.externalId) {
       await prisma.saleItem.upsert({
@@ -1379,6 +1392,10 @@ async function syncSaleItems(client: Client, range?: { date_start: string; date_
     }
     written += 1;
   }
+  // Quem escreve `devolvido` derruba a memória do `/health` — mesma disciplina
+  // do padronizador do catálogo, e aqui ela funciona de verdade porque a
+  // sincronização roda DENTRO do processo da API.
+  esquecerContagemDeDevolucoes();
   return { read: rows.length, written };
 }
 

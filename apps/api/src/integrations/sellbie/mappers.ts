@@ -191,6 +191,10 @@ export const mapDetalheVenda = (d: SellbieDetalheVenda) => {
     unitPrice: Math.round((total / quantity) * 100) / 100,
     discount: undefined as number | undefined,
     total,
+    // O conector sempre mandou este campo e ele ia para o lixo — ver
+    // `src/vendas/devolucao.ts`. É o texto cru; quem decide o que ele
+    // significa é o dicionário, não o mapeador.
+    statusItem: str(d.status_produto_vendido),
   };
 };
 

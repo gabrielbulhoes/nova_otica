@@ -61,15 +61,21 @@ d('feira de compra (integração com Postgres)', () => {
     /*
      * A invariante que sustenta o modo feira inteiro.
      *
-     * Todas as 12 peças têm `unitsSold: 0` — é coleção nova. Se a classificação
-     * olhasse só isso, as 400 unidades cairiam em "aposta" e o plano informaria
-     * que a compra toda é especulação, o que é falso e inútil.
+     * Todas as 12 peças têm `unitsSold: 0` — é coleção nova, e nenhuma delas
+     * pode cair em best-seller, que é reposição do que ESTA rede já vendeu.
+     *
+     * (Era o teste do balde "aposta", que deixou de existir em 16/09/2026 —
+     * "unir as categorias Lançamentos e Apostas". O que ele guardava continua
+     * guardado: a coleção inteira vai para lançamento, e lançamento não é
+     * sinônimo de especulação.)
      */
     const r = await planoDaFeira(fairId);
-    const aposta = r.detalhe.segmentos.find((s) => s.segmento === 'aposta')!;
+    const bs = r.detalhe.segmentos.find((s) => s.segmento === 'best-seller')!;
+    const lanc = r.detalhe.segmentos.find((s) => s.segmento === 'lancamento')!;
     const total = r.detalhe.total;
+    expect(bs.alocado).toBe(0);
     if (total > 0) {
-      expect(aposta.alocado, 'a coleção inteira caiu no balde especulativo').toBeLessThan(total);
+      expect(lanc.alocado).toBe(total);
     }
   });
 

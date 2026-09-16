@@ -8,6 +8,7 @@ import { getFrescor } from './sync/syncHealth.js';
 import { statusDoCatalogo } from './modules/planning/brandCatalog.js';
 import { statusDoMixDeclarado } from './modules/planning/mixDeLoja.js';
 import { statusDosAtributos } from './catalogo/status.js';
+import { contagemDeDevolucoes } from './vendas/escopo.js';
 import { prisma } from './lib/prisma.js';
 import { errorMiddleware } from './http/errorMiddleware.js';
 import { requireAuth } from './modules/auth/auth.middleware.js';
@@ -92,6 +93,15 @@ export function createApp() {
       // engolido de propósito — ver acima
     }
 
+    // Quanto a regra da venda líquida está de fato tirando da conta. Mesma
+    // disciplina: informação, nunca veredito, e `null` é "não consegui apurar".
+    let vendas: Awaited<ReturnType<typeof contagemDeDevolucoes>> | null = null;
+    try {
+      vendas = await contagemDeDevolucoes();
+    } catch {
+      // engolido de propósito — ver acima
+    }
+
     // O mix DECLARADO pelo cliente, que substitui o arquivo. Mesma disciplina:
     // vai ao banco, então vai dentro de um `try` — e `null` aqui é "não
     // consegui apurar", distinto de zero grifes, que é "apurei e não tem".
@@ -153,6 +163,12 @@ export function createApp() {
       // sem nada dizendo. `null` aqui é "não consegui apurar", distinto de
       // zero, que é "apurei e não tem nada".
       atributos,
+      // A REGRA DA VENDA LÍQUIDA, em dois números. O dicionário de devolução
+      // foi escrito sem amostra real do CDS: "não mudou nada" e "não pegou"
+      // são a mesma tela, e estes dois contadores são o que os separa.
+      // Zero logo depois do deploy é o ESPERADO — o efeito só aparece quando a
+      // sincronização regravar os itens com o status do ERP.
+      vendas,
       mode: env.SELLBIE_MODE,
       db: 'up',
       sync: sync

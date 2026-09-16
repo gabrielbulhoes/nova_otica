@@ -7,6 +7,7 @@
  *   sonda CDS — gitignorado), os cadastros/estoque/vendas exibidos são os
  *   REAIS da rede, agregados e sem qualquer dado de cliente.
  */
+import type { ItemDoPedidoRegistrado } from './client';
 import {
   analysisBrand,
   normBrandKey,
@@ -40,7 +41,6 @@ import {
   explicarLinha,
   familiaDePeca,
   familiasComGiro,
-  faixaDePreco,
   filtrarPedidos,
   filtroVazio,
   comporMixPorPerfil,
@@ -325,7 +325,6 @@ function filtroDaQueryDemo(params: Record<string, unknown>): FiltroDeSugestoes {
     formato: lista(params.formato) as FiltroDeSugestoes['formato'],
     material: lista(params.material) as FiltroDeSugestoes['material'],
     categoria: lista(params.categoria),
-    faixa: lista(params.faixa)?.map((x) => Number(x)),
     estoqueMin: n(params.estoqueMin),
     estoqueMax: n(params.estoqueMax),
     giroMin: n(params.giroMin),
@@ -855,7 +854,14 @@ interface DemoOrderRecord {
   supplier: string;
   leadTimeDays: number;
   status: 'SENT' | 'RECEIVED' | 'CANCELLED';
-  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  /*
+   * O item guardado é o MESMO objeto que a tela enviou — inclusive os campos
+   * que a rodada acrescentou (sku, sugerida, ficha e o destino por loja). Um
+   * tipo estreito aqui faria a demonstração perder o campo novo em silêncio, e
+   * a tela mostraria "pedido sem destino gravado" para um pedido que acabou de
+   * ser gravado com destino.
+   */
+  items: ItemDoPedidoRegistrado[];
   units: number;
   total: number;
   sentAt: string;
@@ -912,6 +918,14 @@ const movements: Record<string, unknown>[] = [
 ];
 
 const prodById = (id: string) => products.find((p) => p.id === id);
+
+/** A ficha da demonstração de um produto, ou `null` para peça sem ficha. */
+const fichaDoProduto = (productId: string): FichaDemo | null => {
+  const prod = prodById(productId);
+  if (!prod) return null;
+  const f = atributosDemo(prod);
+  return f.ficha ? f : null;
+};
 const storeById = (id: string) => stores.find((s) => s.id === id);
 const availableAt = (storeId: string, productId: string) =>
   (stockQty.get(key(storeId, productId)) ?? 0) - (reserved.get(key(storeId, productId)) ?? 0);
@@ -2353,7 +2367,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         custoEstimado: prod.cost == null,
         preco,
         margemPct: preco > 0 ? Math.round(((preco - custo) / preco) * 1000) / 10 : null,
-        faixa: faixaDePreco(preco),
         descontoMaximoPct: null,
       },
       estoque: {
@@ -2711,7 +2724,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     );
     const marcas = new Set<string>();
     const categorias = new Set<string>();
-    const faixas = new Map<number, string>();
     const generos = new Set<string>();
     const formatos = new Set<string>();
     const materiais = new Set<string>();
@@ -2719,8 +2731,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       const marca = analysisBrand(p.description, p.category, p.brand);
       if (marca) marcas.add(marca);
       if (p.category) categorias.add(p.category);
-      const f = faixaDePreco(p.unitPrice);
-      faixas.set(f.indice, f.rotulo);
       const prod = prodById(p.productId);
       const at = prod ? atributosDemo(prod) : null;
       if (at?.genero) generos.add(at.genero);
@@ -2730,7 +2740,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     return {
       marcas: [...marcas].sort((a, b) => a.localeCompare(b, 'pt-BR')),
       categorias: [...categorias].sort((a, b) => a.localeCompare(b, 'pt-BR')),
-      faixas: [...faixas.entries()].sort((a, b) => a[0] - b[0]).map(([indice, rotulo]) => ({ indice, rotulo })),
       generos: GENEROS.filter((g) => generos.has(g.chave)),
       formatos: FORMATOS_DE_LENTE.filter((f) => formatos.has(f.chave)),
       materiais: MATERIAIS_DE_ARMACAO.filter((x) => materiais.has(x.chave)),
@@ -3079,15 +3088,26 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
      */
     const candidatos: CandidatoDeCompra[] = ps.map((p) => ({
       id: p.productId,
-      sku: p.productId,
+      // O SKU de verdade, não o id interno — mesmo conserto do servidor.
+      sku: prodById(p.productId)?.sku ?? p.productId,
       description: p.description,
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
       tipo: p.category,
-      // A demo não carrega ficha de fornecedor; o gênero sai nulo e a
-      // hierarquia mostra "Sem gênero na ficha" — que é a verdade dela.
-      genero: null,
-      formato: null,
-      cor: null,
+      /*
+       * A FICHA DA DEMONSTRAÇÃO entra aqui — antes era `null` nos três campos.
+       *
+       * Fazia sentido enquanto a demo não tinha ficha nenhuma. Ela tem desde a
+       * rodada passada (`atributosDemo`, a mesma que alimenta a ficha técnica e
+       * o mix), e manter `null` aqui passou a esconder justamente o que esta
+       * rodada entrega: o pedido de lançamento por características sairia com
+       * gênero, formato e cor "não identificado" em toda linha.
+       *
+       * Peça sem ficha continua com `null` — é a verdade dela, e a demo tem uma
+       * em cada três de propósito, para a tela precisar lidar com isso.
+       */
+      genero: fichaDoProduto(p.productId)?.generoTexto ?? null,
+      formato: fichaDoProduto(p.productId)?.formatoTexto ?? null,
+      cor: fichaDoProduto(p.productId)?.cor ?? null,
       unitCost: p.unitCost,
       unitPrice: p.unitPrice,
       unitsSold: p.unitsSold,

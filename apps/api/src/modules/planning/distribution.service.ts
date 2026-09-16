@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { itemVendidoSql } from '../../vendas/escopo.js';
 import { badRequest } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql } from '../stores/store.scope.js';
 import { porteiroDeMix } from './mixDeLoja.js';
@@ -155,7 +156,7 @@ async function vendasPorLoja(productIds: string[]) {
     JOIN "Sale" s   ON s.id = si."saleId"
     JOIN "Store" st ON st.id = s."storeId" AND ${plannedStoreSql('st')}
     JOIN "Product" p ON p.id = si."productId"
-    WHERE s."saleDate" >= NOW() - INTERVAL '12 months'
+    WHERE s."saleDate" >= NOW() - INTERVAL '12 months' AND ${itemVendidoSql('si')}
     GROUP BY s."storeId", p.id, p.description, p.brand, p.category
   `);
 

@@ -30,7 +30,10 @@ d('compras filtradas e composição do mix (integração com Postgres)', () => {
     const item = r.orders.flatMap((o) => o.items)[0];
     if (!item) return; // banco sem compra a fazer: nada a provar aqui
     expect(item.quantity).toBe(item.suggestedQty);
-    expect(item.faixa.rotulo).toMatch(/^R\$ /);
+    // A FAIXA DE PREÇO saiu da linha em 16/09/2026, a pedido do cliente. O que
+    // ficou é o preço em si, que é o que decide capital.
+    expect('faixa' in item).toBe(false);
+    expect(item.unitPrice).toBeGreaterThanOrEqual(0);
     expect(item.justificativa).toContain('Estoque');
     expect(item.giro).toBeGreaterThanOrEqual(0);
   });
@@ -41,16 +44,16 @@ d('compras filtradas e composição do mix (integração com Postgres)', () => {
     if (!alvo) return;
 
     const so = await purchaseOrders(JANELA, undefined, 'principal', false, false, {
-      faixa: [alvo.faixa.indice],
+      categoria: alvo.category ? [alvo.category] : [],
     });
-    expect(so.filtros).toEqual({ faixa: [alvo.faixa.indice] });
+    expect(so.filtros).toEqual({ categoria: alvo.category ? [alvo.category] : [] });
     // O total ANTES do filtro acompanha a resposta: é o que permite à tela
     // dizer "12 de 340 itens".
     expect(so.antesDoFiltro.items).toBe(todos.summary.items);
     expect(so.summary.items).toBeLessThanOrEqual(todos.summary.items);
     expect(so.summary.items).toBeGreaterThan(0);
     for (const o of so.orders) {
-      expect(o.items.every((it) => it.faixa.indice === alvo.faixa.indice)).toBe(true);
+      expect(o.items.every((it) => it.category === alvo.category)).toBe(true);
       // Totais REFEITOS: um pedido filtrado com o total antigo diria
       // "R$ 82 mil" sobre três linhas.
       expect(o.units).toBe(o.items.reduce((a, it) => a + it.quantity, 0));
@@ -73,12 +76,12 @@ d('compras filtradas e composição do mix (integração com Postgres)', () => {
     const porMarca = await purchaseOrders(JANELA, undefined, 'principal', false, false, {
       marca: [alvo.brand],
     });
-    const comFaixa = await purchaseOrders(JANELA, undefined, 'principal', false, false, {
+    const comCategoria = await purchaseOrders(JANELA, undefined, 'principal', false, false, {
       marca: [alvo.brand],
-      faixa: [alvo.faixa.indice],
+      categoria: alvo.category ? [alvo.category] : [],
     });
-    expect(comFaixa.summary.items).toBeLessThanOrEqual(porMarca.summary.items);
-    expect(comFaixa.summary.items).toBeGreaterThan(0);
+    expect(comCategoria.summary.items).toBeLessThanOrEqual(porMarca.summary.items);
+    expect(comCategoria.summary.items).toBeGreaterThan(0);
   });
 
   it('filtro que não casa com nada devolve lista vazia — sem inventar pedido', async () => {
@@ -95,7 +98,8 @@ d('compras filtradas e composição do mix (integração com Postgres)', () => {
   it('as opções de filtro trazem só o que existe no escopo', async () => {
     const o = await opcoesDeFiltro(JANELA, undefined, 'principal');
     expect(Array.isArray(o.marcas)).toBe(true);
-    expect(Array.isArray(o.faixas)).toBe(true);
+    // `faixas` saiu das opções junto com a faixa de preço.
+    expect('faixas' in o).toBe(false);
     // As listas fechadas só oferecem o que aparece no recorte.
     for (const f of o.formatos) expect(typeof f.rotulo).toBe('string');
     expect(o.itens).toBeGreaterThanOrEqual(0);

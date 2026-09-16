@@ -3,8 +3,9 @@ import {
   analyzeProduct,
   buildPurchaseOrders,
   chaveDeAtributo,
+  chaveDePerfil,
   comporMixPorPerfil,
-  faixaDePreco,
+  GENEROS,
   filtrarPedidos,
   FORMATOS_DE_LENTE,
   MATERIAIS_DE_ARMACAO,
@@ -106,27 +107,30 @@ describe('normGenero', () => {
     expect(normGenero('Woman')).toBe('FEMININO');
     expect(normGenero('Masculino')).toBe('MASCULINO');
     expect(normGenero('Men')).toBe('MASCULINO');
-    expect(normGenero('Menina')).toBe('MENINA');
-    expect(normGenero('Menino')).toBe('MENINO');
-    expect(normGenero('Kids')).toBe('INFANTIL');
+    // TRÊS GÊNEROS, e só três, desde 16/09/2026: "unir menina e feminino ·
+    // definir como padrão apenas masculino, feminino e unisex".
+    expect(normGenero('Menina')).toBe('FEMININO');
+    expect(normGenero('Menino')).toBe('MASCULINO');
+    // Criança sem gênero declarado é o caso de "ajustar ao mais provável":
+    // UNISSEX é o único dos três que não inventa um gênero.
+    expect(normGenero('Kids')).toBe('UNISSEX');
+    expect(normGenero('Infantil')).toBe('UNISSEX');
+    expect(GENEROS.map((g) => g.chave)).toEqual(['FEMININO', 'MASCULINO', 'UNISSEX']);
     expect(normGenero(null)).toBeNull();
     expect(normGenero('?')).toBeNull();
   });
 });
 
-// ─── Item 04 · faixa de preço ───────────────────────────────────────────────
-
-describe('faixaDePreco — a cada R$ 500, fixa', () => {
-  it('R$ 500,00 cai em 500–1.000 e R$ 499,99 em 0–500', () => {
-    expect(faixaDePreco(500)).toMatchObject({ indice: 1, de: 500, ate: 1000, rotulo: 'R$ 500–1.000' });
-    expect(faixaDePreco(499.99)).toMatchObject({ indice: 0, de: 0, ate: 500, rotulo: 'R$ 0–500' });
-    expect(faixaDePreco(1899)).toMatchObject({ indice: 3, rotulo: 'R$ 1.500–2.000' });
-  });
-
-  it('preço zero ou inválido cai na faixa 0 sem estourar', () => {
-    expect(faixaDePreco(0).indice).toBe(0);
-    expect(faixaDePreco(Number.NaN).indice).toBe(0);
-    expect(faixaDePreco(-10).indice).toBe(0);
+// A FAIXA DE PREÇO DE R$ 500 tinha um bloco de testes aqui, e saiu inteira em
+// 16/09/2026 — "retirar faixa de preço das recomendações de compra". O que
+// ficou no lugar é este teste, que prende a REMOÇÃO: se a faixa voltar a
+// aparecer na linha do pedido, ele falha.
+describe('a faixa de preço saiu das recomendações', () => {
+  it('a linha do pedido não carrega faixa — carrega o preço', () => {
+    const pedidos = buildPurchaseOrders([peca('a', { unitsSold: 90, currentStock: 5, unitPrice: 800 })], 90);
+    const item = pedidos.orders[0].items[0];
+    expect('faixa' in item).toBe(false);
+    expect(item.unitPrice).toBe(800);
   });
 });
 
@@ -182,7 +186,6 @@ describe('buildPurchaseOrders — sugerida e efetiva lado a lado', () => {
     expect(item.suggestedQty).toBe(55);
     expect(item.sku).toBe('RB3025');
     expect(item.unitPrice).toBe(800);
-    expect(item.faixa.rotulo).toBe('R$ 500–1.000');
     expect(item.currentStock).toBe(5);
     expect(item.unitsSold).toBe(90);
     expect(item.giro).toBe(1);
@@ -222,7 +225,6 @@ describe('filtros combináveis da lista de compras', () => {
     expect(combinado.summary.items).toBe(0);
     expect(combinado.orders).toHaveLength(0);
 
-    expect(filtrarPedidos(pedidos, { faixa: [1] }).summary.items).toBe(1);
     expect(filtrarPedidos(pedidos, { sku: 'rb30' }).summary.items).toBe(1);
     expect(filtrarPedidos(pedidos, { modelo: 'vogue' }).summary.items).toBe(1);
     expect(filtrarPedidos(pedidos, { material: ['METAL', 'ACETATO'] }).summary.items).toBe(2);
@@ -254,7 +256,11 @@ describe('chaveDeAtributo — quem grava e quem lê usam a mesma régua', () => 
       unitCost: 100, unitPrice: 300, unitsSold: 0, currentStock: 0, coberturaDaGrifeMeses: null, absorcao: null,
     };
     const perfil = {
-      porTipoGenero: new Map([['solar|feminino', 10]]),
+      // A CHAVE CANÔNICA, não o texto: `chaveDePerfil` passou a normalizar o
+      // gênero pela lista fechada — era `normCategory`, e por isso "Unisex" e
+      // "Unissex" viravam dois perfis. Este mapa escrito à mão precisa falar a
+      // mesma língua, senão o teste prova o contrário do que quer provar.
+      porTipoGenero: new Map([[chaveDePerfil('SOLAR', 'Feminino'), 10]]),
       porFormato: new Map([[chaveDeAtributo('Gatinho'), 40]]),
       porCor: new Map<string, number>(),
     };
@@ -329,13 +335,15 @@ describe('comporMixPorPerfil', () => {
     expect(mix.cobertura.aviso).toContain('4 de 5 peças com ficha completa');
   });
 
-  it('agrupa g1 e g2 no mesmo perfil (mesma faixa 500–1.000, "Feminino" e "Feminina")', () => {
+  it('agrupa g1 e g2 no mesmo perfil ("Feminino" e "Feminina")', () => {
     const mix = comporMixPorPerfil(plans, fichas);
     const gat = mix.linhas.find((l) => l.perfil.formato === 'GATINHO');
     expect(gat).toBeDefined();
     expect(gat!.skus).toBe(2);
     expect(gat!.perfil.genero).toBe('FEMININO');
-    expect(gat!.rotulo).toBe('Óculos de sol femininos de acetato com lente gatinho · R$ 500–1.000');
+    // Sem a faixa de preço no fim: ela saiu do perfil em 16/09/2026, e com ela
+    // saiu a multiplicação de cada perfil por quantas faixas a grife ocupava.
+    expect(gat!.rotulo).toBe('Óculos de sol femininos de acetato com lente gatinho');
   });
 
   it('modo diagnóstico: só o perfil abaixo recebe; coberto e parado ficam em zero, com frase própria', () => {
@@ -355,7 +363,7 @@ describe('comporMixPorPerfil', () => {
     expect(mix.modo).toBe('diagnostico');
     expect(mix.alocado + mix.naoAlocado).toBe(mix.meta);
     expect(mix.linhas[0]).toBe(gat); // ordenada por units desc
-    expect(gat.frase).toMatch(/^\d+ óculos de sol femininos de acetato com lente gatinho \(R\$ 500–1\.000\)$/);
+    expect(gat.frase).toMatch(/^\d+ óculos de sol femininos de acetato com lente gatinho$/);
     expect(gat.justificativa).toContain('% das vendas lidas');
     expect(gat.justificativa).toContain('falta de variedade');
     expect(gat.justificativa).toContain('para espelhar a venda teria');
@@ -465,7 +473,7 @@ describe('revisão · o pedido filtrado descreve o pedido filtrado', () => {
 
   it('a quebra por grife, a por tipo e a contagem de ficha acompanham o filtro', () => {
     const todos = plano();
-    const so = filtrarPedidos(todos, { faixa: [1] }); // só a peça de R$ 800
+    const so = filtrarPedidos(todos, { genero: ['FEMININO'] }); // só a peça 'a'
     const pedido = so.orders[0];
     expect(pedido.items).toHaveLength(1);
     // A INVARIANTE: a quebra fecha contra o pedido que está na tela.
@@ -486,7 +494,9 @@ describe('revisão · o pedido filtrado descreve o pedido filtrado', () => {
       undefined,
       semFichaNaSegunda,
     );
-    const so = filtrarPedidos(todos, { faixa: [0] }); // fica só a peça SEM ficha
+    // Um filtro que NÃO é de atributo: a peça sem ficha não passaria por
+    // nenhum deles, e o teste ficaria sem pedido para inspecionar.
+    const so = filtrarPedidos(todos, { sku: 'b' }); // fica só a peça SEM ficha
     const pedido = so.orders[0];
     expect(pedido.items).toHaveLength(1);
     expect(pedido.itensComFicha).toBe(0);

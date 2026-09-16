@@ -1,10 +1,10 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { salePlannedWhere } from '../stores/store.scope.js';
+import { itemVendidoWhere } from '../../vendas/escopo.js';
 import {
   analysisBrand,
   familiaDePeca,
-  faixaDePreco,
   justificativaMinima,
   marginPct,
   normFormatoLente,
@@ -14,7 +14,6 @@ import {
   rotuloDoGenero,
   rotuloDoMaterial,
   supplierFor,
-  type FaixaDePreco,
   type FormatoLenteChave,
   type GeneroChave,
   type MaterialArmacaoChave,
@@ -124,7 +123,6 @@ export interface FichaTecnica {
     custoEstimado: boolean;
     preco: number | null;
     margemPct: number | null;
-    faixa: FaixaDePreco | null;
     /** Teto comercial de desconto definido pelo CDS (%), quando houver. */
     descontoMaximoPct: number | null;
   };
@@ -218,14 +216,14 @@ export async function fichaTecnica(
           // venda de filial em outro ERP e de retaguarda — lojas que
           // `plans()` exclui — e a mesma peça aparecia com 61 unidades aqui e
           // 47 na lista de compras, sem nada na tela explicando a diferença.
-          where: { productId, sale: { saleDate: { gte: diasAtras(dias) }, ...salePlannedWhere } },
+          where: { ...itemVendidoWhere, productId, sale: { saleDate: { gte: diasAtras(dias) }, ...salePlannedWhere } },
           _sum: { quantity: true, total: true },
         });
         return { dias, unidades: r._sum.quantity ?? 0, receita: round2(Number(r._sum.total ?? 0)) };
       }),
     ),
     prisma.saleItem.findMany({
-      where: { productId, sale: { saleDate: { gte: diasAtras(365) }, ...salePlannedWhere } },
+      where: { ...itemVendidoWhere, productId, sale: { saleDate: { gte: diasAtras(365) }, ...salePlannedWhere } },
       select: { quantity: true, total: true, sale: { select: { saleDate: true } } },
     }),
     prisma.purchaseOrderRecord.findMany({
@@ -406,7 +404,6 @@ export async function fichaTecnica(
       custoEstimado: custoReal === null,
       preco,
       margemPct: preco !== null && custo !== null ? marginPct(preco, custo) : null,
-      faixa: preco !== null ? faixaDePreco(preco) : null,
       descontoMaximoPct: num(a?.maxDiscountPct ?? null),
     },
     estoque: {

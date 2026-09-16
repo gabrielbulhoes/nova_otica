@@ -236,7 +236,10 @@ model Sale {
   saleDate   DateTime
   total      Decimal  @db.Decimal(12, 2)
   discount   Decimal? @db.Decimal(12, 2)
+  /// Como o ERP escreve ("Válido" | …). Guardado cru para auditoria.
   status     String?
+  /// Derivado de `status` por `ehDevolucao`. Venda cancelada não é faturamento.
+  cancelada  Boolean  @default(false)
 
   syncedAt  DateTime?
   createdAt DateTime  @default(now())
@@ -250,6 +253,7 @@ model Sale {
 
   @@index([saleDate])
   @@index([storeId])
+  @@index([cancelada])
 }
 
 /// Item de uma venda (Sellbie: rota `detalhesVendas`).
@@ -263,11 +267,31 @@ model SaleItem {
   discount   Decimal? @db.Decimal(12, 2)
   total      Decimal  @db.Decimal(12, 2)
 
+  // ── A venda que voltou (rodada final final · contagem geral) ─────────────
+  //
+  // O conector SEMPRE mandou `status_produto_vendido` nesta linha, e ele ia
+  // para o lixo: nenhuma das consultas de venda da plataforma filtrava por
+  // status, então uma peça vendida, devolvida e revendida contava DUAS vendas.
+  //
+  // São dois campos e não um, pela mesma razão que `formato` e `formatoLente`
+  // são dois: `statusItem` é o TEXTO como o ERP escreveu, guardado para
+  // auditoria e para reclassificar quando o dicionário crescer; `devolvido` é
+  // o VEREDITO, que é o que toda consulta filtra. Guardar só o texto obrigaria
+  // cada consulta a conhecer o dicionário; guardar só o veredito tornaria
+  // impossível revisar a decisão sem uma nova sincronização.
+  /// Como o ERP escreveu (`status_produto_vendido`). Nulo em linha anterior a esta rodada.
+  statusItem String?
+  /// Derivado de `statusItem` + `Sale.status` por `ehDevolucao`. Falso é "conta como venda".
+  devolvido  Boolean @default(false)
+
   sale    Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id])
 
   @@index([saleId])
   @@index([productId])
+  // A consulta quente é "itens de venda de um produto que NÃO voltaram": o
+  // índice composto serve as duas metades dela de uma vez.
+  @@index([devolvido, productId])
 }
 
 /// Pagamento de uma venda (Sellbie: rota `pagamentosVendas`).

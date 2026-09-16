@@ -60,7 +60,11 @@ export const planningRouter = Router();
  * OS FILTROS COMBINÁVEIS DA LISTA DE COMPRAS — rodada final · item 08.
  *
  * "Filtros combináveis em compras: marca, SKU, modelo, gênero, formato,
- *  material, categoria, faixa de preço, estoque, giro, período."
+ *  material, categoria, estoque, giro, período."
+ *
+ * A faixa de preço saiu em 16/09/2026, com o resto das aparições dela nas
+ * recomendações. Um `?faixa=2` em link antigo é ignorado, não dá erro: link
+ * colado que passa a devolver 400 é pior que link que devolve a lista inteira.
  *
  * Tudo opcional e tudo AND. Lista aceita tanto `?marca=a&marca=b` quanto
  * `?marca=a,b` — as duas formas chegam de tela e de link compartilhado, e
@@ -101,7 +105,6 @@ const filtroSchema = z.object({
   formato: z.array(z.enum(CHAVES_DE_FORMATO)).max(20).optional(),
   material: z.array(z.enum(CHAVES_DE_MATERIAL)).max(20).optional(),
   categoria: z.array(z.string().max(120)).max(50).optional(),
-  faixa: z.array(z.number().int().min(0).max(200)).max(30).optional(),
   estoqueMin: z.number().min(0).max(1_000_000).optional(),
   estoqueMax: z.number().min(0).max(1_000_000).optional(),
   giroMin: z.number().min(0).max(10_000).optional(),
@@ -117,7 +120,6 @@ const filtroDaQuery = (q: Record<string, unknown>): FiltroDeSugestoes =>
     formato: lista(q.formato),
     material: lista(q.material),
     categoria: lista(q.categoria),
-    faixa: lista(q.faixa)?.map((x) => Number(x)),
     estoqueMin: numero(q.estoqueMin),
     estoqueMax: numero(q.estoqueMax),
     giroMin: numero(q.giroMin),
@@ -354,7 +356,6 @@ const orderItemSchema = z.object({
   suggestedQty: z.number().int().min(0).max(100_000),
   unitCost: z.number().nonnegative().default(0),
   unitPrice: z.number().nonnegative().optional(),
-  faixa: z.number().int().min(0).max(200).optional(),
   atributos: z
     .object({
       /*
@@ -377,6 +378,34 @@ const orderItemSchema = z.object({
       formatoLente: z.enum(CHAVES_DE_FORMATO).nullish(),
       materialArmacao: z.enum(CHAVES_DE_MATERIAL).nullish(),
       cor: z.string().max(80).nullish(),
+    })
+    .optional(),
+  /**
+   * O DESTINO POR LOJA congelado na compra — item de 16/09/2026.
+   *
+   * Opcional porque a tela de uma loja só (não-ADMIN) não calcula rateio, e
+   * exigir o campo faria o pedido dela voltar 400. É a mesma armadilha que o
+   * `genero` como lista fechada criou na rodada passada: validação estrita num
+   * campo que a tela nem sempre tem.
+   *
+   * `max(64)` em lojas: a rede tem 16; o teto é folgado e ainda barra um
+   * payload absurdo.
+   */
+  distribuicao: z
+    .object({
+      base: z.string().max(40),
+      baseRotulo: z.string().max(240),
+      faltaNaRede: z.number().nonnegative().max(1_000_000),
+      lojas: z
+        .array(
+          z.object({
+            storeId: z.string().min(1).max(60),
+            storeName: z.string().max(120),
+            quantidade: z.number().int().min(0).max(100_000),
+          }),
+        )
+        .max(64),
+      semLoja: z.number().int().min(0).max(100_000),
     })
     .optional(),
   total: z.number().nonnegative().default(0),

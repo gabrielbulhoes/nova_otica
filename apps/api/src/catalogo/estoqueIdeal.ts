@@ -1,5 +1,6 @@
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
+import { itemVendidoWhere } from '../vendas/escopo.js';
 import { lojaTrabalhaAPeca, resolveThreshold } from '../modules/alerts/alerts.service.js';
 import { DEFAULT_PLANNING_CONFIG, estoqueIdealDaLoja } from '../modules/planning/planning.math.js';
 import { PLANNED_STORE_WHERE } from '../modules/stores/store.scope.js';
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
     // giro dela em Midway.
     const vendas = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { storeId, saleDate: { gte: desde } } },
+      where: { ...itemVendidoWhere, sale: { storeId, saleDate: { gte: desde } } },
       _sum: { quantity: true },
     });
     const vendidoPorProduto = new Map(

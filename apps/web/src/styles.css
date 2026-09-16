@@ -3034,16 +3034,81 @@ td .codigo {
 }
 
 /* ─── Barra lateral contextual ──────────────────────────────────────────── */
-.sidebar-dica {
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--muted);
-  margin: 4px 0 0;
+/* ─── O mapa inteiro na barra lateral ───────────────────────────────────────
+   "Deixe no menu lateral a exposição sempre de todos os módulos e
+    submódulos."                                        — Galbe, 16/09/2026
+
+   A barra era contextual e escondia tudo o que não fosse do módulo aberto. O
+   agrupamento por categoria e módulo continua — ele diz a que área cada tela
+   pertence —, mas agora inteiro e sempre.
+
+   A densidade é o trabalho desta folha: dezessete telas numa coluna de 220px
+   só ficam legíveis com a hierarquia desenhada (categoria em mono miúda,
+   módulo em peso médio com ícone, página recuada) e com o módulo ATUAL
+   marcado, senão a lista vira parede. */
+.sidebar-mapa {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
+
+.sidebar-categoria {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 10px;
+}
+
+.sidebar-categoria-nome {
+  margin: 10px 0 4px;
+  font-size: 9.5px;
+  color: var(--muted);
+}
+
 .sidebar-modulo {
   display: flex;
   flex-direction: column;
+  padding-bottom: 2px;
 }
+
+/* O módulo ABERTO ganha um filete à esquerda em vez de fundo: com sete módulos
+   empilhados, um bloco pintado disputa com o item ativo e o olho perde qual
+   dos dois é a tela na frente. */
+.sidebar-modulo.atual {
+  border-left: 2px solid var(--accent);
+  margin-left: -10px;
+  padding-left: 8px;
+}
+
+.sidebar-modulo-nome {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0;
+  padding: 4px 10px 4px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-corpo);
+}
+
+.sidebar-modulo-nome:hover {
+  color: var(--accent);
+}
+
+.sidebar-modulo-nome.active {
+  color: var(--accent);
+}
+
+/* A página recua para dentro do módulo: é o recuo que diz "isto pertence
+   àquilo" sem precisar de linha nem de caixa. */
+.sidebar-mapa .nav-link {
+  padding: 5px 10px 5px 21px;
+  font-size: 12.5px;
+}
+
 .nav-voltar {
   display: inline-flex;
   align-items: center;
@@ -3060,14 +3125,6 @@ td .codigo {
   font-size: 14px;
   line-height: 1;
 }
-.sidebar-modulo-nome {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 0 6px;
-  color: var(--accent);
-}
-
 /* ─── Responsivo ────────────────────────────────────────────────────────── */
 @media (max-width: 1180px) {
   .central-grade {
@@ -3253,4 +3310,269 @@ td .codigo {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ─── O trilho de fornecedores · rodada final final · item 02 ───────────────
+   "Agrupar todos os pedidos por fornecedor. Dentro dessa página, criar filtro
+    de compra na barra de menu lateral, com um botão para cada fornecedor onde
+    aparecerá apenas o pedido desse fornecedor."      — Galbe, 16/09/2026
+
+   Coluna à esquerda no desktop. No celular vira uma fita rolável em cima da
+   lista: 240px de trilho numa tela de 360 não deixariam o pedido caber em
+   lugar nenhum, e o item de feedback é sobre ACHAR o fornecedor, não sobre a
+   coluna ser vertical. */
+.compras-com-trilho {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.trilho {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Acompanha a rolagem: numa compra de dezoito fornecedores, o trilho some da
+     tela no terceiro pedido e volta a ser uma lista que exige rolar de novo. */
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.trilho-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  /* A borda esquerda é o que marca o selecionado sem depender de cor — o mesmo
+     critério de luminância que a barra da estratégia usa. */
+  border-left: 3px solid transparent;
+}
+
+.trilho-item:hover {
+  border-color: var(--line-strong, var(--line));
+  background: var(--surface-2, var(--surface));
+}
+
+.trilho-item.active {
+  border-left-color: var(--accent);
+  background: var(--surface-2, var(--surface));
+  font-weight: 600;
+}
+
+.trilho-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.trilho-nome {
+  font-size: 13.5px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.trilho-numeros {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.trilho-prazo {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--amber-text, var(--amber));
+}
+
+@media (max-width: 860px) {
+  .compras-com-trilho {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .trilho {
+    flex-direction: row;
+    position: static;
+    max-height: none;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    /* A fita sangra até a borda da tela para o último botão não parecer o fim
+       da lista quando ainda há fornecedores à direita. */
+    scroll-snap-type: x proximity;
+  }
+
+  .trilho-item {
+    width: auto;
+    min-width: 152px;
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    border-left-width: 1px;
+    border-bottom: 3px solid transparent;
+  }
+
+  .trilho-item.active {
+    border-left-color: var(--line);
+    border-bottom-color: var(--accent);
+  }
+}
+
+/* ─── O controle segmentado no celular ──────────────────────────────────────
+   Encontrado abrindo a tela num viewport de 390px: o seletor de frentes
+   ("Transferir entre lojas · Comprar de fornecedor · Distribuir para as
+   lojas") mede 471px e o `.segmented` tem `overflow: hidden`. O resultado não
+   é uma barra apertada — é a TERCEIRA opção recortada e inalcançável no
+   telefone, e a página inteira com rolagem horizontal por causa dela.
+
+   `overflow: hidden` existe para o arredondamento da moldura não vazar nos
+   chips; na largura estreita ele passa a esconder conteúdo. A troca por
+   rolagem horizontal mantém a moldura e devolve o que estava fora da tela. */
+@media (max-width: 560px) {
+  .segmented {
+    display: flex;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .segmented button {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+}
+
+/* ─── O cabeçalho do card de pedido ─────────────────────────────────────────
+   Uma linha só no desktop: chevron, fornecedor, confiança, prazo, total e os
+   dois botões. No celular a mesma linha tem sete elementos disputando 390px, e
+   o resultado medido foi o nome do fornecedor espremido numa coluna de 30px,
+   com "entrega em 30 dias" saindo uma palavra por linha.
+
+   A regra é a de sempre: o TEXTO fica inteiro na primeira faixa e os controles
+   descem para a segunda. */
+.cabecalho-do-pedido-texto {
+  flex: 1;
+  min-width: 0;
+}
+
+.cabecalho-do-pedido {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 18px;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .cabecalho-do-pedido {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  /* O bloco de texto ocupa a faixa inteira ao lado do chevron; o resto quebra
+     para baixo dele em vez de comprimi-lo. */
+  .cabecalho-do-pedido-texto {
+    flex-basis: calc(100% - 26px);
+  }
+}
+
+/* ─── O mapa completo nos outros dois layouts ───────────────────────────────
+   O mapa inteiro (7 módulos, 17 telas) cabe folgado numa coluna de 220px. Nos
+   layouts em que a barra é uma FAIXA — menu horizontal e celular — ele não
+   cabe, e as regras abaixo fazem a única coisa honesta possível: transformam a
+   faixa numa fita rolável, com a hierarquia comprimida para uma linha.
+
+   O que NÃO se faz aqui é voltar a esconder parte do mapa por falta de espaço:
+   é exatamente o que o pedido veio corrigir. */
+.macos-desktop[data-menu='horizontal'] .sidebar-mapa {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 2px 12px;
+  overflow-x: auto;
+  min-width: 0;
+  flex: 1;
+  padding-bottom: 2px;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-categoria {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px 8px;
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+/* Na fileira a categoria vira uma etiqueta vertical curta antes dos módulos
+   dela: some o rótulo e o mapa perde a única pista de agrupamento. */
+.macos-desktop[data-menu='horizontal'] .sidebar-categoria-nome {
+  margin: 0;
+  padding-right: 2px;
+  border-right: 1px solid var(--linha);
+  padding-left: 4px;
+  white-space: nowrap;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-modulo {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px 6px;
+  flex: 0 0 auto;
+  padding-bottom: 0;
+}
+
+/* O filete do módulo atual passa para BAIXO: à esquerda ele apontaria para o
+   módulo anterior da fileira. */
+.macos-desktop[data-menu='horizontal'] .sidebar-modulo.atual {
+  border-left: none;
+  border-bottom: 2px solid var(--accent);
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-modulo-nome {
+  padding: 6px 4px;
+  white-space: nowrap;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-mapa .nav-link {
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.macos-desktop[data-menu='horizontal'] .nav-voltar {
+  padding: 6px 8px 6px 0;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  /* No celular a barra já é cabeçalho. O mapa inteiro ali empurraria o conteúdo
+     para baixo da dobra, então ele vira um bloco ROLÁVEL de altura limitada —
+     visível por inteiro com um gesto, em vez de escondido atrás de um clique. */
+  .sidebar-mapa {
+    flex-basis: 100%;
+    max-height: 38vh;
+    overflow-y: auto;
+    gap: 0;
+  }
+
+  .sidebar-categoria {
+    margin-bottom: 6px;
+  }
+
+  .sidebar-categoria-nome {
+    margin: 6px 0 2px;
+  }
 }

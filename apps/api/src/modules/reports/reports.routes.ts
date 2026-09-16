@@ -6,6 +6,7 @@ import {
   brandMix,
   coverageByBrand,
   inventoryTurnover,
+  itensDevolvidos,
   salesAnalysis,
   type AbcDimension,
   type AnalysisDimension,
@@ -81,5 +82,24 @@ reportsRouter.get(
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
     res.json(await brandMix(parseDays(req.query.days, 90)));
+  }),
+);
+
+/**
+ * GET /api/reports/devolucoes — os itens que voltaram.
+ *
+ * É a exceção que a regra prevê: todo o resto da plataforma conta a venda
+ * líquida, e este relatório é o único lugar onde a venda devolvida aparece.
+ *
+ * Fora do `requireRole('ADMIN')` de propósito: quem precisa conferir uma
+ * devolução é o balcão, não a diretoria. O recorte de loja do usuário já é
+ * aplicado por `scopedStoreId`.
+ */
+reportsRouter.get(
+  '/devolucoes',
+  asyncHandler(async (req, res) => {
+    const days = parseDays(req.query.days, 90);
+    const storeId = scopedStoreId(req, req.query.storeId as string | undefined);
+    res.json(await itensDevolvidos(days, storeId));
   }),
 );

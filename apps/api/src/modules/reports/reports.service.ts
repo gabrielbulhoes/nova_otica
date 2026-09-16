@@ -1,5 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { itemVendidoWhere, itemVendidoSql, vendaValidaWhere } from '../../vendas/escopo.js';
+import { itemDevolvidoWhere } from '../../vendas/escopo.js';
+import { ehDevolucao } from '../../vendas/devolucao.js';
 import { toNumber } from '../../http/helpers.js';
 import {
   PLANNED_STORE_IDS_SQL,
@@ -76,14 +79,14 @@ export async function abcCurve(
   group: ProductGroup = 'todos',
   categories?: string[],
 ): Promise<AbcResult> {
-  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) } };
+  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) }, ...vendaValidaWhere };
   if (storeId) saleFilter.storeId = storeId;
   // O mesmo recorte vale para as DUAS dimensões: era esse o pedido — o filtro
   // não pode sumir quando se troca SKU por marca.
   const scoped = await productScopeWhere(group, categories);
   // Receita do período SEM recorte, para a tela reconciliar o total.
   const periodo = await prisma.saleItem.aggregate({
-    where: { sale: saleFilter },
+    where: { ...itemVendidoWhere, sale: saleFilter },
     _sum: { total: true },
   });
   const periodRevenue = round2(toNumber(periodo._sum.total) ?? 0);
@@ -98,7 +101,7 @@ export async function abcCurve(
     // dimensão SKU — de propósito, e a tela diz isso.
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: saleFilter },
+      where: { ...itemVendidoWhere, sale: saleFilter },
       _sum: { total: true, quantity: true },
     });
     const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
@@ -138,7 +141,7 @@ export async function abcCurve(
 
   const grouped = await prisma.saleItem.groupBy({
     by: ['productId'],
-    where: { sale: saleFilter, productId: { not: null } },
+    where: { ...itemVendidoWhere, sale: saleFilter, productId: { not: null } },
     _sum: { total: true, quantity: true },
   });
   const products = await prisma.product.findMany({
@@ -228,7 +231,7 @@ export async function coverageByBrand(
     // Vendas do período (respeita o filtro de loja).
     prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { saleDate: { gte: periodStart(days) }, ...saleScope }, productId: { not: null } },
+      where: { ...itemVendidoWhere, sale: { saleDate: { gte: periodStart(days) }, ...saleScope }, productId: { not: null } },
       _sum: { quantity: true },
     }),
     // Estoque da REDE planejável (sem CDs) — decide "lente por encomenda".
@@ -312,7 +315,7 @@ export async function salesAnalysis(
   if (by === 'product') {
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) }, productId: { not: null } },
+      where: { ...itemVendidoWhere, sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) }, productId: { not: null } },
       _sum: { quantity: true, total: true },
       orderBy: { _sum: { quantity: 'desc' } },
       take: ANALYSIS_LIMIT,
@@ -344,7 +347,7 @@ export async function salesAnalysis(
   if (by === 'brand') {
     const grouped = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) } },
+      where: { ...itemVendidoWhere, sale: { saleDate: { gte: since }, ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }) } },
       _sum: { quantity: true, total: true },
     });
     const ids = grouped.map((g) => g.productId).filter((id): id is string => id !== null);
@@ -394,6 +397,7 @@ export async function salesAnalysis(
       JOIN "Sale" s ON s.id = si."saleId"
       ${join}
       WHERE s."saleDate" >= ${since}
+        AND ${itemVendidoSql('si')}
       ${storeCond}
       GROUP BY ${select}
       ORDER BY units DESC
@@ -438,12 +442,12 @@ export async function inventoryTurnover(
   rows: TurnoverRow[];
 }> {
   // GMAIS e outros CDs ficam fora do giro (matemática de lojas).
-  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) }, store: PLANNED_STORE_WHERE };
+  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) }, store: PLANNED_STORE_WHERE, ...vendaValidaWhere };
   if (storeId) saleFilter.storeId = storeId;
 
   const sold = await prisma.saleItem.groupBy({
     by: ['productId'],
-    where: { sale: saleFilter, productId: { not: null } },
+    where: { ...itemVendidoWhere, sale: saleFilter, productId: { not: null } },
     _sum: { quantity: true },
   });
   const soldByProduct = new Map(sold.map((s) => [s.productId as string, s._sum.quantity ?? 0]));
@@ -530,7 +534,7 @@ export async function brandMix(days: number) {
       JOIN "Sale" s ON s.id = si."saleId"
       JOIN "Store" lo ON lo.id = s."storeId" AND ${plannedStoreSql('lo')}
       LEFT JOIN "Product" p ON p.id = si."productId"
-      WHERE s."saleDate" >= ${periodStart(days)}
+      WHERE s."saleDate" >= ${periodStart(days)} AND ${itemVendidoSql('si')}
       GROUP BY s."storeId", p.description, p.brand, p.category
     `),
     prisma.store.findMany({ where: PLANNED_STORE_WHERE, select: { id: true, name: true } }),
@@ -554,4 +558,106 @@ export async function brandMix(days: number) {
   for (const r of soldRows) bump(r, 'unitsSold');
 
   return { days, ...buildBrandMix([...acc.values()]) };
+}
+
+// ─── O relatório de itens devolvidos ────────────────────────────────────────
+//
+// "Nunca contabiliza a venda devolvida, a não ser para esse dado específico:
+//  Relatório de itens devolvidos."                      — Galbe, 16/09/2026
+//
+// É o ÚNICO lugar da plataforma que lê `itemDevolvidoWhere`. Ele existe por
+// duas razões que não se confundem:
+//
+//  · a operação precisa ver o que voltou (peça, loja, quando, quanto);
+//  · e nós precisamos ver o VOCABULÁRIO do ERP. O dicionário de
+//    `src/vendas/devolucao.ts` foi escrito sem uma amostra de devolução real —
+//    a lista `statusVistos` abaixo é o que permite conferi-lo contra o dado,
+//    e ela conta TODOS os status, não só os classificados como devolução.
+
+export interface ItemDevolvidoRow {
+  productId: string | null;
+  sku: string | null;
+  description: string;
+  brand: string | null;
+  loja: string | null;
+  quando: string;
+  quantidade: number;
+  valor: number;
+  /** O texto que o ERP escreveu, e que fez esta linha ser excluída. */
+  status: string | null;
+}
+
+export interface DevolucoesResult {
+  dias: number;
+  itens: ItemDevolvidoRow[];
+  unidades: number;
+  valor: number;
+  /**
+   * TODOS os status distintos vistos na janela, com a contagem de cada um e o
+   * veredito atual — inclusive os que NÃO foram tratados como devolução.
+   *
+   * É a metade que transforma este relatório em ferramenta de conferência: se
+   * o CDS escrever "Cancelada Parcial" e o dicionário não conhecer, a linha
+   * aparece aqui com `devolucao: false` e a contagem dela, em vez de sumir
+   * dentro de um total que ninguém sabe que está errado.
+   */
+  statusVistos: { status: string | null; itens: number; unidades: number; devolucao: boolean }[];
+}
+
+export async function itensDevolvidos(days: number, storeId?: string): Promise<DevolucoesResult> {
+  const saleFilter: Prisma.SaleWhereInput = { saleDate: { gte: periodStart(days) }, store: PLANNED_STORE_WHERE };
+  if (storeId) saleFilter.storeId = storeId;
+
+  const [linhas, porStatus] = await Promise.all([
+    prisma.saleItem.findMany({
+      where: { ...itemDevolvidoWhere, sale: saleFilter },
+      select: {
+        productId: true,
+        quantity: true,
+        total: true,
+        statusItem: true,
+        product: { select: { sku: true, description: true, brand: true } },
+        sale: { select: { saleDate: true, status: true, store: { select: { name: true } } } },
+      },
+      orderBy: { sale: { saleDate: 'desc' } },
+      take: ANALYSIS_LIMIT,
+    }),
+    // A contagem por status ignora `devolvido` de propósito: a pergunta aqui é
+    // "o que o ERP escreve", não "o que nós já sabemos ler".
+    prisma.saleItem.groupBy({
+      by: ['statusItem'],
+      where: { sale: saleFilter },
+      _count: { _all: true },
+      _sum: { quantity: true },
+    }),
+  ]);
+
+  const itens: ItemDevolvidoRow[] = linhas.map((l) => ({
+    productId: l.productId,
+    sku: l.product?.sku ?? null,
+    // Item sem produto casado não some do relatório: ele voltou do mesmo jeito,
+    // e some-lo esconderia justamente a devolução de uma peça fora do cadastro.
+    description: l.product?.description ?? '(peça fora do cadastro)',
+    brand: l.product?.brand ?? null,
+    loja: l.sale.store?.name ?? null,
+    quando: l.sale.saleDate.toISOString(),
+    quantidade: l.quantity,
+    valor: round2(toNumber(l.total) ?? 0),
+    status: l.statusItem ?? l.sale.status ?? null,
+  }));
+
+  return {
+    dias: days,
+    itens,
+    unidades: itens.reduce((a, i) => a + i.quantidade, 0),
+    valor: round2(itens.reduce((a, i) => a + i.valor, 0)),
+    statusVistos: porStatus
+      .map((g) => ({
+        status: g.statusItem,
+        itens: g._count._all,
+        unidades: g._sum.quantity ?? 0,
+        devolucao: ehDevolucao(g.statusItem),
+      }))
+      .sort((a, b) => b.itens - a.itens),
+  };
 }
