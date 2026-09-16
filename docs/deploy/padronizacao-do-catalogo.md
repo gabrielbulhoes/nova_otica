@@ -96,6 +96,18 @@ recomendação. Abaixo de 5% das vendas com ficha completa, a própria tela se
 recusa a recomendar e diz por quê; entre 5% e 50% ela recomenda declarando que
 a leitura é parcial.
 
+**A resposta é imediata.** Se o número não mudar depois de um `--gravar` que
+declarou peças gravadas, é problema de verdade — não é cache. Vale conferir
+`versao` no `/health` e o `DATABASE_URL` com que o comando rodou.
+
+> Nem sempre foi assim. Em 16/09/2026 o padronizador gravou 2.559 peças e o
+> `/health` seguiu dizendo `formato.naoIdentificado: 989` por um minuto: a
+> resposta ficava guardada na memória do processo da API, e o comando — que roda
+> por `docker exec`, em outro processo — limpava a memória dele, não a dela. A
+> operação foi conferir no banco achando que a gravação tinha falhado. Hoje a
+> memória só é reaproveitada enquanto um carimbo lido do banco continuar igual,
+> então um `--gravar` de qualquer processo aparece na leitura seguinte.
+
 ## Quando chegar uma planilha nova de fornecedor
 
 ```
