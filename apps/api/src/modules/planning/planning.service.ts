@@ -1043,7 +1043,22 @@ async function detalharPlanoContinuo(
        */
       formato: f?.formatoLente ? rotuloDoFormato(f.formatoLente) : (f?.formato ?? null),
       material: f?.materialArmacao ? rotuloDoMaterial(f.materialArmacao) : (f?.material ?? null),
-      cor: null,
+      /*
+       * A COR VEM DA FICHA — era `null` fixo, e isso tinha duas consequências.
+       *
+       * A primeira sempre existiu e era silenciosa: `pesoDoCandidato` multiplica
+       * por um fator de cor, e com `null` esse fator era 1 para toda peça, ou
+       * seja, o peso da cor não pesava nada no modo contínuo. O modo feira
+       * sempre mandou a cor, e por isso o defeito não aparecia lá.
+       *
+       * A segunda chegou com esta rodada: a cor é o último eixo do pedido de
+       * lançamento ("Marca - Grupo - Gênero - Formato da Lente - Cor"), e com
+       * `null` fixo todo pedido sairia com "Cor: Não identificado" — o campo
+       * que o cliente acabou de pedir, vazio por construção.
+       *
+       * O dado está na ficha, e `buscarFichas` já o traz.
+       */
+      cor: f?.cor ?? null,
       unitCost: p.unitCost,
       unitPrice: p.unitPrice,
       unitsSold: p.unitsSold,

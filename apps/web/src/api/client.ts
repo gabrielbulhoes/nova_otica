@@ -1226,12 +1226,33 @@ export interface LinhaDoPlano {
   comprado?: number;
 }
 
+/**
+ * Um nível do detalhamento por características — Marca → Grupo → Gênero →
+ * Formato → Cor. É o pedido SEM SKU da aba de lançamentos (16/09/2026).
+ */
+export interface NoDeCaracteristica {
+  eixo: 'marca' | 'grupo' | 'genero' | 'formato' | 'cor';
+  chave: string;
+  rotulo: string;
+  /** O valor foi presumido por falta de informação no cadastro. */
+  presumido: boolean;
+  units: number;
+  pecas: number;
+  filhos: NoDeCaracteristica[];
+}
+
 export interface PlanoDetalhado {
   segmentos: {
     segmento: StrategySegment['key'];
     meta: number;
     alocado: number;
     linhas: LinhaDoPlano[];
+    /**
+     * As mesmas unidades das `linhas`, agrupadas pelas características.
+     * Preenchido só no segmento de LANÇAMENTO: no best-seller o SKU é a
+     * resposta, porque repor o que vendeu exige repor AQUELA peça.
+     */
+    detalhamento: NoDeCaracteristica[];
   }[];
   /** O total que cada filial recebe — a leitura de quem monta o malote. */
   porLoja: { storeId: string; storeName: string; units: number }[];

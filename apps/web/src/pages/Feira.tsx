@@ -220,7 +220,7 @@ function PlanoDoEvento({ fairId }: { fairId: string }) {
         segments={q.data.segments}
         compra={controle}
         titulo="O que levar desta coleção, e para onde vai"
-        descricao="A divisão do piso entre as peças da oferta, na ordem em que a compra se pensa: grife, tipo, gênero e modelo. Clique numa linha para ver por que ela entrou e quanto vai para cada loja; use o contador para lançar o que está levando."
+        descricao="A divisão do piso entre as peças da oferta. O best-seller vai por peça; o lançamento, por característica — marca, grupo, gênero, formato da lente e cor. Clique numa linha para ver por que ela entrou e quanto vai para cada loja; use o contador para lançar o que está levando."
       />
     </>
   );

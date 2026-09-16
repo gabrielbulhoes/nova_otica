@@ -1,7 +1,13 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getCommercialStrategy } from '../api/client';
-import type { LinhaDoPlano, PlanoDetalhado, RiskProfile, StrategySegment } from '../api/client';
+import type {
+  LinhaDoPlano,
+  NoDeCaracteristica,
+  PlanoDetalhado,
+  RiskProfile,
+  StrategySegment,
+} from '../api/client';
 import { AberturaDeSecao, Botao, Loading, PageHeader, Selo, StatCard, Unidade } from '../components/ui';
 import { Icon } from '../brand/Icon';
 
@@ -125,7 +131,9 @@ export function Strategy() {
                 </button>
               ))}
             </div>
-            <div className="hint">Conservador reforça o que já vende; agressivo abre mais espaço para aposta.</div>
+            <div className="hint">
+              Conservador reforça o que a rede já vende; agressivo abre mais espaço para peça nova.
+            </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -439,41 +447,59 @@ function Nivel({
   titulo,
   units,
   detalhe,
+  selo,
+  inicialmenteAberto = false,
   children,
 }: {
   titulo: string;
   units: number;
   detalhe?: string;
+  /** Um selo ao lado do título — hoje, o aviso de valor presumido. */
+  selo?: ReactNode;
+  inicialmenteAberto?: boolean;
   children: ReactNode;
 }) {
-  const [aberto, setAberto] = useState(false);
+  const [aberto, setAberto] = useState(inicialmenteAberto);
+  // FOLHA — nível sem filhos. Continua sendo uma linha legível (marca, total),
+  // mas não finge ter conteúdo escondido: o chevron sairia e o clique não
+  // faria nada, que é a definição de controle quebrado.
+  const folha = children == null || children === false;
   return (
     <div className="card" style={{ padding: 0, marginBottom: 6 }}>
       <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={aberto}
-        onClick={() => setAberto((v) => !v)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') setAberto((v) => !v);
-        }}
+        {...(folha
+          ? {}
+          : {
+              role: 'button',
+              tabIndex: 0,
+              'aria-expanded': aberto,
+              onClick: () => setAberto((v) => !v),
+              onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+                if (e.key === 'Enter' || e.key === ' ') setAberto((v) => !v);
+              },
+            })}
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 10,
           padding: '10px 14px',
-          cursor: 'pointer',
+          cursor: folha ? 'default' : 'pointer',
         }}
       >
-        <Icon name={aberto ? 'chevron-baixo' : 'chevron-direita'} size={16} style={{ color: 'var(--muted)' }} />
+        {folha ? (
+          <span style={{ width: 16, display: 'inline-block' }} aria-hidden="true" />
+        ) : (
+          <Icon name={aberto ? 'chevron-baixo' : 'chevron-direita'} size={16} style={{ color: 'var(--muted)' }} />
+        )}
         <strong style={{ flex: 1, minWidth: 0 }}>{titulo}</strong>
+        {selo}
         {detalhe && <span className="muted" style={{ fontSize: 12 }}>{detalhe}</span>}
         <span style={{ whiteSpace: 'nowrap' }}>
           <strong>{fmt(units)}</strong>
           <Unidade>un.</Unidade>
         </span>
       </div>
-      {aberto && <div style={{ padding: '0 14px 12px' }}>{children}</div>}
+      {!folha && aberto && <div style={{ padding: '0 14px 12px' }}>{children}</div>}
     </div>
   );
 }
@@ -527,15 +553,86 @@ function SegmentoDoPlano({ linhas, compra }: { linhas: LinhaDoPlano[]; compra?: 
 }
 
 /**
- * O bloco inteiro do plano: as três abas, a visão por loja e o motivo do que
- * não coube.
+ * O PEDIDO SEM SKU — a aba de lançamentos (rodada final final).
+ *
+ * "Na aba de lançamentos, como não iremos especificar sobre SKU's, devemos
+ *  orientar detalhando ao máximo as características daquele pedido/quantidade.
+ *  Seguindo a seguinte ordem de prioridade: Marca - Grupo (óculos ou armação) -
+ *  Gênero - Formato da Lente - Cor. Esse detalhamento só se aplica à aba de
+ *  lançamentos. A aba best-seller mantém o padrão da versão anterior."
+ *                                                     — Galbe, 16/09/2026
+ *
+ * A distinção é do mundo real, não de tela. O best-seller É um SKU: a rede
+ * vendeu AQUELA peça. O lançamento ainda não é peça nenhuma — o comprador vai
+ * à feira e leva uma DESCRIÇÃO. Mostrar SKU ali seria a plataforma escolhendo
+ * por ele um número que ninguém escolheu.
+ *
+ * A árvore vem pronta do motor, ao lado das linhas que a originaram, para as
+ * duas leituras não divergirem. Aqui só se desenha.
+ */
+function RamoDeCaracteristica({ no, nivel }: { no: NoDeCaracteristica; nivel: number }) {
+  const folha = no.filhos.length === 0;
+  return (
+    <Nivel
+      titulo={no.rotulo}
+      units={no.units}
+      detalhe={
+        folha
+          ? `${no.pecas} ${no.pecas === 1 ? 'peça da oferta' : 'peças da oferta'}`
+          : `${no.filhos.length} ${no.filhos.length === 1 ? 'variação' : 'variações'}`
+      }
+      // Abre os dois primeiros níveis: a marca e o grupo cabem na tela e são o
+      // que o comprador confere primeiro. Abrir tudo faria um pedido de trinta
+      // marcas nascer com trezentas linhas expandidas.
+      inicialmenteAberto={nivel < 1}
+      selo={
+        no.presumido ? (
+          <Selo
+            tom="amber"
+            icone="atencao"
+            title="Nenhuma peça deste grupo tinha este dado no cadastro. O valor foi ajustado para o mais provável — confira antes de fechar o pedido."
+          >
+            presumido
+          </Selo>
+        ) : undefined
+      }
+    >
+      {folha ? null : no.filhos.map((f) => <RamoDeCaracteristica key={f.chave} no={f} nivel={nivel + 1} />)}
+    </Nivel>
+  );
+}
+
+function DetalhamentoDeLancamento({ arvore }: { arvore: NoDeCaracteristica[] }) {
+  if (arvore.length === 0) {
+    return (
+      <div className="empty">
+        Nenhuma peça entrou neste cenário — veja o motivo declarado acima.
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="hint" style={{ marginBottom: 8 }}>
+        Sem SKU, de propósito: o lançamento é comprado por característica. Cada linha é o que
+        pedir ao fornecedor — marca, grupo, gênero, formato da lente e cor, nessa ordem.
+      </div>
+      {arvore.map((no) => (
+        <RamoDeCaracteristica key={no.chave} no={no} nivel={0} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * O bloco inteiro do plano: as abas de cenário, a visão por loja e o motivo do
+ * que não coube.
  */
 export function PlanoDeCompra({
   plano,
   segments,
   compra,
   titulo = 'O que comprar, e para onde vai',
-  descricao = 'A divisão do piso em peças concretas, na ordem em que a compra se pensa: grife, tipo, gênero e modelo. Clique em qualquer linha para ver por que ela entrou e quanto vai para cada loja.',
+  descricao = 'A divisão do piso, na ordem em que a compra se pensa. O best-seller vai por peça — repor o que vendeu exige repor aquele modelo. O lançamento vai por característica: marca, grupo, gênero, formato da lente e cor.',
 }: {
   plano: PlanoDetalhado;
   segments: StrategySegment[];
@@ -647,7 +744,14 @@ export function PlanoDeCompra({
               {fmt(doSegmento(aba)?.alocado ?? 0)} un.
             </span>
           </div>
-          <SegmentoDoPlano linhas={doSegmento(aba)?.linhas ?? []} compra={compra} />
+          {/* A ABA DE LANÇAMENTOS NÃO MOSTRA SKU — ver `DetalhamentoDeLancamento`.
+              O best-seller segue no padrão por peça: ali o SKU é a resposta,
+              não um detalhe de exibição. */}
+          {aba === 'lancamento' ? (
+            <DetalhamentoDeLancamento arvore={doSegmento('lancamento')?.detalhamento ?? []} />
+          ) : (
+            <SegmentoDoPlano linhas={doSegmento(aba)?.linhas ?? []} compra={compra} />
+          )}
         </>
       )}
     </>

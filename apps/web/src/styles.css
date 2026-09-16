@@ -3254,3 +3254,178 @@ td .codigo {
   white-space: nowrap;
   border: 0;
 }
+
+/* ─── O trilho de fornecedores · rodada final final · item 02 ───────────────
+   "Agrupar todos os pedidos por fornecedor. Dentro dessa página, criar filtro
+    de compra na barra de menu lateral, com um botão para cada fornecedor onde
+    aparecerá apenas o pedido desse fornecedor."      — Galbe, 16/09/2026
+
+   Coluna à esquerda no desktop. No celular vira uma fita rolável em cima da
+   lista: 240px de trilho numa tela de 360 não deixariam o pedido caber em
+   lugar nenhum, e o item de feedback é sobre ACHAR o fornecedor, não sobre a
+   coluna ser vertical. */
+.compras-com-trilho {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.trilho {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* Acompanha a rolagem: numa compra de dezoito fornecedores, o trilho some da
+     tela no terceiro pedido e volta a ser uma lista que exige rolar de novo. */
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.trilho-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  /* A borda esquerda é o que marca o selecionado sem depender de cor — o mesmo
+     critério de luminância que a barra da estratégia usa. */
+  border-left: 3px solid transparent;
+}
+
+.trilho-item:hover {
+  border-color: var(--line-strong, var(--line));
+  background: var(--surface-2, var(--surface));
+}
+
+.trilho-item.active {
+  border-left-color: var(--accent);
+  background: var(--surface-2, var(--surface));
+  font-weight: 600;
+}
+
+.trilho-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.trilho-nome {
+  font-size: 13.5px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.trilho-numeros {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.trilho-prazo {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--amber-text, var(--amber));
+}
+
+@media (max-width: 860px) {
+  .compras-com-trilho {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .trilho {
+    flex-direction: row;
+    position: static;
+    max-height: none;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    /* A fita sangra até a borda da tela para o último botão não parecer o fim
+       da lista quando ainda há fornecedores à direita. */
+    scroll-snap-type: x proximity;
+  }
+
+  .trilho-item {
+    width: auto;
+    min-width: 152px;
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    border-left-width: 1px;
+    border-bottom: 3px solid transparent;
+  }
+
+  .trilho-item.active {
+    border-left-color: var(--line);
+    border-bottom-color: var(--accent);
+  }
+}
+
+/* ─── O controle segmentado no celular ──────────────────────────────────────
+   Encontrado abrindo a tela num viewport de 390px: o seletor de frentes
+   ("Transferir entre lojas · Comprar de fornecedor · Distribuir para as
+   lojas") mede 471px e o `.segmented` tem `overflow: hidden`. O resultado não
+   é uma barra apertada — é a TERCEIRA opção recortada e inalcançável no
+   telefone, e a página inteira com rolagem horizontal por causa dela.
+
+   `overflow: hidden` existe para o arredondamento da moldura não vazar nos
+   chips; na largura estreita ele passa a esconder conteúdo. A troca por
+   rolagem horizontal mantém a moldura e devolve o que estava fora da tela. */
+@media (max-width: 560px) {
+  .segmented {
+    display: flex;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .segmented button {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+}
+
+/* ─── O cabeçalho do card de pedido ─────────────────────────────────────────
+   Uma linha só no desktop: chevron, fornecedor, confiança, prazo, total e os
+   dois botões. No celular a mesma linha tem sete elementos disputando 390px, e
+   o resultado medido foi o nome do fornecedor espremido numa coluna de 30px,
+   com "entrega em 30 dias" saindo uma palavra por linha.
+
+   A regra é a de sempre: o TEXTO fica inteiro na primeira faixa e os controles
+   descem para a segunda. */
+.cabecalho-do-pedido-texto {
+  flex: 1;
+  min-width: 0;
+}
+
+.cabecalho-do-pedido {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 18px;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .cabecalho-do-pedido {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  /* O bloco de texto ocupa a faixa inteira ao lado do chevron; o resto quebra
+     para baixo dele em vez de comprimi-lo. */
+  .cabecalho-do-pedido-texto {
+    flex-basis: calc(100% - 26px);
+  }
+}

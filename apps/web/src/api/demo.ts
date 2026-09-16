@@ -910,6 +910,14 @@ const movements: Record<string, unknown>[] = [
 ];
 
 const prodById = (id: string) => products.find((p) => p.id === id);
+
+/** A ficha da demonstração de um produto, ou `null` para peça sem ficha. */
+const fichaDoProduto = (productId: string): FichaDemo | null => {
+  const prod = prodById(productId);
+  if (!prod) return null;
+  const f = atributosDemo(prod);
+  return f.ficha ? f : null;
+};
 const storeById = (id: string) => stores.find((s) => s.id === id);
 const availableAt = (storeId: string, productId: string) =>
   (stockQty.get(key(storeId, productId)) ?? 0) - (reserved.get(key(storeId, productId)) ?? 0);
@@ -3076,11 +3084,21 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       description: p.description,
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
       tipo: p.category,
-      // A demo não carrega ficha de fornecedor; o gênero sai nulo e a
-      // hierarquia mostra "Sem gênero na ficha" — que é a verdade dela.
-      genero: null,
-      formato: null,
-      cor: null,
+      /*
+       * A FICHA DA DEMONSTRAÇÃO entra aqui — antes era `null` nos três campos.
+       *
+       * Fazia sentido enquanto a demo não tinha ficha nenhuma. Ela tem desde a
+       * rodada passada (`atributosDemo`, a mesma que alimenta a ficha técnica e
+       * o mix), e manter `null` aqui passou a esconder justamente o que esta
+       * rodada entrega: o pedido de lançamento por características sairia com
+       * gênero, formato e cor "não identificado" em toda linha.
+       *
+       * Peça sem ficha continua com `null` — é a verdade dela, e a demo tem uma
+       * em cada três de propósito, para a tela precisar lidar com isso.
+       */
+      genero: fichaDoProduto(p.productId)?.generoTexto ?? null,
+      formato: fichaDoProduto(p.productId)?.formatoTexto ?? null,
+      cor: fichaDoProduto(p.productId)?.cor ?? null,
       unitCost: p.unitCost,
       unitPrice: p.unitPrice,
       unitsSold: p.unitsSold,
