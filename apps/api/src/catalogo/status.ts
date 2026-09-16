@@ -44,21 +44,73 @@ export interface StatusDosAtributos {
   em: { cadastro: string | null; desconto: string | null };
 }
 
-// A contagem varre uma tabela que só o importador escreve — e `/health` é
-// chamado pela verificação do deploy em laço. Um minuto de memória basta: o que
-// a torna obsoleta é alguém rodar o importador, e isso não acontece durante um
-// health check.
+// A contagem varre uma tabela inteira nove vezes — e `/health` é chamado em
+// laço pela verificação do deploy. Guardar a resposta por um minuto evita isso.
+//
+// MAS A MEMÓRIA É DE UM PROCESSO SÓ, E QUEM ESCREVE COSTUMA SER OUTRO.
+//
+// `esquecerStatusDosAtributos()` limpa a memória de quem o chama. O padronizador
+// e o importador do catálogo rodam por `docker exec`, num processo separado do
+// da API: eles limpavam a própria memória — recém-criada e vazia — enquanto a
+// API continuava respondendo o número velho pelo resto do minuto.
+//
+// Isso aconteceu em 16/09/2026. Depois de o padronizador gravar 2.559 peças, o
+// `/health` seguiu dizendo `formato.naoIdentificado: 989`, e a operação foi
+// conferir no banco achando que a gravação tinha falhado. Não tinha: o número
+// certo apareceu sozinho minutos depois. Um painel que mente por um minuto logo
+// depois da única ação que o muda mente exatamente na hora em que é lido.
+//
+// A correção é perguntar ao BANCO se mudou alguma coisa, porque o banco é o
+// único lugar que os dois processos enxergam. O carimbo é UMA agregação — nove
+// viram uma quando nada mudou, e zero memória quando mudou.
 const MEMORIA_MS = 60_000;
-let memoria: { em: number; valor: StatusDosAtributos } | null = null;
+let memoria: { em: number; carimbo: string; valor: StatusDosAtributos } | null = null;
 
-/** Descarta a memória — chamado por quem escreve atributos. */
+/**
+ * Descarta a memória — chamado por quem escreve atributos NO MESMO PROCESSO.
+ *
+ * Continua valendo a pena (poupa até a agregação do carimbo na sincronização,
+ * que roda dentro da API), mas não é mais a única defesa: o carimbo cobre o
+ * escritor de fora, que esta função nunca alcançou.
+ */
 export function esquecerStatusDosAtributos(): void {
   memoria = null;
 }
 
+/**
+ * O estado de escrita da tabela em uma linha: quantas peças existem e quando
+ * cada uma das quatro fontes escreveu pela última vez.
+ *
+ * As quatro datas são as dos quatro únicos escritores — ficha do fornecedor
+ * (`cadastroEm`), teto de desconto (`descontoEm`), sincronização com o ERP
+ * (`erpEm`) e padronizador (`padronizadoEm`). Qualquer um deles move o seu
+ * carimbo, e mover o carimbo é o que derruba a memória.
+ *
+ * A CONTAGEM entra junto das datas porque uma linha APAGADA — produto removido
+ * leva o atributo por cascata — muda o total sem mover data nenhuma.
+ */
+async function carimboDaTabela(): Promise<string> {
+  const a = await prisma.productAttribute.aggregate({
+    _count: { _all: true },
+    _max: { cadastroEm: true, descontoEm: true, erpEm: true, padronizadoEm: true },
+  });
+  const t = (d: Date | null | undefined) => (d ? d.getTime() : 0);
+  return [
+    a._count._all,
+    t(a._max.cadastroEm),
+    t(a._max.descontoEm),
+    t(a._max.erpEm),
+    t(a._max.padronizadoEm),
+  ].join('|');
+}
+
 export async function statusDosAtributos(): Promise<StatusDosAtributos> {
   const agora = Date.now();
-  if (memoria && agora - memoria.em < MEMORIA_MS) return memoria.valor;
+  const carimbo = await carimboDaTabela();
+  // O tempo continua no teste como TETO, não como critério: o carimbo é quem
+  // sabe se mudou. O minuto só garante que nenhuma memória sobreviva a um caso
+  // que ninguém previu aqui.
+  if (memoria && memoria.carimbo === carimbo && agora - memoria.em < MEMORIA_MS) return memoria.valor;
 
   const [cadastro, erp, desconto, porCadastro, porDesconto, porFonteFormato, porFonteMaterial, naoIdFormato, naoIdMaterial] =
     await Promise.all([
@@ -133,6 +185,6 @@ export async function statusDosAtributos(): Promise<StatusDosAtributos> {
     },
     em: { cadastro: maisRecente(porCadastro), desconto: maisRecente(porDesconto) },
   };
-  memoria = { em: agora, valor };
+  memoria = { em: agora, carimbo, valor };
   return valor;
 }
