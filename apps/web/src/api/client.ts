@@ -411,7 +411,6 @@ export interface FichaTecnica {
     custoEstimado: boolean;
     preco: number | null;
     margemPct: number | null;
-    faixa: { indice: number; de: number; ate: number; rotulo: string } | null;
     descontoMaximoPct: number | null;
   };
   estoque: {
@@ -805,8 +804,6 @@ export interface PurchaseOrderItem {
   suggestedQty: number;
   unitCost: number;
   unitPrice: number;
-  /** A faixa de R$ 500 em que o preço cai. */
-  faixa: { indice: number; de: number; ate: number; rotulo: string };
   currentStock: number;
   unitsSold: number;
   /** Unidades por dia na janela. */
@@ -901,7 +898,6 @@ export interface FiltroDeCompras {
   formato?: string[];
   material?: string[];
   categoria?: string[];
-  faixa?: number[];
   estoqueMin?: number;
   estoqueMax?: number;
   giroMin?: number;
@@ -911,7 +907,6 @@ export interface FiltroDeCompras {
 export interface OpcoesDeFiltro {
   marcas: string[];
   categorias: string[];
-  faixas: { indice: number; rotulo: string }[];
   generos: { chave: string; rotulo: string }[];
   formatos: { chave: string; rotulo: string }[];
   materiais: { chave: string; rotulo: string }[];
@@ -919,8 +914,10 @@ export interface OpcoesDeFiltro {
 }
 
 /* ─── Composição do mix por perfil · rodada final · item 05 ─────────────────
-   Gênero + formato + material + faixa de preço, cruzando participação nas
-   vendas com participação no estoque. */
+   Gênero + formato + material, cruzando participação nas vendas com
+   participação no estoque. A faixa de preço era o quarto eixo e saiu a pedido
+   do cliente em 16/09/2026 — ela quadruplicava o número de perfis sem mudar
+   decisão nenhuma. */
 export interface LinhaDoMix {
   chave: string;
   perfil: {
@@ -928,7 +925,6 @@ export interface LinhaDoMix {
     genero: string;
     formato: string;
     material: string;
-    faixa: { indice: number; de: number; ate: number; rotulo: string };
   };
   rotulo: string;
   skus: number;
@@ -969,7 +965,7 @@ export interface MixPorPerfil {
     estoqueTotal: number;
     estoqueLido: number;
     estoqueLidoPct: number;
-    faltando: { genero: number; formato: number; material: number; preco: number };
+    faltando: { genero: number; formato: number; material: number };
     leitura: 'confiavel' | 'parcial' | 'sem-base';
     aviso: string;
   };
@@ -1158,8 +1154,11 @@ export async function getDecisionStats(days = 30): Promise<DecisionStats> {
 
 export type RiskProfile = 'conservador' | 'equilibrado' | 'agressivo';
 
+/** DOIS segmentos — "unir as categorias Lançamentos e Apostas" (16/09/2026). */
+export type SegmentoDoPlano = 'best-seller' | 'lancamento';
+
 export interface StrategySegment {
-  key: 'best-seller' | 'lancamento' | 'aposta';
+  key: SegmentoDoPlano;
   label: string;
   rationale: string;
   units: number;

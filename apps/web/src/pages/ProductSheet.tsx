@@ -222,7 +222,6 @@ export function ProductSheet() {
             )}
           </Campo>
           <Campo rotulo="Margem">{f.comercial.margemPct === null ? null : `${f.comercial.margemPct}%`}</Campo>
-          <Campo rotulo="Faixa de preço">{f.comercial.faixa?.rotulo}</Campo>
           <Campo rotulo="Desconto máximo (CDS)">
             {f.comercial.descontoMaximoPct === null ? null : `${f.comercial.descontoMaximoPct}%`}
           </Campo>

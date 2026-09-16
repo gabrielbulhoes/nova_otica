@@ -4,6 +4,7 @@ import { prisma } from '../../lib/prisma.js';
 import { isMadeToOrderLens } from '../planning/planning.math.js';
 import { categoriesInGroup } from '../products/product.scope.js';
 import { plannedStoreIds, salePlannedWhere, stockPlannedWhere } from '../stores/store.scope.js';
+import { itemVendidoWhere, itemVendidoSql } from '../../vendas/escopo.js';
 import { computeLiveStock, liveDeltas } from '../stock/stock.service.js';
 import type { ProductGroup } from '../planning/planning.math.js';
 
@@ -168,7 +169,7 @@ export async function stockAlerts(
     // em Midway e nunca vendeu em Guarabira não é ruptura em Guarabira.
     prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { productId: { not: null }, sale: salePlannedWhere },
+      where: { ...itemVendidoWhere, productId: { not: null }, sale: salePlannedWhere },
       _sum: { quantity: true },
     }),
     liveDeltas(),
@@ -190,6 +191,7 @@ export async function stockAlerts(
             FROM "SaleItem" si
             JOIN "Sale" s ON s.id = si."saleId"
             WHERE si."productId" IS NOT NULL
+              AND ${itemVendidoSql('si')}
               AND s."saleDate" >= ${desde}
               AND s."storeId" IN (${Prisma.join(storeIds)})
           `)

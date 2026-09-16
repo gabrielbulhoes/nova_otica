@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { itemVendidoWhere, vendaValidaWhere } from '../../vendas/escopo.js';
 import { PLANNED_STORE_WHERE } from '../stores/store.scope.js';
 import { env } from '../../config/env.js';
 import { toNumber } from '../../http/helpers.js';
@@ -55,7 +56,12 @@ function itemNoRecorte(
   saleWhere: Prisma.SaleWhereInput,
   produto: Prisma.ProductWhereInput | undefined,
 ): Prisma.SaleItemWhereInput {
-  return produto ? { sale: saleWhere, product: produto } : { sale: saleWhere };
+  // `itemVendidoWhere` entra em TODA leitura de item do BI — curva ABC,
+  // faturamento por recorte, ranking de loja e de vendedor. Ver
+  // `src/vendas/escopo.ts`.
+  return produto
+    ? { ...itemVendidoWhere, sale: saleWhere, product: produto }
+    : { ...itemVendidoWhere, sale: saleWhere };
 }
 
 /**
@@ -101,8 +107,16 @@ function noPeriodo(p: Periodo): Prisma.DateTimeFilter {
  */
 const LOJA_PLANEJADA = { store: PLANNED_STORE_WHERE } as const;
 
+/**
+ * O escopo de toda leitura de VENDA do BI: loja planejável E venda não
+ * cancelada. Separado de `LOJA_PLANEJADA` porque aquele também descreve
+ * estoque, e estoque não é cancelável — juntá-los compilava até a primeira
+ * consulta de `StockItem`.
+ */
+const VENDA_NO_ESCOPO = { ...LOJA_PLANEJADA, ...vendaValidaWhere } as const;
+
 export async function getKpis(p: Periodo, storeId?: string, scope?: BiScope): Promise<Kpis> {
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...VENDA_NO_ESCOPO };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -161,7 +175,7 @@ export async function getSalesTimeseries(
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ days: number; granularity: 'day'; points: DayBucket[] }> {
-  const where: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
+  const where: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...VENDA_NO_ESCOPO };
   if (storeId) where.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -207,7 +221,7 @@ export async function getSalesByDimension(
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ by: Dimension; rows: DimensionRow[]; aproximado?: boolean }> {
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...VENDA_NO_ESCOPO };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -305,7 +319,7 @@ export async function getSalesFlow(
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ nodes: SankeyNode[]; links: SankeyLink[] }> {
-  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
+  const saleWhere: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...VENDA_NO_ESCOPO };
   if (storeId) saleWhere.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 
@@ -372,7 +386,7 @@ export async function getHeatmap(
   storeId?: string,
   scope?: BiScope,
 ): Promise<{ xLabels: string[]; yLabels: string[]; cells: [number, number, number][] }> {
-  const where: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...LOJA_PLANEJADA };
+  const where: Prisma.SaleWhereInput = { saleDate: noPeriodo(p), ...VENDA_NO_ESCOPO };
   if (storeId) where.storeId = storeId;
   const produto = await produtoNoRecorte(scope);
 

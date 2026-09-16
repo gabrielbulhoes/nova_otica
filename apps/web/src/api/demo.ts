@@ -40,7 +40,6 @@ import {
   explicarLinha,
   familiaDePeca,
   familiasComGiro,
-  faixaDePreco,
   filtrarPedidos,
   filtroVazio,
   comporMixPorPerfil,
@@ -325,7 +324,6 @@ function filtroDaQueryDemo(params: Record<string, unknown>): FiltroDeSugestoes {
     formato: lista(params.formato) as FiltroDeSugestoes['formato'],
     material: lista(params.material) as FiltroDeSugestoes['material'],
     categoria: lista(params.categoria),
-    faixa: lista(params.faixa)?.map((x) => Number(x)),
     estoqueMin: n(params.estoqueMin),
     estoqueMax: n(params.estoqueMax),
     giroMin: n(params.giroMin),
@@ -2353,7 +2351,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         custoEstimado: prod.cost == null,
         preco,
         margemPct: preco > 0 ? Math.round(((preco - custo) / preco) * 1000) / 10 : null,
-        faixa: faixaDePreco(preco),
         descontoMaximoPct: null,
       },
       estoque: {
@@ -2711,7 +2708,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     );
     const marcas = new Set<string>();
     const categorias = new Set<string>();
-    const faixas = new Map<number, string>();
     const generos = new Set<string>();
     const formatos = new Set<string>();
     const materiais = new Set<string>();
@@ -2719,8 +2715,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       const marca = analysisBrand(p.description, p.category, p.brand);
       if (marca) marcas.add(marca);
       if (p.category) categorias.add(p.category);
-      const f = faixaDePreco(p.unitPrice);
-      faixas.set(f.indice, f.rotulo);
       const prod = prodById(p.productId);
       const at = prod ? atributosDemo(prod) : null;
       if (at?.genero) generos.add(at.genero);
@@ -2730,7 +2724,6 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     return {
       marcas: [...marcas].sort((a, b) => a.localeCompare(b, 'pt-BR')),
       categorias: [...categorias].sort((a, b) => a.localeCompare(b, 'pt-BR')),
-      faixas: [...faixas.entries()].sort((a, b) => a[0] - b[0]).map(([indice, rotulo]) => ({ indice, rotulo })),
       generos: GENEROS.filter((g) => generos.has(g.chave)),
       formatos: FORMATOS_DE_LENTE.filter((f) => formatos.has(f.chave)),
       materiais: MATERIAIS_DE_ARMACAO.filter((x) => materiais.has(x.chave)),

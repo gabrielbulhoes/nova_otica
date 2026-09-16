@@ -637,7 +637,6 @@ function PurchaseOrderCard({
           suggestedQty: it.suggestedQty,
           unitCost: it.unitCost,
           unitPrice: it.unitPrice,
-          faixa: it.faixa.indice,
           ...(it.atributos
             ? {
                 atributos: {
@@ -806,7 +805,6 @@ function PurchaseOrderCard({
                   <td>{it.atributos?.genero ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.material ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.cor ?? <span className="muted">—</span>}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{it.faixa.rotulo}</td>
                   <td className="num">{it.currentStock}</td>
                   <td className="num">{it.unitsSold}</td>
                   {/* Giro por MÊS: "0,03/dia" não diz nada a quem compra. */}
@@ -1169,15 +1167,10 @@ function FiltrosDeCompra({
           valor={filtros.material ?? ''}
           aoMudar={(v) => aoMudar('material', v)}
         />
-        <MultiSelecao
-          rotulo="Faixa de preço"
-          opcoes={(opcoes?.faixas ?? []).map((f: { indice: number; rotulo: string }) => ({
-            chave: String(f.indice),
-            rotulo: f.rotulo,
-          }))}
-          valor={filtros.faixa ?? ''}
-          aoMudar={(v) => aoMudar('faixa', v)}
-        />
+        {/* A FAIXA DE PREÇO era um filtro aqui, e saiu com o resto das
+            aparições dela nas recomendações (16/09/2026). Quem compra escolhe
+            grife, formato e cor; a faixa aparecia como se fosse um sexto
+            critério de decisão. O preço continua em toda linha da tabela. */}
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
           estoque
           <input

@@ -1292,11 +1292,9 @@ describe('demo: o plano de compra detalhado', () => {
   it('a estratégia devolve o detalhe junto — é a mesma tela', () => {
     const r = estrategia();
     expect(r.detalhe, 'o plano detalhado não veio no pacote da estratégia').toBeTruthy();
-    expect(r.detalhe.segmentos.map((s: any) => s.segmento)).toEqual([
-      'best-seller',
-      'lancamento',
-      'aposta',
-    ]);
+    // DOIS segmentos desde 16/09/2026 — "unir as categorias Lançamentos e
+    // Apostas".
+    expect(r.detalhe.segmentos.map((s: any) => s.segmento)).toEqual(['best-seller', 'lancamento']);
   });
 
   it('a hierarquia não inventa unidade além do piso', () => {
@@ -1375,15 +1373,19 @@ describe('demo: feira de compra', () => {
     /*
      * A invariante que sustenta o modo feira.
      *
-     * Todas as peças da oferta têm giro zero — é coleção nova. Se a
-     * classificação olhasse só isso, as 1.500 unidades cairiam em "aposta" e o
-     * plano informaria que a compra toda é especulação: verdadeiro no papel,
-     * inútil no balcão.
+     * Todas as peças da oferta têm giro zero — é coleção nova, e nenhuma delas
+     * pode virar best-seller, que é reposição do que ESTA rede já vendeu.
+     *
+     * (Era o teste do balde "aposta", que deixou de existir em 16/09/2026. O
+     * que ele guardava continua guardado: a coleção inteira vai para
+     * lançamento, e lançamento não é sinônimo de especulação.)
      */
     const r = plano();
-    const aposta = r.detalhe.segmentos.find((s: any) => s.segmento === 'aposta');
+    const bs = r.detalhe.segmentos.find((s: any) => s.segmento === 'best-seller');
+    const lanc = r.detalhe.segmentos.find((s: any) => s.segmento === 'lancamento');
     expect(r.detalhe.total).toBeGreaterThan(0);
-    expect(aposta.alocado, 'a coleção inteira caiu em aposta').toBeLessThan(r.detalhe.total);
+    expect(bs.alocado).toBe(0);
+    expect(lanc.alocado).toBe(r.detalhe.total);
   });
 
   it('família da oferta sem histórico na rede é DECLARADA, não escondida', () => {

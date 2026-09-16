@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { itemVendidoWhere, itemVendidoSql } from '../../vendas/escopo.js';
 import { publish } from '../../lib/eventBus.js';
 import { badRequest, toNumber } from '../../http/helpers.js';
 import { PLANNED_STORE_WHERE, plannedStoreSql, stockPlannedWhere } from '../stores/store.scope.js';
@@ -19,7 +20,6 @@ import {
   buildOverview,
   buildPurchaseOrders,
   comporMixPorPerfil,
-  faixaDePreco,
   rotuloDoFormato,
   rotuloDoMaterial,
   filtrarPedidos,
@@ -119,7 +119,7 @@ export async function planningInputs(
 
   const sold = await prisma.saleItem.groupBy({
     by: ['productId'],
-    where: { sale: saleFilter, productId: { not: null } },
+    where: { ...itemVendidoWhere, sale: saleFilter, productId: { not: null } },
     _sum: { quantity: true },
   });
   const soldBy = new Map(sold.map((s) => [s.productId as string, s._sum.quantity ?? 0]));
@@ -183,7 +183,7 @@ export async function planningInputs(
   if (storeId) recentFilter.storeId = storeId;
   const soldRecent = await prisma.saleItem.groupBy({
     by: ['productId'],
-    where: { sale: recentFilter, productId: { not: null } },
+    where: { ...itemVendidoWhere, sale: recentFilter, productId: { not: null } },
     _sum: { quantity: true },
   });
   const recentBy = new Map(soldRecent.map((r) => [r.productId as string, r._sum.quantity ?? 0]));
@@ -223,7 +223,7 @@ export async function planningInputs(
     monthlyHistoryByProduct(storeId),
     prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: anualFilter, productId: { not: null } },
+      where: { ...itemVendidoWhere, sale: anualFilter, productId: { not: null } },
       _sum: { quantity: true },
     }),
     discontinuedBrandResolver(),
@@ -292,6 +292,7 @@ async function monthlyHistoryByProduct(
           FROM "SaleItem" si
           JOIN "Sale" s ON s.id = si."saleId"
           WHERE si."productId" IS NOT NULL
+            AND ${itemVendidoSql('si')}
             AND s."saleDate" >= NOW() - INTERVAL '24 months'
             AND s."storeId" = ${storeId}
           GROUP BY pid, to_char(s."saleDate", 'YYYY-MM'), month`
@@ -303,6 +304,7 @@ async function monthlyHistoryByProduct(
           JOIN "Sale" s ON s.id = si."saleId"
           JOIN "Store" st ON st.id = s."storeId" AND ${plannedStoreSql('st')}
           WHERE si."productId" IS NOT NULL
+            AND ${itemVendidoSql('si')}
             AND s."saleDate" >= NOW() - INTERVAL '24 months'
           GROUP BY pid, to_char(s."saleDate", 'YYYY-MM'), month`,
   );
@@ -332,7 +334,6 @@ interface RecordItem {
   /** O que o motor sugeriu, preservado mesmo quando o comprador edita. */
   suggestedQty?: number;
   unitPrice?: number;
-  faixa?: number;
   atributos?: {
     genero?: string | null;
     formatoLente?: string | null;
@@ -425,6 +426,7 @@ export async function posicoesPorLoja(productIds: string[], days: number): Promi
       JOIN "Sale" s ON s.id = si."saleId"
       JOIN "Store" lo ON lo.id = s."storeId" AND ${plannedStoreSql('lo')}
       WHERE si."productId" IN (${Prisma.join(productIds)}) AND s."saleDate" >= ${periodStart(days)}
+        AND ${itemVendidoSql('si')}
       GROUP BY s."storeId", si."productId"
     `),
     // Saldo AO VIVO, não `StockItem.quantity`. Ler a coluna crua aqui era o que
@@ -621,7 +623,6 @@ export async function opcoesDeFiltro(days: number, storeId?: string, group: Prod
 
   const marcas = new Set<string>();
   const categorias = new Set<string>();
-  const faixas = new Map<number, string>();
   const generos = new Set<string>();
   const formatos = new Set<string>();
   const materiais = new Set<string>();
@@ -629,8 +630,6 @@ export async function opcoesDeFiltro(days: number, storeId?: string, group: Prod
     const marca = analysisBrand(p.description, p.category, p.brand);
     if (marca) marcas.add(marca);
     if (p.category) categorias.add(p.category);
-    const f = faixaDePreco(p.unitPrice);
-    faixas.set(f.indice, f.rotulo);
     const ficha = fichas.get(p.productId);
     const g = normGenero(ficha?.genero);
     if (g) generos.add(g);
@@ -646,9 +645,6 @@ export async function opcoesDeFiltro(days: number, storeId?: string, group: Prod
   return {
     marcas: [...marcas].sort((a, b) => a.localeCompare(b, 'pt-BR')),
     categorias: [...categorias].sort((a, b) => a.localeCompare(b, 'pt-BR')),
-    faixas: [...faixas.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([indice, rotulo]) => ({ indice, rotulo })),
     generos: rotulados(generos, GENEROS),
     formatos: rotulados(formatos, FORMATOS_DE_LENTE),
     materiais: rotulados(materiais, MATERIAIS_DE_ARMACAO),
@@ -659,8 +655,10 @@ export async function opcoesDeFiltro(days: number, storeId?: string, group: Prod
 /**
  * A COMPOSIÇÃO DO MIX POR PERFIL (rodada final · item 05).
  *
- * "Sugestões de compra por perfil: gênero + formato + material + faixa de
- *  preço, cruzando participação nas vendas com participação no estoque."
+ * "Sugestões de compra por perfil: gênero + formato + material, cruzando
+ *  participação nas vendas com participação no estoque."
+ *
+ * A faixa de preço era o quinto eixo e saiu a pedido do cliente em 16/09/2026.
  *
  * Lê o ESCOPO INTEIRO, e não só os itens de compra: a pergunta é sobre a
  * participação de cada perfil no que a rede vende e no que ela tem — restringir
@@ -1230,6 +1228,7 @@ export async function rebalancePlan(days: number, group: ProductGroup = 'todos',
   const [sold, stock, stores, cfgFor] = await Promise.all([
     prisma.saleItem.findMany({
       where: {
+        ...itemVendidoWhere,
         productId: { not: null },
         sale: { saleDate: { gte: periodStart(days) }, storeId: { not: null }, store: PLANNED_STORE_WHERE },
       },
@@ -1709,6 +1708,7 @@ export async function fairSplit(days: number, filter: FairSplitFilter, totalQty:
       JOIN "Store" lo ON lo.id = s."storeId" AND ${plannedStoreSql('lo')}
       JOIN "Product" p ON p.id = si."productId"
       WHERE s."saleDate" >= ${periodStart(days)} AND ${field} = ${value}
+        AND ${itemVendidoSql('si')}
       GROUP BY s."storeId"
     `),
     prisma.$queryRaw<{ storeId: string; units: bigint }[]>(Prisma.sql`

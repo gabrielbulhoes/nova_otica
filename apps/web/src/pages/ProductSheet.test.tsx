@@ -74,7 +74,7 @@ describe('ficha técnica do SKU', () => {
     // Doze meses SEMPRE, inclusive os vazios.
     expect(f.vendas.mensal).toHaveLength(12);
     expect(f.vendas.justificativa).toContain('Estoque');
-    expect(f.comercial.faixa.rotulo).toMatch(/^R\$ /);
+    expect('faixa' in f.comercial).toBe(false);
   });
 
   it('peça inexistente devolve 404 em vez de uma ficha vazia', () => {

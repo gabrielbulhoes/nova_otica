@@ -1317,9 +1317,11 @@ describe('buildCommercialStrategy (motor piso · risco · janela)', () => {
     const cons = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'conservador' });
     const agr = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'agressivo' });
     const bs = (x: typeof cons) => x.segments.find((s) => s.key === 'best-seller')!.units;
-    const ap = (x: typeof cons) => x.segments.find((s) => s.key === 'aposta')!.units;
+    const lanc = (x: typeof cons) => x.segments.find((s) => s.key === 'lancamento')!.units;
     expect(bs(cons)).toBeGreaterThan(bs(agr)); // conservador reforça best-seller
-    expect(ap(agr)).toBeGreaterThan(ap(cons)); // agressivo aposta mais
+    expect(lanc(agr)).toBeGreaterThan(lanc(cons)); // agressivo compra mais peça nova
+    // Dois segmentos, não três — "unir as categorias Lançamentos e Apostas".
+    expect(cons.segments.map((s) => s.key)).toEqual(['best-seller', 'lancamento']);
   });
 
   it('piso acima da capacidade fica sem lastro e não é viável', () => {
@@ -1329,11 +1331,16 @@ describe('buildCommercialStrategy (motor piso · risco · janela)', () => {
     expect(st.verdict).toMatch(/sem lastro|passa a capacidade/i);
   });
 
-  it('com lastro = best-seller + lançamento (aposta é especulação)', () => {
+  it('com lastro = a fatia best-seller, que é a única com giro na própria peça', () => {
+    /*
+     * Era `best-seller + lançamento`, contra a aposta. Com os dois baldes de
+     * peça nova unidos (16/09/2026), essa conta daria 100% sempre — indicador
+     * que não mede nada ocupa o lugar de um que mediria.
+     */
     const st = buildCommercialStrategy(plans, { floorUnits: 1000, windowMonths: 9, risk: 'equilibrado' });
     const bs = st.segments.find((s) => s.key === 'best-seller')!.units;
-    const lanc = st.segments.find((s) => s.key === 'lancamento')!.units;
-    expect(st.backedPct).toBeCloseTo(((bs + lanc) / 1000) * 100, 1);
+    expect(st.backedPct).toBeCloseTo((bs / 1000) * 100, 1);
+    expect(st.backedPct).toBeLessThan(100);
   });
 });
 

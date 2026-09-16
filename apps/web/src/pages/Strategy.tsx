@@ -23,10 +23,16 @@ import { Icon } from '../brand/Icon';
  * São ALIASES da camada 2 de propósito: é o alias que troca de valor no tema
  * escuro; o token da camada 1 ficaria preso ao tema claro.
  */
+/*
+ * DOIS tons desde 16/09/2026 — "unir as categorias Lançamentos e Apostas".
+ *
+ * A escolha por LUMINÂNCIA continua valendo e fica ainda mais folgada com duas
+ * fatias: verde (cinza 92) contra tinta (cinza 38) separam-se em P&B e sob
+ * deuteranopia, e passam de 3:1 como filete de 3px no topo dos cartões.
+ */
 const segColor: Record<StrategySegment['key'], string> = {
   'best-seller': 'var(--green)',
   lancamento: 'var(--text)',
-  aposta: 'var(--amber)',
 };
 const riskLabel: Record<RiskProfile, string> = {
   conservador: 'Conservador',

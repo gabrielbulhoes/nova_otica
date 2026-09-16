@@ -25,7 +25,8 @@
     "catalogo:estoque-ideal": "tsx src/catalogo/estoqueIdeal.ts",
     "catalogo:padronizar": "tsx src/catalogo/padronizar.ts",
     "catalogo:feira": "tsx src/catalogo/importarFeira.ts",
-    "bootstrap:admin": "tsx src/db/bootstrapAdmin.ts"
+    "bootstrap:admin": "tsx src/db/bootstrapAdmin.ts",
+    "vendas:devolucoes": "tsx src/vendas/reclassificar.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

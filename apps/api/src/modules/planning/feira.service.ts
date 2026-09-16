@@ -359,19 +359,17 @@ function avisoDeVocabulario(
 const ROTULO: Record<SegmentoDoPlano, string> = {
   'best-seller': 'best-seller',
   lancamento: 'lançamento',
-  aposta: 'aposta',
 };
 
 /**
  * O MOTIVO DO QUE NÃO COUBE — segmento a segmento, com o motivo de cada um.
  *
- * O perfil de risco divide o piso em três fatias antes de olhar a oferta, e
- * numa feira duas delas ficam vazias por NATUREZA e não por cálculo: uma
- * coleção nova não tem o que repor (best-seller), e uma coleção cujo perfil
- * inteiro já roda na rede não tem o que especular (aposta). Nos dois casos há
- * unidades sobrando, e o motivo genérico — "não couberam sem concentrar demais
- * em poucas peças" — manda o comprador procurar na oferta uma peça que o motor
- * tivesse recusado. Não há nenhuma, e ele perde a tarde conferindo.
+ * O perfil de risco divide o piso em duas fatias antes de olhar a oferta, e
+ * numa feira uma delas fica vazia por NATUREZA e não por cálculo: uma coleção
+ * nova não tem o que repor (best-seller). Há unidades sobrando, e o motivo
+ * genérico — "não couberam sem concentrar demais em poucas peças" — manda o
+ * comprador procurar na oferta uma peça que o motor tivesse recusado. Não há
+ * nenhuma, e ele perde a tarde conferindo.
  *
  * Cada fatia que não fecha explica a SUA razão. É a mesma exigência que a aba
  * de distribuição pagou caro para aprender: tela que mostra menos do que se
@@ -419,11 +417,6 @@ function porQue(
         'fornecedor traz referências que você já vende, elas entram por aqui assim que o SKU da planilha ' +
         'for o mesmo do cadastro'
       );
-    }
-    if (segmento === 'aposta') {
-      // O oposto do medo: todo o resto encontrou lastro, e não sobrou nada
-      // genuinamente especulativo para comprar.
-      return 'toda peça da oferta encontrou lastro no histórico da rede — não sobrou especulação a fazer';
     }
     return (
       `nenhuma peça da oferta tem perfil que já rode na rede (o lastro vem de ${ctx.pecasComGiro} peças ` +

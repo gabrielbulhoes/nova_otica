@@ -11,8 +11,10 @@ import {
   explicarLinha,
   margemPct,
   montarPlanoDetalhado,
+  pesoDoCandidato,
   type CandidatoDeCompra,
   type PerfilQueVende,
+  type SegmentoDoPlano,
 } from '../src/modules/planning/planning.math.js';
 
 /**
@@ -73,15 +75,32 @@ describe('classificarCandidato · a ordem das perguntas É a regra', () => {
     expect(classificarCandidato(c, perfilComSolarMasculino)).toBe('lancamento');
   });
 
-  it('sem giro e sem perfil → aposta', () => {
+  it('sem giro e sem perfil AINDA é lançamento — o balde "aposta" acabou', () => {
+    /*
+     * "Unir as categorias Lançamentos e Apostas." — Galbe, 16/09/2026
+     *
+     * A distinção não sumiu: ela desceu para o PESO, que é onde ela sempre
+     * decidiu alguma coisa. O teste abaixo prende as duas metades — a peça sem
+     * evidência entra no mesmo balde, e entra pesando muito menos.
+     */
     const c = peca({ unitsSold: 0, tipo: 'RELOGIO', genero: 'Unissex' });
-    expect(classificarCandidato(c, perfilComSolarMasculino)).toBe('aposta');
+    expect(classificarCandidato(c, perfilComSolarMasculino)).toBe('lancamento');
+  });
+
+  it('sem evidência de perfil o peso despenca, mas NÃO zera', () => {
+    // Se zerasse, uma grife nova — exatamente a que o cliente quer testar —
+    // nunca receberia uma unidade depois da união dos baldes.
+    const semPerfil = peca({ unitsSold: 0, tipo: 'RELOGIO', genero: 'Unissex' });
+    const comPerfil = peca({ unitsSold: 0 });
+    const pSem = pesoDoCandidato(semPerfil, perfilComSolarMasculino);
+    const pCom = pesoDoCandidato(comPerfil, perfilComSolarMasculino);
+    expect(pSem).toBeGreaterThan(0);
+    expect(pCom).toBeGreaterThan(pSem * 10);
   });
 });
 
 describe('montarPlanoDetalhado · a soma fecha', () => {
-  const explicar = (c: CandidatoDeCompra, s: 'best-seller' | 'lancamento' | 'aposta', u: number) =>
-    explicarLinha(c, s, u);
+  const explicar = (c: CandidatoDeCompra, s: SegmentoDoPlano, u: number) => explicarLinha(c, s, u);
 
   it('cada segmento fecha EXATO na meta — o concorrente não fecha', () => {
     /*
@@ -99,7 +118,7 @@ describe('montarPlanoDetalhado · a soma fecha', () => {
     );
     const plano = montarPlanoDetalhado(
       candidatos,
-      { 'best-seller': 426, lancamento: 0, aposta: 0 },
+      { 'best-seller': 426, lancamento: 0 },
       perfilVazio,
       explicar,
     );
@@ -121,7 +140,7 @@ describe('montarPlanoDetalhado · a soma fecha', () => {
     const meta = 400;
     const plano = montarPlanoDetalhado(
       candidatos,
-      { 'best-seller': meta, lancamento: 0, aposta: 0 },
+      { 'best-seller': meta, lancamento: 0 },
       perfilVazio,
       explicar,
     );
@@ -137,7 +156,7 @@ describe('montarPlanoDetalhado · a soma fecha', () => {
     // que oferecer para o balde de lançamento. A meta não pode evaporar.
     const plano = montarPlanoDetalhado(
       [peca({ unitsSold: 3 })],
-      { 'best-seller': 100, lancamento: 50, aposta: 25 },
+      { 'best-seller': 100, lancamento: 75 },
       perfilVazio,
       explicar,
     );
@@ -148,7 +167,7 @@ describe('montarPlanoDetalhado · a soma fecha', () => {
   it('meta zero não inventa compra', () => {
     const plano = montarPlanoDetalhado(
       [peca({ unitsSold: 3 })],
-      { 'best-seller': 0, lancamento: 0, aposta: 0 },
+      { 'best-seller': 0, lancamento: 0 },
       perfilVazio,
       explicar,
     );
@@ -182,7 +201,7 @@ describe('explicarLinha · a frase que o concorrente não escreve', () => {
   });
 
   it('linha com zero unidade não gera frase', () => {
-    expect(explicarLinha(peca(), 'aposta', 0)).toBe('');
+    expect(explicarLinha(peca(), 'lancamento', 0)).toBe('');
   });
 });
 

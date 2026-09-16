@@ -5,6 +5,7 @@ import { asyncHandler, parseDays, toNumber } from '../../http/helpers.js';
 import { scopedStoreId } from '../auth/auth.middleware.js';
 import { computeStoreCoverage } from '../planning/planning.math.js';
 import { PLANNED_STORE_WHERE } from '../stores/store.scope.js';
+import { itemVendidoSql, vendaValidaWhere } from '../../vendas/escopo.js';
 import { parseGroup, productFilterForGroup, categoriesInGroup } from '../products/product.scope.js';
 
 export const dashboardRouter = Router();
@@ -30,6 +31,7 @@ dashboardRouter.get(
     const salesWhere: Prisma.SaleWhereInput = {
       saleDate: { gte: since },
       ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }),
+      ...vendaValidaWhere,
     };
     const pendingWhere: Prisma.InventoryMovementWhereInput = {
       status: { in: ['REQUESTED', 'PENDING'] },
@@ -168,7 +170,7 @@ dashboardRouter.get(
         SELECT s."storeId" AS "storeId", COALESCE(SUM(si.quantity), 0)::bigint AS units
         FROM "SaleItem" si
         JOIN "Sale" s ON s.id = si."saleId"
-        WHERE s."saleDate" >= ${since} AND s."storeId" IS NOT NULL
+        WHERE s."saleDate" >= ${since} AND s."storeId" IS NOT NULL AND ${itemVendidoSql('si')}
         ${categoriasSql}
         ${storeId ? Prisma.sql`AND s."storeId" = ${storeId}` : Prisma.empty}
         GROUP BY s."storeId"
@@ -203,6 +205,7 @@ dashboardRouter.get(
       where: {
         saleDate: { gte: since },
         ...(storeId ? { storeId } : { store: PLANNED_STORE_WHERE }),
+        ...vendaValidaWhere,
       },
       _sum: { total: true },
       _count: true,

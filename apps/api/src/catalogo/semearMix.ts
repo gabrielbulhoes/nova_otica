@@ -1,5 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
+import { itemVendidoWhere } from '../vendas/escopo.js';
 import { analysisBrand, normBrandKey } from '../modules/planning/planning.math.js';
 import { decomporDescricao } from './atributos.js';
 import { PLANNED_STORE_WHERE } from '../modules/stores/store.scope.js';
@@ -93,7 +94,7 @@ async function main(): Promise<void> {
   for (const [storeId, storeName] of nomePorLoja) {
     const itens = await prisma.saleItem.groupBy({
       by: ['productId'],
-      where: { sale: { storeId, saleDate: { gte: desde } } },
+      where: { ...itemVendidoWhere, sale: { storeId, saleDate: { gte: desde } } },
       _sum: { quantity: true },
     });
     const porGrife = new Map<string, number>();

@@ -143,7 +143,10 @@ d('ficha técnica (integração com Postgres)', () => {
     expect(f!.comercial.preco).toBe(890);
     expect(f!.comercial.custo).toBe(400);
     expect(f!.comercial.custoEstimado).toBe(false);
-    expect(f!.comercial.faixa?.rotulo).toBe('R$ 500–1.000');
+    // A faixa de preço saiu da ficha junto com o resto das aparições dela
+    // (16/09/2026). O preço e a margem, que é o que se decide olhando, ficaram.
+    expect('faixa' in f!.comercial).toBe(false);
+    expect(f!.comercial.margemPct).toBeGreaterThan(0);
 
     const loja = f!.estoque.porLoja.find((l) => l.storeId === storeId);
     expect(loja).toMatchObject({ quantidade: 7, reservado: 1 });
