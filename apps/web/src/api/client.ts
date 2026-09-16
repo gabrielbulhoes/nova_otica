@@ -362,6 +362,99 @@ export const getProducts = (params: Record<string, string | number | undefined>)
 export const getCategories = (params?: Record<string, string | undefined>) =>
   api.get<string[]>('/products/categories', { params }).then((r) => r.data);
 
+/* ─── Ficha técnica do SKU · rodada final · item 02 ─────────────────────────
+   O contrato é DECLARADO aqui, e não inferido do Prisma: a ficha é a tela em
+   que o comprador confere o que a rede sabe da peça, e campo sem dado vem
+   `null` — nunca zero, nunca um valor plausível. */
+export interface AtributoComFonte {
+  chave: string | null;
+  rotulo: string;
+  /** `ficha` · `erp` · `descricao` — de onde veio a classificação. */
+  fonte: string | null;
+  textoOriginal: string | null;
+}
+
+export interface FichaTecnica {
+  identificacao: {
+    id: string;
+    sku: string | null;
+    externalId: string;
+    referencia: string | null;
+    gtin: string | null;
+    modelo: string;
+    grife: string | null;
+    marcaCatalogo: string | null;
+    marcaErp: string | null;
+    categoria: string | null;
+    familia: string;
+    tipo: string;
+    ativo: boolean;
+    cadastradoEm: string | null;
+  };
+  atributos: {
+    genero: AtributoComFonte;
+    formatoLente: AtributoComFonte;
+    materialArmacao: AtributoComFonte;
+    cor: string | null;
+    codigoCor: string | null;
+    dimensoes: {
+      tamanhoLente: number | null;
+      alturaLente: number | null;
+      tamanhoPonte: number | null;
+      tamanhoHaste: number | null;
+    };
+    bestSellerDoFornecedor: boolean;
+    bestSellerNaRede: boolean | null;
+  };
+  comercial: {
+    custo: number | null;
+    custoEstimado: boolean;
+    preco: number | null;
+    margemPct: number | null;
+    faixa: { indice: number; de: number; ate: number; rotulo: string } | null;
+    descontoMaximoPct: number | null;
+  };
+  estoque: {
+    porLoja: { storeId: string; loja: string; quantidade: number; reservado: number }[];
+    total: number;
+    reservado: number;
+    aCaminho: number;
+    lojasConsideradas: number;
+  };
+  vendas: {
+    periodos: { dias: number; unidades: number; receita: number }[];
+    mensal: { mes: string; unidades: number; receita: number }[];
+    giroDiario: number;
+    coberturaDias: number | null;
+    classe: string;
+    recomendacao: string;
+    justificativa: string;
+    sugestaoDeCompra: number;
+  };
+  compra: {
+    ultima: {
+      data: string;
+      quantidade: number;
+      custoUnitario: number | null;
+      pedidoId: string;
+      fornecedor: string;
+      status: string;
+      recebidaEm: string | null;
+    } | null;
+    fornecedorCanonico: string | null;
+  };
+  imagem: { url: string | null; fonte: 'ficha' | 'provador' | 'demo' | null };
+  procedencia: {
+    fonteCadastro: string | null;
+    cadastroEm: string | null;
+    erpEm: string | null;
+    sincronizadoEm: string | null;
+  };
+}
+
+export const getFichaTecnica = (id: string) =>
+  api.get<FichaTecnica>(`/products/${id}/ficha`).then((r) => r.data);
+
 export const getSales = (params: Record<string, string | number | undefined>) =>
   api.get<Paged<Sale>>('/sales', { params }).then((r) => r.data);
 

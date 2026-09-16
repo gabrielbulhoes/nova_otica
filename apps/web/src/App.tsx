@@ -12,6 +12,7 @@ import { Central } from './pages/Central';
 import { Dashboard } from './pages/Dashboard';
 import { Stock } from './pages/Stock';
 import { Products } from './pages/Products';
+import { ProductSheet } from './pages/ProductSheet';
 import { Movements } from './pages/Movements';
 import { Sales } from './pages/Sales';
 import { Stores } from './pages/Stores';
@@ -69,6 +70,9 @@ export function App() {
         />
         <Route path="estoque" element={<Stock />} />
         <Route path="produtos" element={<Products />} />
+        {/* A ficha técnica de uma peça (rodada final · item 02). Rota filha de
+            "produtos" para que o caminho de volta seja óbvio na barra. */}
+        <Route path="produtos/:id" element={<ProductSheet />} />
         <Route path="transferencias" element={<Movements />} />
         <Route path="alertas" element={<Alerts />} />
         <Route path="relatorios" element={<Reports />} />

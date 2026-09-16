@@ -40,6 +40,13 @@ import {
   explicarLinha,
   familiaDePeca,
   familiasComGiro,
+  faixaDePreco,
+  rotuloDoFormato,
+  rotuloDoGenero,
+  rotuloDoMaterial,
+  type FormatoLenteChave,
+  type GeneroChave,
+  type MaterialArmacaoChave,
   margemPct,
   montarPlanoDetalhado,
   DECISION_PRIORITIES,
@@ -221,6 +228,126 @@ const reserved = new Map<string, number>();
 // Overrides de estoque mínimo por loja (paridade com StockItem.minStock)
 const storeMinStock = new Map<string, number | null>();
 const key = (s: string, p: string) => `${s}:${p}`;
+
+/* ─── Fichas fictícias do fornecedor · rodada final · itens 02, 03 e 05 ──────
+   A demonstração precisa mostrar a ficha técnica e a composição do mix, e as
+   duas dependem de gênero, formato e material. O dataset não traz esses campos
+   — nem o fictício nem a fotografia da rede, que vem do ERP sem eles.
+
+   A ficha é DERIVADA do id, de forma estável (mesmo SKU, mesma ficha em toda
+   abertura), e cobre só parte do catálogo de propósito: com 100% de cobertura
+   a tela nunca mostraria o aviso de leitura parcial, que é justamente o que
+   protege o comprador de ler participação calculada sobre meia base. A
+   proporção aqui (dois terços) é a ordem de grandeza do que o catálogo real
+   terá depois do padronizador. */
+function hashDemo(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
+}
+
+const FORMATOS_DEMO: { chave: FormatoLenteChave; texto: string }[] = [
+  { chave: 'RETANGULAR', texto: 'Retangular' },
+  { chave: 'QUADRADA', texto: 'Quadrado' },
+  { chave: 'REDONDA', texto: 'Redondo' },
+  { chave: 'AVIADOR', texto: 'Piloto' },
+  { chave: 'GATINHO', texto: 'Cat-eye' },
+  { chave: 'WAYFARER', texto: 'Wayfarer' },
+  { chave: 'OVAL', texto: 'Oval' },
+  { chave: 'MASCARA', texto: 'Máscara' },
+];
+const MATERIAIS_DEMO: { chave: MaterialArmacaoChave; texto: string }[] = [
+  { chave: 'ACETATO', texto: 'Acetato' },
+  { chave: 'METAL', texto: 'Metal' },
+  { chave: 'TITANIO', texto: 'Titânio' },
+  { chave: 'INJETADO', texto: 'Injetado' },
+  { chave: 'TR90', texto: 'TR-90' },
+  { chave: 'COMBINADO', texto: 'Acetato e metal' },
+];
+const GENEROS_DEMO: { chave: GeneroChave; texto: string }[] = [
+  { chave: 'FEMININO', texto: 'Feminino' },
+  { chave: 'MASCULINO', texto: 'Masculino' },
+  { chave: 'UNISSEX', texto: 'Unisex' },
+];
+const CORES_DEMO = ['Preto', 'Havana', 'Tartaruga', 'Dourado', 'Prata', 'Azul', 'Marrom', 'Cristal'];
+
+interface FichaDemo {
+  ficha: boolean;
+  fonte: string | null;
+  genero: GeneroChave | null;
+  generoTexto: string | null;
+  formatoLente: FormatoLenteChave | null;
+  formatoTexto: string | null;
+  materialArmacao: MaterialArmacaoChave | null;
+  materialTexto: string | null;
+  cor: string | null;
+  referencia: string | null;
+  bestSeller: boolean;
+  dimensoes: { tamanhoLente: number | null; alturaLente: number | null; tamanhoPonte: number | null; tamanhoHaste: number | null };
+  ultimaCompra: (prod: { id: string; sku: string }, custo: number) => Record<string, unknown> | null;
+}
+
+function atributosDemo(prod: { id: string; sku: string; category: string }): FichaDemo {
+  const h = hashDemo(prod.id);
+  const fam = familiaDePeca(prod.category);
+  // Relógio, lente e acessório não têm formato de lente nem material de aro:
+  // dar ficha a eles seria inventar atributo que a peça não tem.
+  const temFicha = (fam === 'solar' || fam === 'armacao') && h % 3 !== 0;
+  if (!temFicha) {
+    return {
+      ficha: false,
+      fonte: null,
+      genero: null,
+      generoTexto: null,
+      formatoLente: null,
+      formatoTexto: null,
+      materialArmacao: null,
+      materialTexto: null,
+      cor: null,
+      referencia: null,
+      bestSeller: false,
+      dimensoes: { tamanhoLente: null, alturaLente: null, tamanhoPonte: null, tamanhoHaste: null },
+      ultimaCompra: () => null,
+    };
+  }
+  const f = FORMATOS_DEMO[h % FORMATOS_DEMO.length];
+  const m = MATERIAIS_DEMO[(h >> 3) % MATERIAIS_DEMO.length];
+  const g = GENEROS_DEMO[(h >> 5) % GENEROS_DEMO.length];
+  return {
+    ficha: true,
+    fonte: h % 2 === 0 ? 'ficha' : 'erp',
+    genero: g.chave,
+    generoTexto: g.texto,
+    formatoLente: f.chave,
+    formatoTexto: f.texto,
+    materialArmacao: m.chave,
+    materialTexto: m.texto,
+    cor: CORES_DEMO[(h >> 7) % CORES_DEMO.length],
+    referencia: `${prod.sku}-${String(h % 90 + 10)}`,
+    bestSeller: h % 7 === 0,
+    dimensoes: {
+      tamanhoLente: 48 + (h % 12),
+      alturaLente: 38 + (h % 8),
+      tamanhoPonte: 16 + (h % 6),
+      tamanhoHaste: 135 + (h % 12),
+    },
+    ultimaCompra: (p2, custo) =>
+      h % 4 === 0
+        ? null
+        : {
+            data: new Date(Date.now() - (30 + (h % 180)) * 86_400_000).toISOString(),
+            quantidade: 2 + (h % 10),
+            custoUnitario: custo,
+            pedidoId: `demo_po_${p2.id}`,
+            fornecedor: 'Fornecedor (demonstração)',
+            status: 'RECEIVED',
+            recebidaEm: new Date(Date.now() - (10 + (h % 30)) * 86_400_000).toISOString(),
+          },
+  };
+}
 
 // Vendas por loja×produto no período (base do planejamento/redistribuição)
 const soldQty = new Map<string, number>();
@@ -2084,6 +2211,140 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     if (q0) { const q = q0.toLowerCase(); rows = rows.filter((x) => x.description.toLowerCase().includes(q) || x.brand.toLowerCase().includes(q)); }
     return { total: rows.length, page: 1, limit: 200, rows: rows.map((x) => ({ ...x, color: { name: x.color }, size: { name: x.size } })) };
   }
+  /* ─── Ficha técnica do SKU · rodada final · item 02 ───────────────────────
+     VEM ANTES do regex `/products/(.+)` de propósito: aquele padrão engole
+     subcaminhos, e "abc/ficha" chegaria como se fosse um id de produto. É o
+     mesmo cuidado que o Express exige do outro lado. */
+  mm = p(/^\/products\/(.+)\/ficha$/);
+  if (mm) {
+    const prod = prodById(mm[1]);
+    if (!prod) return { __status: 404, error: 'Produto não encontrado' };
+    const at = atributosDemo(prod);
+    const porLoja = stores
+      .map((s) => ({
+        storeId: s.id,
+        loja: s.name,
+        quantidade: stockQty.get(key(s.id, prod.id)) ?? 0,
+        reservado: reserved.get(key(s.id, prod.id)) ?? 0,
+      }))
+      .sort((a, b) => b.quantidade - a.quantidade);
+    const total = porLoja.reduce((a, l) => a + l.quantidade, 0);
+    const vendidas = stores.reduce((a, s) => a + (soldQty.get(key(s.id, prod.id)) ?? 0), 0);
+    const preco = Number(prod.price) || 0;
+    const custo = Number(prod.cost ?? 0) || Math.round(preco * 0.55 * 100) / 100;
+    const janela = effectiveDays(90);
+    const plano = analyzeProduct(
+      {
+        productId: prod.id,
+        sku: prod.sku,
+        description: prod.description,
+        brand: prod.brand,
+        category: prod.category,
+        unitsSold: vendidas,
+        currentStock: total,
+        unitCost: custo,
+        unitPrice: preco,
+        onOrderQty: 0,
+      },
+      janela,
+    );
+    // Histórico mensal: o dataset da demonstração não guarda venda por mês,
+    // então a série é DERIVADA do total do período, com uma variação estável
+    // por SKU. É demonstração, e a tela diz isso no rodapé — o que não se pode
+    // é desenhar uma linha reta e deixar parecer medição.
+    const mensal = Array.from({ length: 12 }, (_, i) => {
+      const d = new Date();
+      d.setUTCMonth(d.getUTCMonth() - (11 - i), 1);
+      const peso = 0.6 + ((hashDemo(prod.id + i) % 80) / 100);
+      const unidades = Math.round((vendidas / 12) * peso);
+      return {
+        mes: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`,
+        unidades,
+        receita: Math.round(unidades * preco * 100) / 100,
+      };
+    });
+    return {
+      identificacao: {
+        id: prod.id,
+        sku: prod.sku,
+        externalId: prod.externalId,
+        referencia: at.referencia,
+        gtin: null,
+        modelo: prod.description,
+        grife: analysisBrand(prod.description, prod.category, prod.brand),
+        marcaCatalogo: at.ficha ? prod.brand : null,
+        marcaErp: prod.brand,
+        categoria: prod.category,
+        familia: familiaDePeca(prod.category),
+        tipo:
+          familiaDePeca(prod.category) === 'solar'
+            ? 'Óculos de sol'
+            : familiaDePeca(prod.category) === 'armacao'
+              ? 'Armação'
+              : prod.category,
+        ativo: true,
+        cadastradoEm: null,
+      },
+      atributos: {
+        genero: { chave: at.genero, rotulo: rotuloDoGenero(at.genero), fonte: at.fonte, textoOriginal: at.generoTexto },
+        formatoLente: {
+          chave: at.formatoLente,
+          rotulo: rotuloDoFormato(at.formatoLente),
+          fonte: at.fonte,
+          textoOriginal: at.formatoTexto,
+        },
+        materialArmacao: {
+          chave: at.materialArmacao,
+          rotulo: rotuloDoMaterial(at.materialArmacao),
+          fonte: at.fonte,
+          textoOriginal: at.materialTexto,
+        },
+        cor: at.cor,
+        codigoCor: null,
+        dimensoes: at.dimensoes,
+        bestSellerDoFornecedor: at.bestSeller,
+        bestSellerNaRede: at.bestSeller ? vendidas > 0 : null,
+      },
+      comercial: {
+        custo,
+        custoEstimado: prod.cost == null,
+        preco,
+        margemPct: preco > 0 ? Math.round(((preco - custo) / preco) * 1000) / 10 : null,
+        faixa: faixaDePreco(preco),
+        descontoMaximoPct: null,
+      },
+      estoque: {
+        porLoja,
+        total,
+        reservado: porLoja.reduce((a, l) => a + l.reservado, 0),
+        aCaminho: 0,
+        lojasConsideradas: porLoja.length,
+      },
+      vendas: {
+        periodos: [
+          { dias: 30, unidades: Math.round(vendidas / 3), receita: Math.round((vendidas / 3) * preco * 100) / 100 },
+          { dias: 90, unidades: vendidas, receita: Math.round(vendidas * preco * 100) / 100 },
+          { dias: 365, unidades: Math.round(vendidas * 3.2), receita: Math.round(vendidas * 3.2 * preco * 100) / 100 },
+        ],
+        mensal,
+        giroDiario: plano.dailyDemand,
+        coberturaDias: plano.coverageDays,
+        classe: plano.movementClass,
+        recomendacao: plano.recommendation,
+        justificativa: plano.justificativa,
+        sugestaoDeCompra: plano.suggestedQty,
+      },
+      compra: { ultima: at.ultimaCompra(prod, custo), fornecedorCanonico: at.ficha ? prod.brand : null },
+      imagem: { url: null, fonte: null },
+      procedencia: {
+        fonteCadastro: at.fonte,
+        cadastroEm: at.fonte ? new Date().toISOString() : null,
+        erpEm: null,
+        sincronizadoEm: new Date().toISOString(),
+      },
+    };
+  }
+
   mm = p(/^\/products\/(.+)$/);
   if (mm) {
     const prod = prodById(mm[1]);
