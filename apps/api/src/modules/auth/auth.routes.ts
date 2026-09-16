@@ -47,7 +47,17 @@ authRouter.post(
     };
     res.json({
       token: signToken(authUser),
-      user: { ...authUser, storeName: user.store?.name ?? null },
+      user: {
+        ...authUser,
+        storeName: user.store?.name ?? null,
+        // AS PREFERÊNCIAS VÊM NO LOGIN também, e não só no `/me`: o contexto
+        // da interface é montado a partir desta resposta, e o efeito que
+        // chama o `/me` só roda uma vez, na montagem. Sem isto, quem gravou
+        // "menu horizontal" entrava no layout padrão e só via a própria
+        // escolha depois de um F5 — a preferência estava salva e parecia
+        // perdida.
+        preferences: preferenciasDoBanco(user.preferences),
+      },
     });
   }),
 );

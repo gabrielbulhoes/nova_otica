@@ -45,6 +45,7 @@ const somar = (m: Record<string, number>, k: string) => {
 
 async function main(): Promise<void> {
   const gravar = process.argv.includes('--gravar');
+  const agora = new Date();
 
   const contagem: Contagem = { formato: {}, material: {}, porFonte: {} };
   const naoIdentificadoFormato = new Map<string, number>();
@@ -141,6 +142,12 @@ async function main(): Promise<void> {
           const dados = {
             ...(m.formatoLente ? { formatoLente: m.formatoLente, fonteFormato: m.fonteFormato } : {}),
             ...(m.materialArmacao ? { materialArmacao: m.materialArmacao, fonteMaterial: m.fonteMaterial } : {}),
+            // A MARCA DE DATA É O QUE TORNA A CLASSIFICAÇÃO VISÍVEL. Quem
+            // consulta fichas filtra por procedência (`cadastroEm` OU `erpEm`
+            // OU esta), e a peça classificada a partir da DESCRIÇÃO não tem
+            // nenhuma das outras duas — ficava gravada no banco e fora de
+            // todas as leituras, inclusive da composição do mix.
+            padronizadoEm: agora,
           };
           return prisma.productAttribute.upsert({
             where: { productId: m.productId },

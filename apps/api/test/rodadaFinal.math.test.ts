@@ -12,6 +12,7 @@ import {
   normFormatoLente,
   normGenero,
   normMaterialArmacao,
+  buildDecisionCards,
   passaNoFiltro,
   pesoDoCandidato,
   repartirComTeto,
@@ -431,5 +432,131 @@ describe('comporMixPorPerfil', () => {
     const mix = comporMixPorPerfil(plans, f2);
     expect(mix.cobertura.faltando.formato).toBe(2); // a1 + s1 (sem ficha)
     expect(mix.linhas.some((l) => l.perfil.formato === NAO_IDENTIFICADO)).toBe(false);
+  });
+});
+
+// ─── O que a revisão adversarial encontrou ──────────────────────────────────
+//
+// Cada bloco abaixo guarda um defeito CONFIRMADO por revisão independente,
+// com o cenário que ela reproduziu. Nenhum deles aparecia em teste — é por
+// isso que estão aqui.
+
+describe('revisão · o pedido filtrado descreve o pedido filtrado', () => {
+  const peca = (id: string, sold: number, stock: number, preco: number) =>
+    analyzeProduct({ ...base, productId: id, sku: id, description: `${id} OCULOS RAY BAN`, unitsSold: sold, currentStock: stock, unitPrice: preco }, 90);
+
+  const fichas = new Map<string, AtributosDaPeca>([
+    ['a', { genero: 'Feminino', formato: 'Piloto', material: 'Metal', formatoLente: 'AVIADOR', materialArmacao: 'METAL', tamanhoLente: 58, bestSeller: false }],
+    ['b', { genero: 'Masculino', formato: 'Máscara', material: 'Acetato', formatoLente: 'MASCARA', materialArmacao: 'ACETATO', tamanhoLente: 60, bestSeller: false }],
+  ]);
+
+  const plano = () =>
+    buildPurchaseOrders(
+      [peca('a', 90, 5, 800), peca('b', 60, 3, 300)],
+      90,
+      () => 'Luxottica',
+      undefined,
+      undefined,
+      fichas,
+    );
+
+  it('a quebra por grife, a por tipo e a contagem de ficha acompanham o filtro', () => {
+    const todos = plano();
+    const so = filtrarPedidos(todos, { faixa: [1] }); // só a peça de R$ 800
+    const pedido = so.orders[0];
+    expect(pedido.items).toHaveLength(1);
+    // A INVARIANTE: a quebra fecha contra o pedido que está na tela.
+    expect(pedido.porGrife.reduce((a, g) => a + g.units, 0)).toBe(pedido.units);
+    expect(pedido.porFormato.reduce((a, f) => a + f.units, 0)).toBe(pedido.units);
+    expect(pedido.itensComFicha).toBe(1);
+    // E o tipo que sobrou é o da peça que sobrou, não o do conjunto original.
+    expect(pedido.porFormato.map((f) => f.formato)).toEqual(['Aviador']);
+  });
+
+  it('itensComFicha nunca fica maior que os itens — era o que sumia com o aviso de cobertura', () => {
+    const semFichaNaSegunda = new Map<string, AtributosDaPeca>([['a', fichas.get('a')!]]);
+    const todos = buildPurchaseOrders(
+      [peca('a', 90, 5, 800), peca('b', 60, 3, 300)],
+      90,
+      () => 'Luxottica',
+      undefined,
+      undefined,
+      semFichaNaSegunda,
+    );
+    const so = filtrarPedidos(todos, { faixa: [0] }); // fica só a peça SEM ficha
+    const pedido = so.orders[0];
+    expect(pedido.items).toHaveLength(1);
+    expect(pedido.itensComFicha).toBe(0);
+    expect(pedido.items.length - pedido.itensComFicha).toBeGreaterThanOrEqual(0);
+  });
+
+  it('a quebra por tipo usa a LISTA FECHADA: duas grafias do mesmo formato são um selo só', () => {
+    const duasGrafias = new Map<string, AtributosDaPeca>([
+      ['a', { genero: null, formato: 'Cat-Eye', material: null, formatoLente: 'GATINHO', materialArmacao: null, tamanhoLente: null, bestSeller: false }],
+      ['b', { genero: null, formato: 'gatinho', material: null, formatoLente: 'GATINHO', materialArmacao: null, tamanhoLente: null, bestSeller: false }],
+    ]);
+    const p = buildPurchaseOrders(
+      [peca('a', 90, 5, 800), peca('b', 60, 3, 300)],
+      90,
+      () => 'Luxottica',
+      undefined,
+      undefined,
+      duasGrafias,
+    );
+    expect(p.orders[0].porFormato).toHaveLength(1);
+    expect(p.orders[0].porFormato[0].formato).toBe('Gatinho (cat-eye)');
+  });
+
+  it('o filtro de marca casa com a grife de análise — a mesma que o seletor oferece', () => {
+    // A peça sem grife na descrição: `brand` fica null, e a régua do seletor
+    // (analysisBrand) cai no fornecedor do ERP. Antes, filtrar pela marca
+    // oferecida devolvia zero item.
+    const semGrife = analyzeProduct(
+      { ...base, productId: 'x', sku: 'x', description: 'ARMACAO 5024', brand: 'MARCHON DO BRASIL', category: 'ARMACAO', unitsSold: 90, currentStock: 2 },
+      90,
+    );
+    const p = buildPurchaseOrders([semGrife], 90);
+    const item = p.orders[0].items[0];
+    expect(item.brand).toBeNull();
+    expect(item.grifeDeAnalise).toBe('MARCHON DO BRASIL');
+    expect(filtrarPedidos(p, { marca: ['MARCHON DO BRASIL'] }).summary.items).toBe(1);
+  });
+});
+
+describe('revisão · repartirComTeto não perde a meta', () => {
+  it('peso nenhum devolve a meta inteira em naoAlocado, não zero', () => {
+    const r = repartirComTeto([0, 0], 30, [10, 10]);
+    expect(r.cotas).toEqual([0, 0]);
+    // Era `naoAlocado: 0` para meta 30: trinta unidades sumiam sem aparecer
+    // em lugar nenhum — o oposto do contrato da função.
+    expect(r.naoAlocado).toBe(30);
+    expect(r.cotas.reduce((a, b) => a + b, 0) + r.naoAlocado).toBe(30);
+  });
+
+  it('peso negativo (devolução) não inverte nem some com a meta', () => {
+    const r = repartirComTeto([-5, -1], 12, [10, 10]);
+    expect(r.naoAlocado).toBe(12);
+  });
+});
+
+describe('revisão · material único não vira COMBINADO', () => {
+  it('processo e base no mesmo texto continuam sendo um material só', () => {
+    expect(normMaterialArmacao('Nylon injetado')).toBe('NYLON');
+    expect(normMaterialArmacao('Acetato injetado')).toBe('ACETATO');
+    expect(normMaterialArmacao('Grilamid TR90')).toBe('TR90');
+    // E a combinação de verdade continua sendo combinação.
+    expect(normMaterialArmacao('Acetato e metal')).toBe('COMBINADO');
+  });
+});
+
+describe('revisão · justificativa nas duas superfícies que faltavam', () => {
+  it('o card de decisão carrega os números do plano (item 07)', () => {
+    const p = analyzeProduct({ ...base, unitsSold: 0, currentStock: 12 }, 90);
+    const quadro = buildDecisionCards([p], []);
+    expect(quadro.cards.length).toBeGreaterThan(0);
+    for (const c of quadro.cards) {
+      expect(c.justificativa).toContain('Estoque');
+      expect(c.justificativa).toMatch(/vendeu \d/);
+    }
   });
 });

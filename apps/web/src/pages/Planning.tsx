@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -557,17 +557,50 @@ function ComposicaoDoPedido({ order }: { order: PurchaseOrder }) {
  * diferença entre os dois é a única forma de saber se o motor está ajudando —
  * e ela desaparece se a edição sobrescrever a sugestão.
  */
-function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number }) {
+/**
+ * As quantidades editadas, POR PEDIDO E POR PEÇA — rodada final · item 04.
+ *
+ * O texto é guardado como o comprador digitou (string), e não como número:
+ * `Number('')` é 0, então converter na tecla fazia o campo esvaziado virar
+ * "0" na hora, obrigando a digitar por cima de um zero — e, se ninguém
+ * notasse, a linha saía do pedido calada.
+ *
+ * E o mapa mora em `Planning`, não dentro do card: enquanto morava lá dentro,
+ * qualquer troca de filtro, de janela ou de recorte desmontava o componente e
+ * jogava fora toda edição em silêncio. Quem edita dez linhas e digita uma
+ * letra no campo de busca não pode perder as dez.
+ */
+type EdicoesDeQuantidade = Record<string, string>;
+const chaveDaEdicao = (supplier: string, productId: string) => `${supplier}::${productId}`;
+
+/** O número que vale: texto vazio ou inválido conta como zero, e a tela diz. */
+function quantidadeEfetiva(
+  edicoes: EdicoesDeQuantidade,
+  supplier: string,
+  it: PurchaseOrderItem,
+): number {
+  const t = edicoes[chaveDaEdicao(supplier, it.productId)];
+  if (t === undefined) return it.quantity;
+  const n = Number(t);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
+function PurchaseOrderCard({
+  order,
+  dias,
+  edicoes,
+  setEdicoes,
+}: {
+  order: PurchaseOrder;
+  dias: number;
+  edicoes: EdicoesDeQuantidade;
+  setEdicoes: (f: (m: EdicoesDeQuantidade) => EdicoesDeQuantidade) => void;
+}) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(order.orderByInDays !== null && order.orderByInDays <= 7);
-  /*
-   * Só o que foi EDITADO mora aqui. Um mapa pré-preenchido com todas as
-   * sugestões ficaria velho na primeira invalidação da consulta — a tela
-   * mostraria a quantidade de um plano que o servidor já recalculou. Chave
-   * ausente significa "o comprador não mexeu", e o valor vem do item.
-   */
-  const [efetivas, setEfetivas] = useState<Record<string, number>>({});
-  const efetivaDe = (it: PurchaseOrderItem) => efetivas[it.productId] ?? it.quantity;
+  const efetivaDe = (it: PurchaseOrderItem) => quantidadeEfetiva(edicoes, order.supplier, it);
+  const textoDe = (it: PurchaseOrderItem) =>
+    edicoes[chaveDaEdicao(order.supplier, it.productId)] ?? String(it.quantity);
   const editado = (it: PurchaseOrderItem) => efetivaDe(it) !== it.suggestedQty;
   const itensDoPedido = order.items.map((it) => ({ it, efetiva: efetivaDe(it) }));
   const unidades = itensDoPedido.reduce((a, x) => a + x.efetiva, 0);
@@ -576,6 +609,9 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
   const totalEfetivo =
     Math.round(itensDoPedido.reduce((a, x) => a + x.efetiva * x.it.unitCost, 0) * 100) / 100;
   const houveEdicao = itensDoPedido.some((x) => x.efetiva !== x.it.suggestedQty);
+  // Quantos itens VÃO de fato: linha zerada é a forma de tirar a peça, e o
+  // botão de confirmação precisa dizer isso antes do clique, não depois.
+  const itensQueVao = itensDoPedido.filter((x) => x.efetiva > 0).length;
   // Um rateio aberto por vez: cada um abre uma tabela de 16 linhas, e dois
   // abertos dentro de um pedido de 30 itens viram uma parede. Mesmo critério do
   // plano de recebimento, onde a decisão já tinha sido tomada.
@@ -608,7 +644,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                   genero: it.atributos.genero,
                   formatoLente: it.atributos.formatoLente ?? null,
                   materialArmacao: it.atributos.materialArmacao ?? null,
-                  cor: null,
+                  cor: it.atributos.cor ?? null,
                 },
               }
             : {}),
@@ -683,7 +719,10 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
           icone="exportar"
           onClick={(e) => {
             e.stopPropagation();
-            downloadCsv(`pedido-${slug(order.supplier)}`, orderCsv(order));
+            downloadCsv(
+              `pedido-${slug(order.supplier)}`,
+              orderCsv(order, Object.fromEntries(itensDoPedido.map((x) => [x.it.productId, x.efetiva]))),
+            );
           }}
         >
           Exportar CSV
@@ -691,7 +730,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
         <span onClick={(e) => e.stopPropagation()}>
           <TwoStepButton
             label="Registrar envio"
-            confirmLabel={`Confirmar envio (${formatBRL(totalEfetivo)})`}
+            confirmLabel={`Confirmar envio de ${itensQueVao} ${itensQueVao === 1 ? 'item' : 'itens'} (${formatBRL(totalEfetivo)})`}
             doneLabel="Enviado"
             onConfirm={send}
           />
@@ -712,6 +751,9 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
               <th>Tipo</th>
               <th>Gênero</th>
               <th>Material</th>
+              {/* A VARIANTE (item 04): RB3025 Havana e RB3025 Preto são duas
+                  peças, e sem esta coluna eram duas linhas iguais. */}
+              <th>Cor</th>
               <th>Faixa</th>
               <th className="num">Estoque</th>
               <th className="num">Vendido</th>
@@ -763,6 +805,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                   <td>{it.atributos?.formato ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.genero ?? <span className="muted">—</span>}</td>
                   <td>{it.atributos?.material ?? <span className="muted">—</span>}</td>
+                  <td>{it.atributos?.cor ?? <span className="muted">—</span>}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>{it.faixa.rotulo}</td>
                   <td className="num">{it.currentStock}</td>
                   <td className="num">{it.unitsSold}</td>
@@ -776,12 +819,14 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                         min={0}
                         max={100000}
                         step={1}
-                        value={efetivaDe(it)}
+                        value={textoDe(it)}
                         aria-label={`Quantidade efetiva de ${it.description}`}
-                        onChange={(e) => {
-                          const n = Math.max(0, Math.trunc(Number(e.target.value)));
-                          setEfetivas((m) => ({ ...m, [it.productId]: Number.isFinite(n) ? n : 0 }));
-                        }}
+                        onChange={(e) =>
+                          setEdicoes((m) => ({
+                            ...m,
+                            [chaveDaEdicao(order.supplier, it.productId)]: e.target.value,
+                          }))
+                        }
                         style={{
                           width: 72,
                           textAlign: 'right',
@@ -792,6 +837,11 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                           fontWeight: editado(it) ? 600 : undefined,
                         }}
                       />
+                      {efetivaDe(it) === 0 && (
+                        <Selo tom="gray" icone="limpar" title="Esta linha não vai no pedido">
+                          fora do pedido
+                        </Selo>
+                      )}
                       {editado(it) && (
                         <Botao
                           variante="discreto"
@@ -799,13 +849,17 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                           icone="limpar"
                           title={`Voltar à sugestão do motor (${it.suggestedQty} un.)`}
                           onClick={() =>
-                            setEfetivas((m) => {
-                              const { [it.productId]: _fora, ...resto } = m;
+                            setEdicoes((m) => {
+                              const { [chaveDaEdicao(order.supplier, it.productId)]: _fora, ...resto } = m;
                               return resto;
                             })
                           }
                         >
-                          {''}
+                          {/* Texto acessível, não vazio: um botão só com ícone
+                              e sem nome é um botão que o leitor de tela anuncia
+                              como "botão". O CSS esconde a palavra na largura
+                              da coluna; o nome continua lá. */}
+                          <span className="sr-only">voltar à sugestão</span>
                         </Botao>
                       )}
                     </div>
@@ -852,7 +906,7 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                     justificativa que exige passar o mouse não está na tela de
                     quem decide — está escondida dela. */}
                 <tr>
-                  <td colSpan={16} style={{ paddingTop: 0, borderTop: 'none' }}>
+                  <td colSpan={17} style={{ paddingTop: 0, borderTop: 'none' }}>
                     <span className="hint">{it.justificativa}</span>
                   </td>
                 </tr>
@@ -861,9 +915,9 @@ function PurchaseOrderCard({ order, dias }: { order: PurchaseOrder; dias: number
                     {/* `--panel-2` é o fundo de segundo nível do tema; a linha
                         expandida precisa se destacar da linha do item sem virar
                         um bloco de outra tela. */}
-                    {/* 16 colunas desde a rodada final: faixa de preço,
+                    {/* 17 colunas desde a rodada final: cor, faixa de preço,
                         estoque, vendido, giro e o par sugerida/efetiva. */}
-                    <td colSpan={16} style={{ background: 'var(--panel-2)' }}>
+                    <td colSpan={17} style={{ background: 'var(--panel-2)' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
                         <Selo tom="blue" icone="ideia" title={it.distribution.basisLabel}>
                           por {it.distribution.basis}
@@ -977,7 +1031,10 @@ function MultiSelecao({
   };
   if (opcoes.length === 0) return null;
   return (
-    <details style={{ minWidth: 150 }}>
+    // `position: relative` no próprio <details>: sem um ancestral posicionado,
+    // o painel absoluto se ancorava na janela inteira e ficava parado enquanto
+    // a lista rolava por baixo.
+    <details style={{ minWidth: 150, position: 'relative' }}>
       <summary style={{ cursor: 'pointer', fontSize: 13 }}>
         {rotulo}
         {marcadas.length > 0 && <strong> ({marcadas.length})</strong>}
@@ -1011,6 +1068,42 @@ function MultiSelecao({
   );
 }
 
+/** Input de texto que só propaga a mudança depois de ~350 ms de silêncio. */
+function CampoComEspera({
+  valor,
+  aoMudar,
+  largura,
+  ...resto
+}: {
+  valor: string;
+  aoMudar: (v: string) => void;
+  largura: number;
+  placeholder?: string;
+  'aria-label'?: string;
+}) {
+  const [texto, setTexto] = useState(valor);
+  const externo = useRef(valor);
+  // O valor de fora manda quando ele muda por outra razão (limpar filtros,
+  // link colado, botão voltar) — mas não a cada tecla, senão o cursor pula.
+  useEffect(() => {
+    if (valor !== externo.current) {
+      externo.current = valor;
+      setTexto(valor);
+    }
+  }, [valor]);
+  useEffect(() => {
+    if (texto === externo.current) return;
+    const t = setTimeout(() => {
+      externo.current = texto;
+      aoMudar(texto);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [texto, aoMudar]);
+  return (
+    <input {...resto} value={texto} onChange={(e) => setTexto(e.target.value)} style={{ width: largura }} />
+  );
+}
+
 function FiltrosDeCompra({
   filtros,
   aoMudar,
@@ -1028,19 +1121,23 @@ function FiltrosDeCompra({
   return (
     <div className="card" style={{ padding: 12, marginBottom: 10 }}>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input
+        {/* CAMPO COM ESPERA: o texto responde na hora, a URL e a consulta
+            esperam a pausa. Sem isso, digitar "Ray-Ban" disparava sete
+            recálculos completos do plano de compras no servidor — um por
+            tecla —, cada um esvaziando a tabela no caminho. */}
+        <CampoComEspera
           placeholder="SKU"
           aria-label="Filtrar por SKU"
-          value={filtros.sku ?? ''}
-          onChange={(e) => aoMudar('sku', e.target.value)}
-          style={{ width: 120 }}
+          valor={filtros.sku ?? ''}
+          aoMudar={(v) => aoMudar('sku', v)}
+          largura={120}
         />
-        <input
+        <CampoComEspera
           placeholder="Modelo ou descrição"
           aria-label="Filtrar por modelo"
-          value={filtros.modelo ?? ''}
-          onChange={(e) => aoMudar('modelo', e.target.value)}
-          style={{ width: 200 }}
+          valor={filtros.modelo ?? ''}
+          aoMudar={(v) => aoMudar('modelo', v)}
+          largura={200}
         />
         <MultiSelecao
           rotulo="Marca"
@@ -1164,8 +1261,19 @@ const TOM_DA_SITUACAO: Record<LinhaDoMix['situacao'], EstadoOperacional> = {
 };
 
 /** Duas barras sobrepostas: participação nas vendas × participação no estoque. */
-function BarraDeParidade({ vendas, estoque }: { vendas: number; estoque: number }) {
-  const escala = Math.max(1, vendas, estoque);
+function BarraDeParidade({
+  vendas,
+  estoque,
+  escala,
+}: {
+  vendas: number;
+  estoque: number;
+  /* A ESCALA É COMUM A TODAS AS LINHAS. Calculada por linha, o maior dos dois
+     percentuais virava sempre 100% de largura: o perfil de 18% das vendas e o
+     de 1,2% desenhavam a mesma figura, e a coluna deixava de comparar — que é
+     a única coisa que uma barra faz melhor que o número ao lado. */
+  escala: number;
+}) {
   const larg = (v: number) => `${Math.round((v / escala) * 100)}%`;
   return (
     <div style={{ minWidth: 150 }}>
@@ -1202,8 +1310,25 @@ function ComposicaoDoMix({ params }: { params: Record<string, string | number | 
   });
 
   if (mix.isLoading) return <Loading />;
-  if (mix.isError || !mix.data) return null;
+  if (mix.isError || !mix.data) {
+    // A seção não some: sumir faz "o motor não achou nada" e "a consulta
+    // quebrou" parecerem a mesma coisa — que é exatamente o que esta tela
+    // existe para não fazer.
+    return (
+      <div className="card" style={{ borderLeft: '3px solid var(--ouro)', background: 'var(--panel-2)' }}>
+        <AberturaDeSecao
+          eyebrow="B · Oportunidades de composição"
+          titulo="O que falta no mix, por perfil"
+          descricao="Não foi possível calcular a composição agora."
+        />
+        <Botao variante="discreto" pequeno icone="fluxo" onClick={() => mix.refetch()}>
+          Tentar de novo
+        </Botao>
+      </div>
+    );
+  }
   const m = mix.data;
+  const escalaDasBarras = Math.max(1, ...m.linhas.map((l) => Math.max(l.vendasPct, l.estoquePct)));
   const tomDaLeitura =
     m.cobertura.leitura === 'confiavel' ? 'green' : m.cobertura.leitura === 'parcial' ? 'amber' : 'red';
 
@@ -1280,7 +1405,7 @@ function ComposicaoDoMix({ params }: { params: Record<string, string | number | 
                   <tr>
                     <td>{l.rotulo}</td>
                     <td>
-                      <BarraDeParidade vendas={l.vendasPct} estoque={l.estoquePct} />
+                      <BarraDeParidade vendas={l.vendasPct} estoque={l.estoquePct} escala={escalaDasBarras} />
                     </td>
                     <td className="num">{l.skus}</td>
                     <td className="num">{l.unitsSold.toLocaleString('pt-BR')}</td>
@@ -2595,6 +2720,14 @@ export function Planning() {
    */
   const [searchParams, setSearchParams] = useSearchParams();
   const filtros = filtrosDaUrl(searchParams);
+  /*
+   * AS QUANTIDADES EDITADAS VIVEM AQUI (rodada final · item 04), e não dentro
+   * do card: trocar um filtro, a janela ou o recorte remonta os cards, e com o
+   * estado lá dentro toda edição sumia sem aviso. Chave por fornecedor + peça,
+   * porque a mesma peça pode aparecer em dois pedidos de fornecedores
+   * diferentes e as duas edições são independentes.
+   */
+  const [edicoes, setEdicoes] = useState<EdicoesDeQuantidade>({});
   const mudarFiltro = (chave: ChaveDeFiltro, valor: string) => {
     const proximo = new URLSearchParams(searchParams);
     if (valor) proximo.set(chave, valor);
@@ -2835,7 +2968,21 @@ export function Planning() {
                 variante="discreto"
                 pequeno
                 icone="exportar"
-                onClick={() => downloadCsv('pedidos-fornecedores', orders.data!.orders.map(orderCsv).join('\n\n'))}
+                onClick={() =>
+                  downloadCsv(
+                    'pedidos-fornecedores',
+                    orders
+                      .data!.orders.map((o) =>
+                        orderCsv(
+                          o,
+                          Object.fromEntries(
+                            o.items.map((it) => [it.productId, quantidadeEfetiva(edicoes, o.supplier, it)]),
+                          ),
+                        ),
+                      )
+                      .join('\n\n'),
+                  )
+                }
               >
                 Exportar tudo (CSV)
               </Botao>
@@ -2900,7 +3047,13 @@ export function Planning() {
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {orders.data!.orders.map((o) => (
-                <PurchaseOrderCard key={o.supplier} order={o} dias={orders.data!.days} />
+                <PurchaseOrderCard
+                  key={o.supplier}
+                  order={o}
+                  dias={orders.data!.days}
+                  edicoes={edicoes}
+                  setEdicoes={setEdicoes}
+                />
               ))}
             </div>
           </>

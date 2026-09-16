@@ -20,6 +20,8 @@ import {
   buildPurchaseOrders,
   comporMixPorPerfil,
   faixaDePreco,
+  rotuloDoFormato,
+  rotuloDoMaterial,
   filtrarPedidos,
   filtroVazio,
   normGenero,
@@ -714,6 +716,7 @@ async function fichasDoFornecedor(
       genero: l.genero,
       formato: l.formato,
       material: l.material,
+      cor: l.cor,
       formatoLente: l.formatoLente as AtributosDaPeca['formatoLente'],
       materialArmacao: l.materialArmacao as AtributosDaPeca['materialArmacao'],
       tamanhoLente: l.tamanhoLente,
@@ -741,6 +744,7 @@ async function buscarFichas(ids: string[]) {
     genero: true,
     formato: true,
     material: true,
+    cor: true,
     formatoLente: true,
     materialArmacao: true,
     tamanhoLente: true,
@@ -751,7 +755,12 @@ async function buscarFichas(ids: string[]) {
     const parte = await prisma.productAttribute.findMany({
       where: {
         productId: { in: ids.slice(i, i + LOTE_DE_FICHAS) },
-        OR: [{ cadastroEm: { not: null } }, { erpEm: { not: null } }],
+        // AS TRÊS PROCEDÊNCIAS. Era só ficha e ERP, e a peça classificada a
+        // partir da DESCRIÇÃO — que é justamente a que não tem nenhuma das
+        // duas — ficava fora: o padronizador gravava, o `/health` contava, e
+        // a composição do mix nunca via. O pipeline inteiro do item 03 parava
+        // um passo antes de chegar à tela.
+        OR: [{ cadastroEm: { not: null } }, { erpEm: { not: null } }, { padronizadoEm: { not: null } }],
       },
       select,
     });
@@ -1026,7 +1035,16 @@ async function detalharPlanoContinuo(
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
       tipo: p.category,
       genero: f?.genero ?? null,
-      formato: f?.formato ?? null,
+      /*
+       * O FORMATO DO CANDIDATO É A LISTA FECHADA quando ela existe (rodada
+       * final · item 03), com o texto da ficha como reserva declarada para a
+       * peça ainda não classificada. Enquanto o perfil era montado por texto,
+       * "Cat eye" e "Gatinho" eram dois formatos diferentes para o motor: a
+       * evidência da rede saía dividida em dois e o lançamento herdava metade
+       * do peso que merecia.
+       */
+      formato: f?.formatoLente ? rotuloDoFormato(f.formatoLente) : (f?.formato ?? null),
+      material: f?.materialArmacao ? rotuloDoMaterial(f.materialArmacao) : (f?.material ?? null),
       cor: null,
       unitCost: p.unitCost,
       unitPrice: p.unitPrice,

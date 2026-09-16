@@ -2077,10 +2077,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       );
       if (idx === -1) return { __status: 401, error: 'E-mail ou senha inválidos.' };
       currentUser = accountUsers[idx];
-      return { token: 'demo-token', user: currentUser };
+      return { token: 'demo-token', user: { ...currentUser, preferences: lerPreferenciasDemo() } };
     }
     currentUser = ADMIN_USER;
-    return { token: 'demo-token', user: currentUser };
+    return { token: 'demo-token', user: { ...currentUser, preferences: lerPreferenciasDemo() } };
   }
   if (url === '/auth/me') return { ...currentUser, preferences: lerPreferenciasDemo() };
   if (url === '/auth/preferences' && m === 'PATCH') {
@@ -2678,6 +2678,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         genero: at.generoTexto,
         formato: at.formatoTexto,
         material: at.materialTexto,
+        cor: at.cor,
         formatoLente: at.formatoLente,
         materialArmacao: at.materialArmacao,
         tamanhoLente: at.dimensoes.tamanhoLente,
@@ -2748,6 +2749,7 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
         genero: at.generoTexto,
         formato: at.formatoTexto,
         material: at.materialTexto,
+        cor: at.cor,
         formatoLente: at.formatoLente,
         materialArmacao: at.materialArmacao,
         tamanhoLente: at.dimensoes.tamanhoLente,

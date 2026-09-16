@@ -3239,3 +3239,18 @@ td .codigo {
     grid-template-rows: none;
   }
 }
+
+/* Texto só para leitor de tela: o botão de "voltar à sugestão" é um ícone
+   dentro de uma coluna estreita, e um botão sem nome é anunciado como
+   "botão". A palavra existe, só não ocupa pixel. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

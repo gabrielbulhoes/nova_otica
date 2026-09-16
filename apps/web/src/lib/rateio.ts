@@ -51,7 +51,17 @@ export const slug = (s: string) =>
  * coluna, o total de cada item continua sendo o total do item, e a divisão
  * viaja junto para quem for receber a mercadoria.
  */
-export function orderCsv(order: PurchaseOrder): string {
+/**
+ * O CSV DO PEDIDO — o arquivo que vai ao fornecedor.
+ *
+ * `efetivas` é o mapa de quantidades editadas na tela (rodada final · item 04).
+ * Sem ele, o comprador zerava uma linha, via o cabeçalho do card cair de
+ * R$ 39.851 para R$ 3.534 e exportava um arquivo com a peça zerada dentro, no
+ * total antigo: a tela dizia uma coisa e o arquivo, outra. As duas quantidades
+ * saem no arquivo, lado a lado, pelo mesmo motivo que saem na tela.
+ */
+export function orderCsv(order: PurchaseOrder, efetivas: Record<string, number> = {}): string {
+  const efetivaDe = (it: PurchaseOrder['items'][number]) => efetivas[it.productId] ?? it.quantity;
   type Row = Record<string, number | string>;
   // As colunas de loja saem da união das lojas citadas em qualquer item — um
   // item pode não ter linha para uma loja (falta zero), e a coluna precisa
@@ -86,9 +96,14 @@ export function orderCsv(order: PurchaseOrder): string {
     tipo: it.atributos?.formato ?? '',
     genero: it.atributos?.genero ?? '',
     material: it.atributos?.material ?? '',
-    quantidade: it.quantity,
+    cor: it.atributos?.cor ?? '',
+    sku: it.sku ?? '',
+    // SUGERIDA e EFETIVA lado a lado: o fornecedor precisa da segunda, e a
+    // primeira é o que torna a diferença auditável meses depois.
+    sugerida: it.suggestedQty,
+    quantidade: efetivaDe(it),
     custoUnit: it.unitCost.toFixed(2).replace('.', ','),
-    total: it.total.toFixed(2).replace('.', ','),
+    total: (efetivaDe(it) * it.unitCost).toFixed(2).replace('.', ','),
     pedirAte: it.orderByInDays === null ? '' : it.orderByInDays === 0 ? 'hoje' : deadlineDate(it.orderByInDays),
     prazoEntregaDias: order.leadTimeDays,
     baseDoRateio: it.distribution?.basis ?? 'não calculado',
@@ -100,9 +115,15 @@ export function orderCsv(order: PurchaseOrder): string {
     marca: '',
     produto: 'TOTAL DO PEDIDO',
     categoria: '',
-    quantidade: order.units,
+    cor: '',
+    sku: '',
+    sugerida: order.items.reduce((a, it) => a + it.suggestedQty, 0),
+    quantidade: order.items.reduce((a, it) => a + efetivaDe(it), 0),
     custoUnit: '',
-    total: order.total.toFixed(2).replace('.', ','),
+    total: order.items
+      .reduce((a, it) => a + efetivaDe(it) * it.unitCost, 0)
+      .toFixed(2)
+      .replace('.', ','),
     pedirAte: order.orderByInDays === null ? '' : order.orderByInDays === 0 ? 'hoje' : deadlineDate(order.orderByInDays),
     prazoEntregaDias: order.leadTimeDays,
     baseDoRateio: '',
@@ -128,8 +149,14 @@ export function orderCsv(order: PurchaseOrder): string {
   return toCsv(rows, [
     { key: 'fornecedor', label: 'Fornecedor' },
     { key: 'marca', label: 'Marca' },
+    { key: 'sku', label: 'SKU' },
     { key: 'produto', label: 'Produto' },
     { key: 'categoria', label: 'Categoria' },
+    { key: 'cor', label: 'Cor' },
+    // SUGERIDA e EFETIVA lado a lado (rodada final · item 04): o fornecedor
+    // precisa da segunda, e a primeira é o que torna a diferença auditável
+    // meses depois — a mesma razão pela qual as duas estão na tela.
+    { key: 'sugerida', label: 'Sugerida (un.)' },
     { key: 'quantidade', label: 'Quantidade' },
     { key: 'custoUnit', label: 'Custo unit. (R$)' },
     { key: 'total', label: 'Total (R$)' },

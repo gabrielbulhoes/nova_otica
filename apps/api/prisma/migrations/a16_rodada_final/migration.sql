@@ -26,7 +26,11 @@ ALTER TABLE "ProductAttribute"
     ADD COLUMN "fonteMaterial"   TEXT,
     -- Quando a sincronização com o ERP escreveu aqui pela última vez. Separado
     -- de `cadastroEm` (ficha do fornecedor) porque são fontes distintas.
-    ADD COLUMN "erpEm"           TIMESTAMP(3);
+    ADD COLUMN "erpEm"           TIMESTAMP(3),
+    -- Quando o padronizador classificou a peça. A classificação lida da
+    -- DESCRIÇÃO não tem ficha nem cadastro do ERP por trás; sem marca própria
+    -- ela ficava gravada e fora de toda leitura que filtra por procedência.
+    ADD COLUMN "padronizadoEm"   TIMESTAMP(3);
 
 -- O perfil que compõe o mix agrupa por estes dois campos; a tela de compras
 -- filtra por eles.

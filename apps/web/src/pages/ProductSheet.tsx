@@ -326,18 +326,28 @@ export function ProductSheet() {
         )}
       </Secao>
 
-      {f.imagem.url && (
-        <Secao titulo="Imagem">
-          <img
-            src={f.imagem.url}
-            alt={`Foto de ${f.identificacao.modelo}`}
-            style={{ maxWidth: 320, borderRadius: 4, border: '1px solid var(--linha)' }}
-          />
-          <p className="hint" style={{ marginTop: 6 }}>
-            Origem: {f.imagem.fonte === 'ficha' ? 'ficha do fornecedor' : 'acervo do provador virtual'}.
+      {/* A seção aparece SEMPRE — é a mesma regra dos campos: peça sem foto
+          precisa dizer que não tem foto, senão "esta peça não tem imagem
+          cadastrada" e "esta ficha não mostra imagem" viram a mesma coisa. */}
+      <Secao titulo="Imagem">
+        {f.imagem.url ? (
+          <>
+            <img
+              src={f.imagem.url}
+              alt={`Foto de ${f.identificacao.modelo}`}
+              style={{ maxWidth: 320, borderRadius: 4, border: '1px solid var(--linha)' }}
+            />
+            <p className="hint" style={{ marginTop: 6 }}>
+              Origem: {f.imagem.fonte === 'ficha' ? 'ficha do fornecedor' : 'acervo do provador virtual'}.
+            </p>
+          </>
+        ) : (
+          <p className="hint" style={{ margin: 0 }}>
+            {traco} Sem foto cadastrada — ela chega pela ficha do fornecedor (campo de imagem) ou pelo
+            acervo do provador virtual.
           </p>
-        </Secao>
-      )}
+        )}
+      </Secao>
     </>
   );
 }

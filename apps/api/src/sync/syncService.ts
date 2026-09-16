@@ -670,26 +670,40 @@ async function gravarAtributosDoErp(rows: unknown[]): Promise<{ lidos: number; g
     // As chaves padronizadas: só para peça de moda, e pela regra de precedência.
     const padronizado: Record<string, unknown> = {};
     if (ehPecaDeModa(produto.category)) {
-      const { formatoLente, materialArmacao } = classificarTextos(
-        a.formato ?? atual?.formato ?? null,
-        a.material ?? atual?.material ?? null,
-      );
+      /*
+       * CLASSIFICA A PARTIR DO TEXTO DE MAIOR PRECEDÊNCIA.
+       *
+       * Era `a.formato ?? atual?.formato`, que prefere o texto recém-chegado
+       * do ERP ao texto que a ficha do fornecedor já tinha gravado — o inverso
+       * da regra declarada (ficha > erp). Numa linha antiga com ficha e sem
+       * classificação, a primeira sincronização classificaria pelo texto do
+       * ERP e carimbaria fonte `erp` sobre o que era ficha.
+       */
+      const temFicha = atual?.cadastroEm != null;
+      const textoFormato = (temFicha ? atual?.formato : null) ?? a.formato ?? atual?.formato ?? null;
+      const textoMaterial = (temFicha ? atual?.material : null) ?? a.material ?? atual?.material ?? null;
+      const fonteDoFormato: 'ficha' | 'erp' = temFicha && atual?.formato ? 'ficha' : 'erp';
+      const fonteDoMaterial: 'ficha' | 'erp' = temFicha && atual?.material ? 'ficha' : 'erp';
+      const { formatoLente, materialArmacao } = classificarTextos(textoFormato, textoMaterial);
       if (
         formatoLente &&
-        devoGravar({ valor: atual?.formatoLente ?? null, fonte: atual?.fonteFormato ?? null }, { valor: formatoLente, fonte: 'erp' })
+        devoGravar(
+          { valor: atual?.formatoLente ?? null, fonte: atual?.fonteFormato ?? null },
+          { valor: formatoLente, fonte: fonteDoFormato },
+        )
       ) {
         padronizado.formatoLente = formatoLente;
-        padronizado.fonteFormato = 'erp';
+        padronizado.fonteFormato = fonteDoFormato;
       }
       if (
         materialArmacao &&
         devoGravar(
           { valor: atual?.materialArmacao ?? null, fonte: atual?.fonteMaterial ?? null },
-          { valor: materialArmacao, fonte: 'erp' },
+          { valor: materialArmacao, fonte: fonteDoMaterial },
         )
       ) {
         padronizado.materialArmacao = materialArmacao;
-        padronizado.fonteMaterial = 'erp';
+        padronizado.fonteMaterial = fonteDoMaterial;
       }
     }
 

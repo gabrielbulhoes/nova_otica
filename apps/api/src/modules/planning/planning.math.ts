@@ -1371,6 +1371,14 @@ export interface RebalanceSuggestion {
   reason: string;
   /** Explicação curta e amigável do porquê transferir. */
   friendlyReason: string;
+  /**
+   * OS NÚMEROS DAS DUAS PONTAS (rodada final · item 07). "Toda recomendação
+   * deve trazer justificativa mínima: estoque, vendas, giro" — e a frente de
+   * remanejamento é a que ABRE a tela de compras, com uma recomendação por
+   * linha. `reason` conta a história em cobertura; esta põe estoque, venda e
+   * giro de origem e destino na mesa, na mesma régua da lista de compras.
+   */
+  justificativa: string;
   /** Confiabilidade da sugestão (0–100): giro do destino e sobra na origem. */
   confidence: number;
 }
@@ -1602,6 +1610,23 @@ export function buildRebalance(
           stockoutInDays: stockout,
           reason: `Vende em ${receiver.storeName} (${fmtCover(receiver.coverage)}) e está ${donorSide}.`,
           friendlyReason: friendly,
+          justificativa:
+            `${toShort}: ` +
+            justificativaMinima({
+              currentStock: receiver.stock,
+              unitsSold: Math.round(receiver.dailyDemand * days),
+              days,
+              dailyDemand: receiver.dailyDemand,
+              coverageDays: receiver.coverage,
+            }) +
+            ` ${fromShort}: ` +
+            justificativaMinima({
+              currentStock: donor.stock,
+              unitsSold: Math.round(donor.dailyDemand * days),
+              days,
+              dailyDemand: donor.dailyDemand,
+              coverageDays: donor.coverage,
+            }),
           confidence: conf,
         };
         out.push(sug);
@@ -1659,6 +1684,13 @@ export interface PurchaseOrderItem {
   description: string;
   /** Marca real do produto (extraída da descrição), para exibir no pedido. */
   brand: string | null;
+  /**
+   * A grife de ANÁLISE — `extractBrand` com o fornecedor do ERP como reserva.
+   * É por ela que o filtro de marca casa (rodada final · item 08): `brand`
+   * fica `null` em toda peça sem grife reconhecível, e o seletor da tela é
+   * montado com esta régua. Sem o par, a marca oferecida devolvia zero item.
+   */
+  grifeDeAnalise: string | null;
   category: string | null;
   /**
    * A quantidade EFETIVA — a que vai no pedido. Nasce igual a `suggestedQty`
@@ -1729,6 +1761,13 @@ export interface AtributosDaPeca {
   /** Retangular, Quadrado, Gatinho, Phantos… — o "tipo de óculos" do feedback. */
   formato: string | null;
   material: string | null;
+  /**
+   * A VARIANTE (rodada final · item 04): "marca, modelo, SKU, variante/cor".
+   * RB3025 Havana e RB3025 Preto são peças diferentes, e sem a cor na linha
+   * do pedido elas aparecem como duas linhas idênticas — o comprador não sabe
+   * qual das duas está pedindo.
+   */
+  cor?: string | null;
   /**
    * As versões PADRONIZADAS (rodada final · item 03) — a lista fechada do
    * cliente. É por elas que o motor agrupa; `formato` e `material` acima são
@@ -1854,6 +1893,93 @@ const NO_SUPPLIER = 'Sem fornecedor';
  * real do produto (extraída da descrição), então dentro do pedido de um
  * fornecedor as várias marcas aparecem. Fornecedores mais urgentes primeiro.
  */
+/**
+ * RECALCULA TUDO O QUE DEPENDE DA LISTA DE ITENS de um pedido.
+ *
+ * Saiu de dentro de `buildPurchaseOrders` porque `filtrarPedidos` precisa da
+ * MESMA conta. Enquanto ela morava lá, um pedido filtrado refazia `units` e
+ * `total` e mantinha a quebra por grife, a quebra por tipo, a contagem de
+ * itens com ficha, a confiança e os prazos do pedido INTEIRO: o card mostrava
+ * "OAKLEY: 34 un." num pedido cuja lista, logo acima, não tinha nenhuma
+ * Oakley. É o mesmo defeito que o texto de `filtrarPedidos` diz estar
+ * evitando, um nível abaixo.
+ */
+function enriquecerPedido(o: PurchaseOrder): void {
+  const grifes = new Map<string, QuantidadePorGrife>();
+  const formatos = new Map<string, number>();
+  o.itensComFicha = 0;
+  for (const i of o.items) {
+    // `SEM GRIFE` e não o fornecedor: o pedido JÁ está agrupado por
+    // fornecedor, e repetir o cabeçalho aqui faria "Luxottica" aparecer como
+    // se fosse uma grife ao lado de Ray-Ban e Oakley.
+    const chave = i.brand ?? 'Sem grife';
+    const g = grifes.get(chave) ?? { brand: chave, items: 0, units: 0, total: 0 };
+    g.items += 1;
+    g.units += i.quantity;
+    g.total = round2(g.total + i.total);
+    grifes.set(chave, g);
+
+    if (i.atributos) o.itensComFicha += 1;
+    /*
+     * A QUEBRA POR TIPO USA A LISTA FECHADA (rodada final · item 03), não o
+     * texto do fornecedor. Agrupando por texto, três peças classificadas como
+     * GATINHO e escritas "Cat-Eye", "gatinho" e "CAT EYE" viravam três selos
+     * de 27 unidades em vez de um de 81 — e o cliente pediu explicitamente
+     * "nunca texto livre".
+     *
+     * Só quem TEM classificação entra, e `NAO_IDENTIFICADO` fica fora: um
+     * balde com metade do pedido dentro não informa e ainda sugere que o
+     * resto foi classificado. A tela declara a cobertura ao lado.
+     */
+    // A chave gravada quando existe; senão, o texto normalizado na hora — uma
+    // peça com ficha e ainda não passada pelo padronizador não pode sumir da
+    // quebra, e normalizar aqui usa exatamente a mesma régua da lista fechada.
+    const chaveDoFormato = i.atributos?.formatoLente ?? normFormatoLente(i.atributos?.formato ?? null);
+    if (chaveDoFormato && chaveDoFormato !== NAO_IDENTIFICADO) {
+      const rotulo = rotuloDoFormato(chaveDoFormato);
+      formatos.set(rotulo, (formatos.get(rotulo) ?? 0) + i.quantity);
+    }
+  }
+  o.porGrife = [...grifes.values()].sort(
+    (a, b) => b.total - a.total || a.brand.localeCompare(b.brand, 'pt-BR'),
+  );
+  o.porFormato = [...formatos.entries()]
+    .map(([formato, units]) => ({ formato, units }))
+    .sort((a, b) => b.units - a.units || a.formato.localeCompare(b.formato, 'pt-BR'));
+
+  // Confiança do PEDIDO: média das confianças dos itens ponderada pelo
+  // capital. Pedido sem valor nenhum (tudo a custo zero) cai na média
+  // simples, para não virar 0 por divisão vazia e afundar na ordenação por
+  // um defeito de cadastro de custo.
+  const capital = o.items.reduce((a, i) => a + i.total, 0);
+  o.confidence =
+    capital > 0
+      ? Math.round(o.items.reduce((a, i) => a + i.confidence * i.total, 0) / capital)
+      : o.items.length > 0
+        ? Math.round(o.items.reduce((a, i) => a + i.confidence, 0) / o.items.length)
+        : 0;
+
+  // Os prazos do pedido são os do item mais urgente que RESTOU. Mantê-los do
+  // conjunto original faria um pedido filtrado dizer "enviar hoje" por causa
+  // de uma peça que não está mais nele — e é por eles que os cards são
+  // ordenados.
+  o.orderByInDays = o.items.reduce<number | null>(
+    (m, i) => (i.orderByInDays === null ? m : m === null ? i.orderByInDays : Math.min(m, i.orderByInDays)),
+    null,
+  );
+  o.stockoutInDays = o.items.reduce<number | null>(
+    (m, i) => (i.stockoutInDays === null ? m : m === null ? i.stockoutInDays : Math.min(m, i.stockoutInDays)),
+    null,
+  );
+
+  o.items.sort(
+    (a, b) =>
+      b.confidence - a.confidence ||
+      (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) ||
+      b.total - a.total,
+  );
+}
+
 export function buildPurchaseOrders(
   plans: ProductPlan[],
   days: number,
@@ -1919,8 +2045,35 @@ export function buildPurchaseOrders(
     // fornecedor. Cair no fornecedor como reserva repetiria o cabeçalho
     // dentro da própria linha, como se "ZEISS" fosse a grife de uma lente
     // ZEISS. Sem grife reconhecível, melhor não etiquetar.
+    /*
+     * A MARCA DO ITEM É A MESMA RÉGUA DO FILTRO — rodada final.
+     *
+     * Era `extractBrand`, que devolve `null` para toda peça sem grife
+     * reconhecível na descrição (lente, tratamento, serviço, "ARMACAO 5024").
+     * O seletor de marcas da tela, porém, é montado com `analysisBrand`, que
+     * cai no campo do ERP nesse caso. Resultado medido pela revisão: o filtro
+     * OFERECIA a razão social do fornecedor e, escolhida, devolvia zero item —
+     * o comprador conclui que a rede não tem aquela marca, quando o que houve
+     * foi duas réguas comparando coisas diferentes. É a sétima vez que este
+     * produto tropeça em dois vocabulários tratados como um.
+     *
+     * `brands` (a etiqueta de grifes do cabeçalho) continua saindo de
+     * `extractBrand`: ali a reserva repetiria "ZEISS" como grife de uma lente
+     * ZEISS, que é o defeito que aquela escolha evita.
+     */
     const productBrand = extractBrand(p.description, p.category);
     if (productBrand && !order.brands.includes(productBrand)) order.brands.push(productBrand);
+    /*
+     * A GRIFE DE ANÁLISE — a régua que o FILTRO usa (rodada final · item 08).
+     *
+     * `brand` continua sendo `extractBrand`: é a etiqueta do pedido, e a
+     * reserva do fornecedor repetiria "ZEISS" como se fosse a grife de uma
+     * lente ZEISS (há teste guardando isso). Mas o seletor de marcas da tela é
+     * montado com `analysisBrand`, que TEM essa reserva — e filtrar por uma
+     * marca oferecida devolvia zero item, porque os dois lados comparavam
+     * coisas diferentes. Guardar as duas resolve sem escolher entre elas.
+     */
+    const grifeDeAnalise = analysisBrand(p.description, p.category, p.brand);
 
     // O rateio usa a MESMA janela `days` das vendas do plano: a necessidade é
     // alvo de cobertura menos estoque, e o alvo sai da demanda diária — que só
@@ -1943,6 +2096,7 @@ export function buildPurchaseOrders(
       sku: p.sku ?? null,
       description: p.description,
       brand: productBrand,
+      grifeDeAnalise,
       category: p.category,
       quantity: p.suggestedQty,
       suggestedQty: p.suggestedQty,
@@ -2011,51 +2165,7 @@ export function buildPurchaseOrders(
      * Duas quebras, e as duas saem dos itens que já estão na mão: nenhuma
      * consulta nova, nenhum laço a mais sobre os planos.
      */
-    const grifes = new Map<string, QuantidadePorGrife>();
-    const formatos = new Map<string, number>();
-    for (const i of o.items) {
-      // `SEM GRIFE` e não o fornecedor: o pedido JÁ está agrupado por
-      // fornecedor, e repetir o cabeçalho aqui faria "Luxottica" aparecer como
-      // se fosse uma grife ao lado de Ray-Ban e Oakley.
-      const chave = i.brand ?? 'Sem grife';
-      const g = grifes.get(chave) ?? { brand: chave, items: 0, units: 0, total: 0 };
-      g.items += 1;
-      g.units += i.quantity;
-      g.total = round2(g.total + i.total);
-      grifes.set(chave, g);
-
-      if (i.atributos) o.itensComFicha += 1;
-      // Só quem TEM formato entra. Peça sem ficha não vira "outros": um balde
-      // com metade do pedido dentro não informa e ainda sugere que o resto foi
-      // classificado.
-      if (i.atributos?.formato) {
-        formatos.set(i.atributos.formato, (formatos.get(i.atributos.formato) ?? 0) + i.quantity);
-      }
-    }
-    o.porGrife = [...grifes.values()].sort(
-      (a, b) => b.total - a.total || a.brand.localeCompare(b.brand, 'pt-BR'),
-    );
-    o.porFormato = [...formatos.entries()]
-      .map(([formato, units]) => ({ formato, units }))
-      .sort((a, b) => b.units - a.units || a.formato.localeCompare(b.formato, 'pt-BR'));
-
-    // Confiança do PEDIDO: média das confianças dos itens ponderada pelo
-    // capital. Pedido sem valor nenhum (tudo a custo zero) cai na média
-    // simples, para não virar 0 por divisão vazia e afundar na ordenação por
-    // um defeito de cadastro de custo.
-    const capital = o.items.reduce((a, i) => a + i.total, 0);
-    o.confidence =
-      capital > 0
-        ? Math.round(o.items.reduce((a, i) => a + i.confidence * i.total, 0) / capital)
-        : o.items.length > 0
-          ? Math.round(o.items.reduce((a, i) => a + i.confidence, 0) / o.items.length)
-          : 0;
-    o.items.sort(
-      (a, b) =>
-        b.confidence - a.confidence ||
-        (a.stockoutInDays ?? 1e9) - (b.stockoutInDays ?? 1e9) ||
-        b.total - a.total,
-    );
+    enriquecerPedido(o);
   }
   orders.sort(
     (a, b) =>
@@ -2603,6 +2713,13 @@ export interface DecisionCard {
   quantity: number | null;
   /** Explicação curta e amigável do porquê. */
   reason: string;
+  /**
+   * OS NÚMEROS POR TRÁS DO CARD (rodada final · item 07): estoque, vendas e
+   * giro. `reason` diz o que fazer em português; esta diz com base em quê. A
+   * Central de Decisões é a principal superfície de recomendação da
+   * plataforma, e ficar de fora dela era deixar o item 07 pela metade.
+   */
+  justificativa: string;
   confidence: number;
   /** Impacto financeiro do card em R$ (custo do pedido ou capital a liberar). */
   impact: number;
@@ -3469,6 +3586,7 @@ export function buildDecisionCards(
         target: `Fornecedor: ${p.brand ?? '—'}`,
         quantity: p.suggestedQty,
         reason: p.friendlyReason,
+        justificativa: p.justificativa,
         confidence: p.confidence,
         impact: round2(p.capital),
         impactLabel: 'Custo do pedido',
@@ -3543,6 +3661,7 @@ export function buildDecisionCards(
         target: marca ?? 'Excesso na rede',
         quantity: p.currentStock,
         reason: p.friendlyReason,
+        justificativa: p.justificativa,
         confidence: p.confidence,
         impact: round2(p.stockValue),
         impactLabel: 'Capital a liberar',
@@ -3579,6 +3698,7 @@ export function buildDecisionCards(
       toStoreId: s.toStoreId,
       quantity: s.quantity,
       reason: s.friendlyReason,
+      justificativa: s.justificativa,
       confidence: s.confidence,
       impact: 0,
       impactLabel: 'Giro (sem capital)',
@@ -4173,6 +4293,14 @@ export function repartirComTeto(
   tieBreak?: (i: number, j: number) => number,
 ): { cotas: number[]; naoAlocado: number } {
   const alvo = Math.max(0, Math.trunc(meta));
+  // PESO NENHUM É UM CASO DE VERDADE, e sem esta guarda a meta evaporava:
+  // `largestRemainders` devolve tudo zero quando a soma dos pesos é zero, o
+  // laço abaixo não vê excedente, e a função devolvia `naoAlocado: 0` para uma
+  // meta de 30 — trinta unidades sumindo sem aparecer em lugar nenhum, que é o
+  // oposto do que o texto acima promete.
+  if (!pesos.some((w) => Number.isFinite(w) && w > 0)) {
+    return { cotas: pesos.map(() => 0), naoAlocado: alvo };
+  }
   let cotas = largestRemainders(pesos, alvo, tieBreak);
   let naoAlocado = 0;
   for (let volta = 0; volta < 12; volta += 1) {
@@ -4561,6 +4689,18 @@ export function normMaterialArmacao(texto: string | null | undefined): MaterialA
   if (achados.size > 1 && achados.has('METAL')) {
     for (const m of ['TITANIO', 'ACO_INOX', 'ALUMINIO'] as const) if (achados.has(m)) achados.delete('METAL');
   }
+  /*
+   * INJETADO É PROCESSO, NÃO BASE. "Nylon injetado" e "acetato injetado"
+   * dizem de que material é a peça E como ela foi feita — casar os dois e
+   * concluir COMBINADO inventa uma armação de duas bases que não existe.
+   * Medido pela revisão em três grafias reais de planilha.
+   */
+  if (achados.size > 1 && achados.has('INJETADO')) {
+    for (const m of ['NYLON', 'ACETATO', 'TR90'] as const) if (achados.has(m)) achados.delete('INJETADO');
+  }
+  // TR90 é uma poliamida — um nome comercial de nylon. "Grilamid TR90" é um
+  // material só, escrito com a família e a marca.
+  if (achados.has('TR90')) achados.delete('NYLON');
   if (achados.size > 1) return 'COMBINADO';
   if (achados.size === 1) return [...achados][0];
   return /\boutr[ao]s?\b|\bother\b/.test(t) ? 'OUTROS' : NAO_IDENTIFICADO;
@@ -4667,6 +4807,7 @@ export interface LinhaFiltravel {
   sku?: string | null;
   description: string;
   brand: string | null;
+  grifeDeAnalise?: string | null;
   category: string | null;
   unitPrice: number;
   currentStock: number;
@@ -4685,7 +4826,9 @@ const emLista = (valor: string | null | undefined, lista: string[]) => {
 };
 
 export function passaNoFiltro(linha: LinhaFiltravel, f: FiltroDeSugestoes): boolean {
-  if (f.marca?.length && !emLista(linha.brand, f.marca)) return false;
+  // Casa contra as DUAS réguas: a etiqueta e a grife de análise. A tela
+  // oferece a segunda; pedidos antigos e itens de teste só têm a primeira.
+  if (f.marca?.length && !emLista(linha.brand, f.marca) && !emLista(linha.grifeDeAnalise, f.marca)) return false;
   if (f.sku && !contemTexto(linha.sku, f.sku)) return false;
   if (f.modelo && !contemTexto(linha.description, f.modelo)) return false;
   if (f.categoria?.length && !emLista(linha.category, f.categoria)) return false;
@@ -4719,6 +4862,7 @@ export function filtrarPedidos(plan: PurchaseOrdersPlan, f: FiltroDeSugestoes | 
             sku: it.sku,
             description: it.description,
             brand: it.brand,
+            grifeDeAnalise: it.grifeDeAnalise,
             category: it.category,
             unitPrice: it.unitPrice,
             currentStock: it.currentStock,
@@ -4729,13 +4873,19 @@ export function filtrarPedidos(plan: PurchaseOrdersPlan, f: FiltroDeSugestoes | 
         ),
       );
       if (items.length === 0) return null;
-      return {
+      // Reenriquecer, e não só refazer units/total: a quebra por grife, a
+      // quebra por tipo, a contagem de itens com ficha, a confiança e os
+      // prazos são todos do CONJUNTO, e um pedido filtrado com os números do
+      // conjunto inteiro descreve um pedido que não existe.
+      const filtrado: PurchaseOrder = {
         ...o,
         items,
         units: items.reduce((a, it) => a + it.quantity, 0),
         total: round2(items.reduce((a, it) => a + it.total, 0)),
         brands: [...new Set(items.map((it) => it.brand).filter((b): b is string => !!b))],
       };
+      enriquecerPedido(filtrado);
+      return filtrado;
     })
     .filter((o): o is PurchaseOrder => o !== null);
   return {

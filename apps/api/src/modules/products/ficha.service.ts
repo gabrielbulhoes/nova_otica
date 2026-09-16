@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { salePlannedWhere } from '../stores/store.scope.js';
 import {
   analysisBrand,
   familiaDePeca,
@@ -213,14 +214,18 @@ export async function fichaTecnica(
     Promise.all(
       [30, 90, 365].map(async (dias) => {
         const r = await prisma.saleItem.aggregate({
-          where: { productId, sale: { saleDate: { gte: diasAtras(dias) } } },
+          // O MESMO RECORTE DE LOJAS DO RESTO DO MOTOR. Sem ele, a ficha somava
+          // venda de filial em outro ERP e de retaguarda — lojas que
+          // `plans()` exclui — e a mesma peça aparecia com 61 unidades aqui e
+          // 47 na lista de compras, sem nada na tela explicando a diferença.
+          where: { productId, sale: { saleDate: { gte: diasAtras(dias) }, ...salePlannedWhere } },
           _sum: { quantity: true, total: true },
         });
         return { dias, unidades: r._sum.quantity ?? 0, receita: round2(Number(r._sum.total ?? 0)) };
       }),
     ),
     prisma.saleItem.findMany({
-      where: { productId, sale: { saleDate: { gte: diasAtras(365) } } },
+      where: { productId, sale: { saleDate: { gte: diasAtras(365) }, ...salePlannedWhere } },
       select: { quantity: true, total: true, sale: { select: { saleDate: true } } },
     }),
     prisma.purchaseOrderRecord.findMany({
@@ -301,6 +306,11 @@ export async function fichaTecnica(
   // cita a peça. Um filtro JSON aqui seria específico do Postgres e dependeria
   // do formato exato do array — que já mudou uma vez nesta rodada.
   const pedidos = await prisma.purchaseOrderRecord.findMany({
+    // CANCELADO NÃO É COMPRA. Sem este filtro, um pedido cancelado mais
+    // recente virava a "última compra" da peça e escondia a que de fato
+    // chegou — e como cancelado não tem `receivedAt`, a tela ainda escrevia
+    // "ainda a caminho" sobre mercadoria que ninguém pediu mais.
+    where: { status: { in: ['SENT', 'RECEIVED'] } },
     orderBy: { sentAt: 'desc' },
     take: 300,
     select: {

@@ -837,6 +837,8 @@ export interface PurchaseOrderItem {
 export interface AtributosDaPeca {
   /** Feminino · Masculino · Unisex · Menina · Menino */
   genero: string | null;
+  /** A variante da peça (item 04): Havana, Preto, Dourado… */
+  cor?: string | null;
   /**
    * As versões PADRONIZADAS (rodada final · item 03) — a lista fechada. É por
    * elas que o motor agrupa; os campos de texto ao lado são como cada fonte

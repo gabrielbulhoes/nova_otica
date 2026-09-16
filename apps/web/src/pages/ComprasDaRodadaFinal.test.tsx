@@ -129,3 +129,55 @@ describe('item 05 · composição do mix por perfil', () => {
     expect(m.alocado + m.naoAlocado).toBe(m.meta);
   });
 });
+
+// ─── O que a revisão adversarial encontrou, do lado da tela ─────────────────
+
+describe('revisão · a quantidade efetiva e o arquivo que vai ao fornecedor', () => {
+  it('o CSV segue a quantidade EDITADA, não a sugestão', async () => {
+    const { orderCsv } = await import('../lib/rateio');
+    const pedido = pedidos().orders[0];
+    const item = pedido.items[0];
+
+    const semEdicao = orderCsv(pedido);
+    expect(semEdicao).toContain(String(item.suggestedQty));
+
+    // Zerar é a forma de tirar a peça do pedido — e o arquivo precisa dizer
+    // isso, senão a tela mostra um total e o fornecedor recebe outro.
+    const zerado = orderCsv(pedido, { [item.productId]: 0 });
+    const linhas = zerado.split('\n');
+    const total = linhas.find((l) => l.includes('TOTAL DO PEDIDO'))!;
+    const totalEsperado = pedido.items
+      .filter((x: any) => x.productId !== item.productId)
+      .reduce((a: number, x: any) => a + x.quantity, 0);
+    expect(total).toContain(String(totalEsperado));
+    // A sugestão original continua no arquivo, para a diferença ser auditável.
+    expect(zerado).toContain('Sugerida (un.)');
+  });
+
+  it('o item do pedido traz a cor — a "variante" do item 04', () => {
+    const comFicha = itens(pedidos()).find((x: any) => x.atributos);
+    expect(comFicha, 'a demonstração precisa ter item com ficha').toBeTruthy();
+    expect(comFicha.atributos).toHaveProperty('cor');
+  });
+});
+
+describe('revisão · o login devolve a preferência de menu', () => {
+  it('quem gravou "horizontal" não entra no layout padrão', () => {
+    const antes = demoHandle({
+      method: 'patch',
+      url: '/auth/preferences',
+      params: {},
+      body: { menu: 'horizontal' },
+    }) as any;
+    expect(antes.preferences.menu).toBe('horizontal');
+    const login = demoHandle({
+      method: 'post',
+      url: '/auth/login',
+      params: {},
+      body: { email: 'a@a.com', password: 'x' },
+    }) as any;
+    // Era aqui que a preferência se perdia: o contexto da interface é montado
+    // a partir DESTA resposta, e ela não trazia `preferences`.
+    expect(login.user.preferences.menu).toBe('horizontal');
+  });
+});

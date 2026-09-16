@@ -11,6 +11,7 @@ import {
   TETO_DE_CARDS,
   TETO_DE_LINHAS,
   recortePedido,
+  normGenero,
   FORMATOS_DE_LENTE,
   GENEROS,
   MATERIAIS_DE_ARMACAO,
@@ -356,7 +357,23 @@ const orderItemSchema = z.object({
   faixa: z.number().int().min(0).max(200).optional(),
   atributos: z
     .object({
-      genero: z.enum(CHAVES_DE_GENERO).nullish(),
+      /*
+       * O GÊNERO CHEGA COMO TEXTO, e é normalizado aqui.
+       *
+       * A ficha guarda a grafia da fonte ("Unisex", "Feminina"), e é essa que
+       * a tela tem em mãos ao montar o pedido. Exigir a chave da lista fechada
+       * fazia TODO pedido com peça fichada voltar 400 — a revisão reproduziu:
+       * o comprador clicava em "Registrar envio" e recebia um erro de
+       * validação sobre um campo que ele nunca digitou.
+       */
+      genero: z
+        .string()
+        .max(60)
+        .nullish()
+        .transform((v) => normGenero(v ?? null)),
+      // Estes DOIS já são chaves da lista fechada na origem (vêm de
+      // `ProductAttribute.formatoLente`), então aqui a lista fechada vale — e
+      // é ela que impede texto livre de entrar no pedido gravado.
       formatoLente: z.enum(CHAVES_DE_FORMATO).nullish(),
       materialArmacao: z.enum(CHAVES_DE_MATERIAL).nullish(),
       cor: z.string().max(80).nullish(),

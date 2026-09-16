@@ -12,6 +12,7 @@ import {
   montarPlanoDetalhado,
   chaveDeGrifeParaCasar,
   chaveDeAtributo,
+  rotuloDoFormato,
   splitByNeed,
   type CandidatoDeCompra,
   type LinhaDoPlano,
@@ -69,7 +70,10 @@ export async function perfilDaRede(days = 365) {
   const productPlans = await plans(days, undefined, 'principal');
   const fichas = await prisma.productAttribute.findMany({
     where: { productId: { in: productPlans.map((p) => p.productId) }, cadastroEm: { not: null } },
-    select: { productId: true, genero: true, formato: true },
+    // A CHAVE FECHADA junto do texto: o perfil da rede passa a agrupar por
+    // `formatoLente` quando a peça já foi classificada, e o texto vira reserva
+    // declarada. Duas grafias da mesma coisa dividiam a evidência em dois.
+    select: { productId: true, genero: true, formato: true, formatoLente: true },
   });
   const fichaPor = new Map(fichas.map((f) => [f.productId, f]));
 
@@ -88,7 +92,8 @@ export async function perfilDaRede(days = 365) {
     // `evidenciaDoPerfil`.
     soma(porTipoGenero, chaveDePerfil(p.category, f?.genero ?? null), p.unitsSold);
     soma(porTipoGenero, chaveDePerfil(p.category, null), p.unitsSold);
-    soma(porFormato, f?.formato ? chaveDeAtributo(f.formato) : null, p.unitsSold);
+    const formatoDaPeca = f?.formatoLente ? rotuloDoFormato(f.formatoLente) : f?.formato;
+    soma(porFormato, formatoDaPeca ? chaveDeAtributo(formatoDaPeca) : null, p.unitsSold);
   }
 
   // O RANKING do formato — é o que vira "2º formato do segmento" na frase, e

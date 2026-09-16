@@ -883,6 +883,12 @@ model ProductAttribute {
   /// razão que separa `fonteCadastro` de `fonteDesconto`: são fontes distintas
   /// e "importado em" precisa dizer de qual.
   erpEm DateTime?
+  /// Quando o padronizador classificou esta peça. É a terceira data pelo mesmo
+  /// motivo das outras duas: a classificação LIDA DA DESCRIÇÃO não tem ficha
+  /// nem cadastro do ERP por trás, e sem marca própria ela ficava invisível
+  /// para quem consulta "peças com atributo" — gravada no banco e fora de
+  /// todas as leituras.
+  padronizadoEm DateTime?
 
   @@index([bestSeller])
   @@index([genero])
