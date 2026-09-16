@@ -57,7 +57,7 @@ import {
 import { Icon, type IconName } from '../brand/Icon';
 import { useAuth } from '../auth/AuthContext';
 import { downloadCsv } from '../bi/csv';
-import { deadlineDate, orderCsv, rotuloDoPeso, slug } from '../lib/rateio';
+import { deadlineDate, orderCsv, reescalarRateio, rotuloDoPeso, slug } from '../lib/rateio';
 import { opcoesDePeriodo, periodoInicial } from '../lib/periodo';
 import { recarregarDoTopo } from '../lib/consultaPaginada';
 import {
@@ -648,6 +648,30 @@ function PurchaseOrderCard({
                   formatoLente: it.atributos.formatoLente ?? null,
                   materialArmacao: it.atributos.materialArmacao ?? null,
                   cor: it.atributos.cor ?? null,
+                },
+              }
+            : {}),
+          /*
+           * O DESTINO POR LOJA VAI JUNTO — item de 16/09/2026.
+           *
+           * O rateio já aparecia na tela e já saía no CSV; o que se perdia era
+           * exatamente aqui, no clique de "Registrar envio". Ao receber a
+           * caixa 30 ou 60 dias depois, a aba de distribuição recalculava com
+           * a venda daquele dia, e não havia como comparar com o que foi
+           * decidido na compra.
+           *
+           * As quantidades são REESCALADAS quando o comprador edita o total:
+           * gravar o rateio da sugestão ao lado de uma quantidade diferente
+           * daria uma soma que não fecha — e uma tabela cuja soma não bate com
+           * o próprio cabeçalho é lida como defeito, com razão.
+           */
+          ...(it.distribution
+            ? {
+                distribuicao: {
+                  base: it.distribution.basis,
+                  baseRotulo: it.distribution.basisLabel,
+                  faltaNaRede: it.distribution.totalNeed,
+                  ...reescalarRateio(it.distribution.rows, it.suggestedQty, efetiva),
                 },
               }
             : {}),
@@ -1846,12 +1870,123 @@ function FilaDeDistribuicao() {
 }
 
 /** Histórico do ciclo de compras: enviado → recebido (ou cancelado). */
+/**
+ * O DESTINO DE CADA SKU, congelado na compra — item de 16/09/2026.
+ *
+ * "Eu preciso saber, da compra, que a sugestão acompanhe a distribuição por
+ *  loja: cada quantidade de cada SKU para cada loja em cada compra."
+ *
+ * É a tabela cruzada que o CSV já exportava e que a tela não mostrava depois
+ * do envio: uma linha por peça, uma coluna por loja. O rateio da SUGESTÃO já
+ * aparecia na aba de compras antes de registrar; o que se perdia era o depois.
+ *
+ * As colunas saem da união das lojas citadas em qualquer item, e não das lojas
+ * da rede: uma loja que não recebe nada deste pedido não precisa de coluna, e
+ * dezesseis colunas vazias empurram as que importam para fora da tela.
+ */
+function DestinoDoPedidoRegistrado({ pedido }: { pedido: PurchaseOrderRecord }) {
+  const comRateio = pedido.items.filter((it) => it.distribuicao);
+  if (comRateio.length === 0) {
+    return (
+      <div className="hint" style={{ margin: '8px 0' }}>
+        Este pedido foi registrado antes de a plataforma guardar o destino por loja, ou foi montado
+        na visão de uma loja só — onde não há rateio a fazer. O plano de distribuição continua
+        disponível no botão “Como distribuir”, calculado com a posição de hoje.
+      </div>
+    );
+  }
+
+  const lojas: { id: string; nome: string }[] = [];
+  for (const it of comRateio)
+    for (const l of it.distribuicao!.lojas)
+      if (!lojas.some((x) => x.id === l.storeId)) lojas.push({ id: l.storeId, nome: l.storeName });
+  lojas.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+  const semLoja = comRateio.reduce((a, it) => a + it.distribuicao!.semLoja, 0);
+  const totalPorLoja = (id: string) =>
+    comRateio.reduce(
+      (a, it) => a + (it.distribuicao!.lojas.find((l) => l.storeId === id)?.quantidade ?? 0),
+      0,
+    );
+
+  return (
+    <div style={{ margin: '6px 0 4px' }}>
+      <div className="hint" style={{ marginBottom: 8 }}>
+        O destino decidido <strong>no momento da compra</strong>. O plano de distribuição do
+        recebimento é recalculado com a venda do dia da chegada — entre um e outro passam{' '}
+        {pedido.leadTimeDays} dias, e por isso os dois números existem lado a lado.
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Peça</th>
+              <th>SKU</th>
+              <th className="num">Comprado</th>
+              {lojas.map((l) => (
+                <th key={l.id} className="num">{l.nome}</th>
+              ))}
+              {semLoja > 0 && <th className="num">Sem loja</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {comRateio.map((it) => (
+              <tr key={it.productId}>
+                <td>{it.description}</td>
+                <td>{it.sku ? <Codigo>{it.sku}</Codigo> : <span className="muted">—</span>}</td>
+                <td className="num"><strong>{it.quantity}</strong></td>
+                {lojas.map((l) => {
+                  const q = it.distribuicao!.lojas.find((x) => x.storeId === l.id)?.quantidade ?? 0;
+                  return (
+                    <td key={l.id} className="num">
+                      {/* Zero em cinza, e não em branco: branco seria "ninguém
+                          calculou", e aqui alguém calculou e deu zero. */}
+                      {q > 0 ? q : <span className="muted">0</span>}
+                    </td>
+                  );
+                })}
+                {semLoja > 0 && (
+                  <td className="num">
+                    {it.distribuicao!.semLoja > 0 ? (
+                      it.distribuicao!.semLoja
+                    ) : (
+                      <span className="muted">0</span>
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))}
+            <tr>
+              <td colSpan={2}><strong>Total</strong></td>
+              <td className="num">
+                <strong>{comRateio.reduce((a, it) => a + it.quantity, 0)}</strong>
+              </td>
+              {lojas.map((l) => (
+                <td key={l.id} className="num"><strong>{totalPorLoja(l.id)}</strong></td>
+              ))}
+              {semLoja > 0 && <td className="num"><strong>{semLoja}</strong></td>}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {semLoja > 0 && (
+        <p className="hint" style={{ marginTop: 6 }}>
+          {semLoja} un. sem loja definida na compra: nenhuma filial elegível estava abaixo do alvo
+          de cobertura dessas peças. Ficam para divisão manual na chegada.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function OrderHistory() {
   const qc = useQueryClient();
   const history = useQuery({ queryKey: ['planning-history'], queryFn: getPurchaseOrderHistory });
   // Qual pedido está com o plano de distribuição aberto. Um por vez: o plano
   // tem uma tabela por item, e dois abertos viram uma parede.
   const [distribuindo, setDistribuindo] = useState<string | null>(null);
+  /** Pedido cujo destino CONGELADO na compra está aberto. */
+  const [destino, setDestino] = useState<string | null>(null);
 
   const settle = async (id: string, action: 'receive' | 'cancel') => {
     await settlePurchaseOrder(id, action);
@@ -1903,6 +2038,20 @@ function OrderHistory() {
                   </Selo>
                 </td>
                 <td className="right" style={{ whiteSpace: 'nowrap' }}>
+                  {/* O DESTINO CONGELADO vale em qualquer estado do pedido —
+                      enviado, recebido ou cancelado. É o registro do que se
+                      decidiu ao comprar, e cancelar uma compra não apaga a
+                      decisão que foi tomada. */}
+                  <Botao
+                    variante="discreto"
+                    pequeno
+                    icone="loja"
+                    aria-expanded={destino === r.id}
+                    onClick={() => setDestino((v) => (v === r.id ? null : r.id))}
+                    title="Quanto de cada SKU foi para cada loja, como decidido na compra"
+                  >
+                    {destino === r.id ? 'Fechar destino' : 'Destino por loja'}
+                  </Botao>{' '}
                   {r.status === 'SENT' ? (
                     <span style={{ display: 'inline-flex', gap: 6 }}>
                       <TwoStepButton
@@ -1938,6 +2087,15 @@ function OrderHistory() {
                 </td>
               </tr>
             ))}
+            {history.data!.rows
+              .filter((r) => r.id === destino)
+              .map((r) => (
+                <tr key={`${r.id}-destino`}>
+                  <td colSpan={8} style={{ background: 'var(--surface-2, transparent)' }}>
+                    <DestinoDoPedidoRegistrado pedido={r} />
+                  </td>
+                </tr>
+              ))}
             {history.data!.rows
               .filter((r) => r.id === distribuindo)
               .map((r) => (

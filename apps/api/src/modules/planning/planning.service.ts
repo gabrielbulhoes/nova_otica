@@ -340,6 +340,38 @@ interface RecordItem {
     materialArmacao?: string | null;
     cor?: string | null;
   };
+  /**
+   * O DESTINO POR LOJA, congelado no momento da compra.
+   *
+   * "Eu preciso saber, da compra, que a sugestão acompanhe a distribuição por
+   *  loja: cada quantidade de cada SKU para cada loja em cada compra (destino
+   *  final por item)."                                 — Galbe, 16/09/2026
+   *
+   * O rateio já era calculado e mostrado na tela de compras, e já saía no CSV.
+   * O que não existia era ESTE campo: o pedido registrado guardava peça,
+   * quantidade e custo, e o destino se perdia ao clicar em "Registrar envio".
+   *
+   * Isso não era detalhe de auditoria. O prazo dos fornecedores desta rede vai
+   * de 14 a 60 dias, e a aba de distribuição recalcula o rateio na chegada com
+   * a venda daquele dia. Sem o congelado, não havia como responder à pergunta
+   * que o comprador faz ao receber a caixa: "isto aqui é o que eu decidi
+   * quando comprei, ou o motor mudou de ideia no meio do caminho?"
+   *
+   * Opcional: pedidos anteriores a esta rodada não têm o campo, e ausente é
+   * "não foi gravado", distinto de uma lista vazia — que significaria "nenhuma
+   * loja reclamou". A tela precisa saber diferenciar os dois.
+   */
+  distribuicao?: {
+    /** Como o rateio foi decidido (necessidade, sku, marca, categoria, rede). */
+    base: string;
+    /** A frase que explica a base, congelada junto — os rótulos podem mudar. */
+    baseRotulo: string;
+    /** Falta somada da rede nesta peça no momento da compra. */
+    faltaNaRede: number;
+    lojas: { storeId: string; storeName: string; quantidade: number }[];
+    /** Unidades que nenhuma loja reclamou e ficaram para divisão manual. */
+    semLoja: number;
+  };
 }
 
 /** Unidades a caminho por produto (pedidos ENVIADOS e não recebidos). */

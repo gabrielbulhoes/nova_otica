@@ -3034,16 +3034,81 @@ td .codigo {
 }
 
 /* ─── Barra lateral contextual ──────────────────────────────────────────── */
-.sidebar-dica {
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--muted);
-  margin: 4px 0 0;
+/* ─── O mapa inteiro na barra lateral ───────────────────────────────────────
+   "Deixe no menu lateral a exposição sempre de todos os módulos e
+    submódulos."                                        — Galbe, 16/09/2026
+
+   A barra era contextual e escondia tudo o que não fosse do módulo aberto. O
+   agrupamento por categoria e módulo continua — ele diz a que área cada tela
+   pertence —, mas agora inteiro e sempre.
+
+   A densidade é o trabalho desta folha: dezessete telas numa coluna de 220px
+   só ficam legíveis com a hierarquia desenhada (categoria em mono miúda,
+   módulo em peso médio com ícone, página recuada) e com o módulo ATUAL
+   marcado, senão a lista vira parede. */
+.sidebar-mapa {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
+
+.sidebar-categoria {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 10px;
+}
+
+.sidebar-categoria-nome {
+  margin: 10px 0 4px;
+  font-size: 9.5px;
+  color: var(--muted);
+}
+
 .sidebar-modulo {
   display: flex;
   flex-direction: column;
+  padding-bottom: 2px;
 }
+
+/* O módulo ABERTO ganha um filete à esquerda em vez de fundo: com sete módulos
+   empilhados, um bloco pintado disputa com o item ativo e o olho perde qual
+   dos dois é a tela na frente. */
+.sidebar-modulo.atual {
+  border-left: 2px solid var(--accent);
+  margin-left: -10px;
+  padding-left: 8px;
+}
+
+.sidebar-modulo-nome {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0;
+  padding: 4px 10px 4px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-corpo);
+}
+
+.sidebar-modulo-nome:hover {
+  color: var(--accent);
+}
+
+.sidebar-modulo-nome.active {
+  color: var(--accent);
+}
+
+/* A página recua para dentro do módulo: é o recuo que diz "isto pertence
+   àquilo" sem precisar de linha nem de caixa. */
+.sidebar-mapa .nav-link {
+  padding: 5px 10px 5px 21px;
+  font-size: 12.5px;
+}
+
 .nav-voltar {
   display: inline-flex;
   align-items: center;
@@ -3060,14 +3125,6 @@ td .codigo {
   font-size: 14px;
   line-height: 1;
 }
-.sidebar-modulo-nome {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 0 6px;
-  color: var(--accent);
-}
-
 /* ─── Responsivo ────────────────────────────────────────────────────────── */
 @media (max-width: 1180px) {
   .central-grade {
@@ -3427,5 +3484,95 @@ td .codigo {
      para baixo dele em vez de comprimi-lo. */
   .cabecalho-do-pedido-texto {
     flex-basis: calc(100% - 26px);
+  }
+}
+
+/* ─── O mapa completo nos outros dois layouts ───────────────────────────────
+   O mapa inteiro (7 módulos, 17 telas) cabe folgado numa coluna de 220px. Nos
+   layouts em que a barra é uma FAIXA — menu horizontal e celular — ele não
+   cabe, e as regras abaixo fazem a única coisa honesta possível: transformam a
+   faixa numa fita rolável, com a hierarquia comprimida para uma linha.
+
+   O que NÃO se faz aqui é voltar a esconder parte do mapa por falta de espaço:
+   é exatamente o que o pedido veio corrigir. */
+.macos-desktop[data-menu='horizontal'] .sidebar-mapa {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 2px 12px;
+  overflow-x: auto;
+  min-width: 0;
+  flex: 1;
+  padding-bottom: 2px;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-categoria {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px 8px;
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+/* Na fileira a categoria vira uma etiqueta vertical curta antes dos módulos
+   dela: some o rótulo e o mapa perde a única pista de agrupamento. */
+.macos-desktop[data-menu='horizontal'] .sidebar-categoria-nome {
+  margin: 0;
+  padding-right: 2px;
+  border-right: 1px solid var(--linha);
+  padding-left: 4px;
+  white-space: nowrap;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-modulo {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px 6px;
+  flex: 0 0 auto;
+  padding-bottom: 0;
+}
+
+/* O filete do módulo atual passa para BAIXO: à esquerda ele apontaria para o
+   módulo anterior da fileira. */
+.macos-desktop[data-menu='horizontal'] .sidebar-modulo.atual {
+  border-left: none;
+  border-bottom: 2px solid var(--accent);
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-modulo-nome {
+  padding: 6px 4px;
+  white-space: nowrap;
+}
+
+.macos-desktop[data-menu='horizontal'] .sidebar-mapa .nav-link {
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.macos-desktop[data-menu='horizontal'] .nav-voltar {
+  padding: 6px 8px 6px 0;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  /* No celular a barra já é cabeçalho. O mapa inteiro ali empurraria o conteúdo
+     para baixo da dobra, então ele vira um bloco ROLÁVEL de altura limitada —
+     visível por inteiro com um gesto, em vez de escondido atrás de um clique. */
+  .sidebar-mapa {
+    flex-basis: 100%;
+    max-height: 38vh;
+    overflow-y: auto;
+    gap: 0;
+  }
+
+  .sidebar-categoria {
+    margin-bottom: 6px;
+  }
+
+  .sidebar-categoria-nome {
+    margin: 6px 0 2px;
   }
 }

@@ -7,6 +7,7 @@
  *   sonda CDS — gitignorado), os cadastros/estoque/vendas exibidos são os
  *   REAIS da rede, agregados e sem qualquer dado de cliente.
  */
+import type { ItemDoPedidoRegistrado } from './client';
 import {
   analysisBrand,
   normBrandKey,
@@ -853,7 +854,14 @@ interface DemoOrderRecord {
   supplier: string;
   leadTimeDays: number;
   status: 'SENT' | 'RECEIVED' | 'CANCELLED';
-  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  /*
+   * O item guardado é o MESMO objeto que a tela enviou — inclusive os campos
+   * que a rodada acrescentou (sku, sugerida, ficha e o destino por loja). Um
+   * tipo estreito aqui faria a demonstração perder o campo novo em silêncio, e
+   * a tela mostraria "pedido sem destino gravado" para um pedido que acabou de
+   * ser gravado com destino.
+   */
+  items: ItemDoPedidoRegistrado[];
   units: number;
   total: number;
   sentAt: string;

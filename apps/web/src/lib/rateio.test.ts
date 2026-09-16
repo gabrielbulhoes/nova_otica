@@ -6,7 +6,7 @@ import {
   type FairSplitInput,
 } from '@planning';
 import type { PurchaseOrder } from '../api/client';
-import { orderCsv, rotuloDoPeso } from './rateio';
+import { orderCsv, rotuloDoPeso , reescalarRateio } from './rateio';
 
 /**
  * O CSV do pedido é montado a partir do pedido REAL — o mesmo
@@ -129,5 +129,64 @@ describe('rotuloDoPeso (a coluna que explica a participação)', () => {
     expect(rotuloDoPeso('necessidade', '90 dias')).toBe('Vendeu (90 dias)');
     expect(rotuloDoPeso('participacao', '90 dias')).toBe('Vendeu (90 dias)');
     expect(rotuloDoPeso('sku', '12 m')).toBe('Vendeu (12 m)');
+  });
+});
+
+/**
+ * A REESCALA DO RATEIO — item de 16/09/2026.
+ *
+ * "Eu preciso saber, da compra, que a sugestão acompanhe a distribuição por
+ *  loja: cada quantidade de cada SKU para cada loja em cada compra."
+ *
+ * O motor reparte a QUANTIDADE SUGERIDA entre as lojas. O comprador edita o
+ * total antes de enviar, e é o total EDITADO que vai ao fornecedor — então o
+ * rateio gravado precisa somar o editado, não o sugerido. Uma tabela cujo
+ * rodapé não bate com o cabeçalho é lida como defeito, com razão.
+ */
+describe('reescalarRateio', () => {
+  const rows = [
+    { storeId: 'a', storeName: 'Natal', suggestedQty: 40 },
+    { storeId: 'b', storeName: 'Mossoró', suggestedQty: 25 },
+    { storeId: 'c', storeName: 'Guarabira', suggestedQty: 12 },
+  ];
+
+  it('sem edição, o rateio original passa intacto', () => {
+    // Nada de recalcular o que já estava certo e arriscar mexer num número
+    // por arredondamento.
+    const r = reescalarRateio(rows, 77, 77);
+    expect(r.lojas.map((l) => l.quantidade)).toEqual([40, 25, 12]);
+    expect(r.semLoja).toBe(0);
+  });
+
+  it('a soma fecha EXATO no que o comprador levou, para cima e para baixo', () => {
+    for (const efetiva of [1, 7, 30, 60, 76, 78, 100, 250]) {
+      const r = reescalarRateio(rows, 77, efetiva);
+      const soma = r.lojas.reduce((a, l) => a + l.quantidade, 0) + r.semLoja;
+      expect(soma, `efetiva ${efetiva}`).toBe(efetiva);
+    }
+  });
+
+  it('a proporção entre as lojas é preservada', () => {
+    // 77 → 154 é o dobro exato; nenhuma loja pode ficar para trás.
+    const r = reescalarRateio(rows, 77, 154);
+    expect(r.lojas.map((l) => l.quantidade)).toEqual([80, 50, 24]);
+  });
+
+  it('o resto da divisão vai para quem tem o maior resto, não para o primeiro', () => {
+    // 10 un. entre 40/25/12 (77): 5,19 · 3,25 · 1,56. Inteiros 5+3+1 = 9; a
+    // sobra é 1 e cai em Guarabira, que tem o maior resto (0,56).
+    const r = reescalarRateio(rows, 77, 10);
+    expect(r.lojas.map((l) => l.quantidade)).toEqual([5, 3, 2]);
+  });
+
+  it('sem rateio nenhum, tudo fica declarado como "sem loja"', () => {
+    // É o caso da visão de uma loja só, e de peça que nenhuma filial reclamou.
+    // Sumir com as unidades seria pior: o pedido teria menos peças do que o
+    // comprador enviou, sem nada na tela dizendo por quê.
+    expect(reescalarRateio([], 0, 30)).toEqual({ lojas: [], semLoja: 30 });
+    expect(reescalarRateio([{ storeId: 'a', storeName: 'Natal', suggestedQty: 0 }], 0, 5)).toEqual({
+      lojas: [],
+      semLoja: 5,
+    });
   });
 });

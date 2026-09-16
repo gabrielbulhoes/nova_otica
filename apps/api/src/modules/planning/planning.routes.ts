@@ -380,6 +380,34 @@ const orderItemSchema = z.object({
       cor: z.string().max(80).nullish(),
     })
     .optional(),
+  /**
+   * O DESTINO POR LOJA congelado na compra — item de 16/09/2026.
+   *
+   * Opcional porque a tela de uma loja só (não-ADMIN) não calcula rateio, e
+   * exigir o campo faria o pedido dela voltar 400. É a mesma armadilha que o
+   * `genero` como lista fechada criou na rodada passada: validação estrita num
+   * campo que a tela nem sempre tem.
+   *
+   * `max(64)` em lojas: a rede tem 16; o teto é folgado e ainda barra um
+   * payload absurdo.
+   */
+  distribuicao: z
+    .object({
+      base: z.string().max(40),
+      baseRotulo: z.string().max(240),
+      faltaNaRede: z.number().nonnegative().max(1_000_000),
+      lojas: z
+        .array(
+          z.object({
+            storeId: z.string().min(1).max(60),
+            storeName: z.string().max(120),
+            quantidade: z.number().int().min(0).max(100_000),
+          }),
+        )
+        .max(64),
+      semLoja: z.number().int().min(0).max(100_000),
+    })
+    .optional(),
   total: z.number().nonnegative().default(0),
 });
 

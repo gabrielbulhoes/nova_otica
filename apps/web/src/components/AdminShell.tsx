@@ -6,7 +6,7 @@ import { useLiveInvalidation } from '../hooks/useLiveInvalidation';
 import { ScopePicker, SCOPE_LABEL, useScope } from '../lib/scope';
 import { Mark } from '../brand/Brand';
 import { Icon, type IconName } from '../brand/Icon';
-import { moduloDaRota, paginaDaRota, ROTA_CENTRAL } from '../lib/modulos';
+import { CATEGORIAS, moduloDaRota, modulosVisiveis, paginaDaRota, ROTA_CENTRAL } from '../lib/modulos';
 import {
   atributosDaCasca,
   rotuloDaAlternancia,
@@ -177,7 +177,27 @@ export function AdminShell() {
   */
   const modulo = moduloDaRota(location.pathname);
   const naCentral = location.pathname === ROTA_CENTRAL;
-  const paginasDoModulo = (modulo?.paginas ?? []).filter((p) => !p.adminOnly || isAdmin);
+  /*
+   * O MAPA INTEIRO NA BARRA — pedido do cliente em 16/09/2026: "deixe no menu
+   * lateral a exposição sempre de todos os módulos e submódulos".
+   *
+   * A barra era CONTEXTUAL: na Central não mostrava link nenhum (os cartões
+   * eram a navegação) e dentro de um módulo mostrava só as páginas dele. A
+   * intenção era boa — 15 rótulos soltos ocupavam cinco linhas no celular —,
+   * mas o preço foi alto: para ir de Compras a Relatórios era preciso voltar à
+   * Central, ler sete cartões e entrar de novo. Quem usa o console o dia
+   * inteiro conhece o mapa e quer o atalho, não o passeio.
+   *
+   * A resposta não é desfazer o agrupamento: é mostrá-lo inteiro. Sete módulos
+   * com as páginas de cada um, agrupados por categoria, o módulo atual aberto e
+   * destacado. O agrupamento continua fazendo o trabalho que fazia (dizer a que
+   * área cada tela pertence); o que sai é o esconderijo.
+   */
+  const modulos = modulosVisiveis(isAdmin);
+  const porCategoria = CATEGORIAS.map((c) => ({
+    categoria: c,
+    modulos: modulos.filter((m) => m.categoria === c),
+  })).filter((g) => g.modulos.length > 0);
   const active = naCentral
     ? 'Central de operações'
     : paginaDaRota(location.pathname)?.label ?? modulo?.nome ?? 'Central de operações';
@@ -261,35 +281,57 @@ export function AdminShell() {
              cabeçalho e os cartões passam a ficar embaixo — a frase tem de
              valer nas duas larguras.
           */}
-          {naCentral ? (
-            <p className="sidebar-dica">
-              Escolha um módulo para entrar. Os atalhos do dock levam direto às
-              telas do dia a dia.
-            </p>
-          ) : (
-            <nav className="sidebar-modulo" aria-label={`Telas de ${modulo?.nome ?? 'módulo'}`}>
-              <NavLink to={ROTA_CENTRAL} end className="nav-voltar">
-                <span className="nav-voltar-seta" aria-hidden="true">&#8592;</span>
-                Central de operações
-              </NavLink>
-              {modulo && (
-                <p className="eyebrow sidebar-modulo-nome">
-                  <Icon name={modulo.icone} size={14} aria-hidden="true" />
-                  {modulo.nome}
-                </p>
-              )}
-              {paginasDoModulo.map((p) => (
-                <NavLink
-                  key={p.to}
-                  to={p.to}
-                  end={p.end}
-                  className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                >
-                  {p.label}
-                </NavLink>
-              ))}
-            </nav>
-          )}
+          <nav className="sidebar-mapa" aria-label="Módulos e telas do console">
+            <NavLink
+              to={ROTA_CENTRAL}
+              end
+              className={({ isActive }) => `nav-voltar${isActive ? ' active' : ''}`}
+            >
+              <span className="nav-voltar-seta" aria-hidden="true">&#8592;</span>
+              Central de operações
+            </NavLink>
+
+            {porCategoria.map((grupo) => (
+              <div key={grupo.categoria} className="sidebar-categoria">
+                {/* A CATEGORIA é rótulo, não link: ela não tem tela própria, e
+                    fazê-la clicável prometeria uma que não existe. */}
+                <p className="eyebrow sidebar-categoria-nome">{grupo.categoria}</p>
+                {grupo.modulos.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`sidebar-modulo${modulo?.id === m.id ? ' atual' : ''}`}
+                  >
+                    {/*
+                       O NOME DO MÓDULO LEVA À PÁGINA DE ENTRADA dele, em vez de
+                       abrir e fechar a lista. Com tudo à vista não há o que
+                       abrir — e um controle que só recolhe reintroduz o
+                       esconderijo que este pedido veio tirar.
+                    */}
+                    <NavLink
+                      to={m.destino}
+                      className={({ isActive }) => `sidebar-modulo-nome${isActive ? ' active' : ''}`}
+                    >
+                      <Icon name={m.icone} size={14} aria-hidden="true" />
+                      {m.nome}
+                    </NavLink>
+                    {/* Módulo de uma página só não repete o próprio nome logo
+                        abaixo de si mesmo: o link do módulo já é aquela tela. */}
+                    {m.paginas.length > 1 &&
+                      m.paginas.map((p) => (
+                        <NavLink
+                          key={p.to}
+                          to={p.to}
+                          end={p.end}
+                          className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                        >
+                          {p.label}
+                        </NavLink>
+                      ))}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </nav>
 
           {/* O style inline não é enfeite: `.sidebar > div[style]` é o seletor que
               reposiciona este bloco quando a barra vira cabeçalho no mobile. */}

@@ -167,3 +167,54 @@ export function orderCsv(order: PurchaseOrder, efetivas: Record<string, number> 
     ...lojas.map((l) => ({ key: `loja:${l}`, label: l })),
   ]);
 }
+
+/**
+ * Reescala o rateio da sugestão para a quantidade que o comprador de fato
+ * levou, mantendo a soma exata.
+ *
+ * O motor sugeriu 77 e o comprador levou 60: as 77 estavam repartidas entre
+ * quatro lojas, e gravar essa repartição ao lado de "60" daria uma tabela cuja
+ * soma não bate com o próprio cabeçalho.
+ *
+ * O método é o dos MAIORES RESTOS, o mesmo de `repartirComTeto` no motor:
+ * distribui a parte inteira e entrega as sobras a quem tem o maior resto. Isso
+ * garante `Σ quantidade === efetiva` sem depender de sorte de arredondamento —
+ * e a ordem de desempate é a maior quota, para o resto cair em quem mais vende.
+ *
+ * `semLoja` carrega o que sobrar: se todas as lojas ficarem em zero (efetiva
+ * muito pequena), as unidades ficam declaradas em vez de sumirem.
+ */
+export function reescalarRateio(
+  rows: { storeId: string; storeName: string; suggestedQty: number }[],
+  sugerida: number,
+  efetiva: number,
+): { lojas: { storeId: string; storeName: string; quantidade: number }[]; semLoja: number } {
+  const base = rows.filter((r) => r.suggestedQty > 0);
+  const soma = base.reduce((a, r) => a + r.suggestedQty, 0);
+  if (base.length === 0 || soma <= 0) return { lojas: [], semLoja: efetiva };
+  // Sem edição, o rateio original passa intacto — nada de recalcular o que já
+  // estava certo e arriscar mudar um número por arredondamento.
+  if (efetiva === sugerida) {
+    return {
+      lojas: base.map((r) => ({ storeId: r.storeId, storeName: r.storeName, quantidade: r.suggestedQty })),
+      semLoja: Math.max(0, efetiva - soma),
+    };
+  }
+
+  const exatos = base.map((r) => (r.suggestedQty / soma) * efetiva);
+  const lojas = base.map((r, i) => ({
+    storeId: r.storeId,
+    storeName: r.storeName,
+    quantidade: Math.floor(exatos[i]),
+  }));
+  let sobra = efetiva - lojas.reduce((a, l) => a + l.quantidade, 0);
+  const porResto = base
+    .map((_, i) => i)
+    .sort((a, b) => exatos[b] - Math.floor(exatos[b]) - (exatos[a] - Math.floor(exatos[a])) || exatos[b] - exatos[a]);
+  for (const i of porResto) {
+    if (sobra <= 0) break;
+    lojas[i].quantidade += 1;
+    sobra -= 1;
+  }
+  return { lojas, semLoja: Math.max(0, sobra) };
+}

@@ -1348,12 +1348,47 @@ export const registrarCompraDeFeira = (offerId: string, bought: number) =>
 
 export type PurchaseOrderRecordStatus = 'SENT' | 'RECEIVED' | 'CANCELLED';
 
+/**
+ * O destino por loja CONGELADO no momento da compra (16/09/2026).
+ *
+ * Distinto de `DistributionItem` mais abaixo, que é o rateio RECALCULADO no
+ * recebimento. Os dois existem de propósito e a tela mostra os dois: entre a
+ * compra e a chegada passam de 14 a 60 dias, e a venda da rede muda nesse
+ * intervalo.
+ */
+export interface DistribuicaoDaCompra {
+  base: string;
+  baseRotulo: string;
+  faltaNaRede: number;
+  lojas: { storeId: string; storeName: string; quantidade: number }[];
+  semLoja: number;
+}
+
+export interface ItemDoPedidoRegistrado {
+  productId: string;
+  description: string;
+  quantity: number;
+  unitCost: number;
+  total: number;
+  sku?: string | null;
+  suggestedQty?: number;
+  unitPrice?: number;
+  atributos?: {
+    genero?: string | null;
+    formatoLente?: string | null;
+    materialArmacao?: string | null;
+    cor?: string | null;
+  };
+  /** Ausente em pedido anterior a esta rodada — distinto de lista vazia. */
+  distribuicao?: DistribuicaoDaCompra;
+}
+
 export interface PurchaseOrderRecord {
   id: string;
   supplier: string;
   leadTimeDays: number;
   status: PurchaseOrderRecordStatus;
-  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  items: ItemDoPedidoRegistrado[];
   units: number;
   total: string | number;
   sentAt: string;
@@ -1364,7 +1399,7 @@ export interface PurchaseOrderRecord {
 export const registerPurchaseOrder = (body: {
   supplier: string;
   leadTimeDays: number;
-  items: { productId: string; description: string; quantity: number; unitCost: number; total: number }[];
+  items: (Omit<ItemDoPedidoRegistrado, 'sku'> & { sku?: string | null })[];
 }) => api.post<PurchaseOrderRecord>('/planning/purchase-orders', body).then((r) => r.data);
 export const getPurchaseOrderHistory = () =>
   api.get<{ total: number; rows: PurchaseOrderRecord[] }>('/planning/purchase-orders/history').then((r) => r.data);
