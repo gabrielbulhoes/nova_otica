@@ -1711,6 +1711,30 @@ const accountUsers = buildAccounts.map((a, i) => ({
 // Sessão local: quem logou por último (o /auth/me devolve o usuário certo).
 let currentUser = accountUsers[0] ?? ADMIN_USER;
 
+/* ─── Preferências de interface · rodada final · item 01 ────────────────────
+   No produto a preferência mora no banco, por usuário. Na demonstração não há
+   banco: guardamos no próprio navegador, para que alternar o menu sobreviva a
+   um F5 durante uma apresentação. É a ÚNICA cópia local desta preferência, e
+   existe só aqui — o build ligado ao servidor nunca passa por este arquivo. */
+const CHAVE_PREFERENCIAS = 'novaotica.preferencias';
+const lerPreferenciasDemo = (): Record<string, unknown> => {
+  try {
+    const cru = localStorage.getItem(CHAVE_PREFERENCIAS);
+    const o = cru ? JSON.parse(cru) : null;
+    return o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, unknown>) : {};
+  } catch {
+    // Navegador com armazenamento bloqueado: a demo abre no padrão.
+    return {};
+  }
+};
+const gravarPreferenciasDemo = (p: Record<string, unknown>) => {
+  try {
+    localStorage.setItem(CHAVE_PREFERENCIAS, JSON.stringify(p));
+  } catch {
+    /* sem armazenamento: a preferência vale só nesta sessão */
+  }
+};
+
 // Usuários para a tela de gestão (mutáveis na sessão). Com contas nomeadas
 // do build, são elas que aparecem; senão, o elenco fictício de sempre.
 const demoUsers: Record<string, unknown>[] =
@@ -1888,7 +1912,16 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
     currentUser = ADMIN_USER;
     return { token: 'demo-token', user: currentUser };
   }
-  if (url === '/auth/me') return currentUser;
+  if (url === '/auth/me') return { ...currentUser, preferences: lerPreferenciasDemo() };
+  if (url === '/auth/preferences' && m === 'PATCH') {
+    const permitido = ['menu', 'sidebarRecolhida'];
+    const mudanca = Object.fromEntries(
+      Object.entries(body).filter(([k]) => permitido.includes(k)),
+    ) as Record<string, unknown>;
+    const preferences = { ...lerPreferenciasDemo(), ...mudanca };
+    gravarPreferenciasDemo(preferences);
+    return { preferences };
+  }
 
   // Usuários (gestão)
   if (url === '/users' && m === 'GET') return { total: demoUsers.length, rows: demoUsers };

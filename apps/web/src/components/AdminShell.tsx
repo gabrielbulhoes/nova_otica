@@ -7,6 +7,11 @@ import { ScopePicker, SCOPE_LABEL, useScope } from '../lib/scope';
 import { Mark } from '../brand/Brand';
 import { Icon, type IconName } from '../brand/Icon';
 import { moduloDaRota, paginaDaRota, ROTA_CENTRAL } from '../lib/modulos';
+import {
+  atributosDaCasca,
+  rotuloDaAlternancia,
+  rotuloDoRecolhimento,
+} from '../lib/preferencias';
 import { alternarTema, useTema } from '../lib/tema';
 
 interface DockItem {
@@ -153,7 +158,7 @@ function useDockDaRolagem(alvoRef: RefObject<HTMLElement>, rota: string) {
 
 /** Console administrativo: janela de papel com barra lateral, titlebar e dock. */
 export function AdminShell() {
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin, logout, preferencias, salvarPreferencias } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const tema = useTema();
@@ -213,7 +218,15 @@ export function AdminShell() {
     // O escuro cobre a janela inteira do console porque a escolha é do usuário e
     // vale para tudo o que ele está operando. Em claro o atributo NÃO é escrito:
     // ausência de `data-tema` é o estado padrão, e é o que o seletor CSS espera.
-    <div className="macos-desktop" data-tema={tema === 'escuro' ? 'escuro' : undefined}>
+    /* `data-menu` e `data-menu-recolhido` (rodada final · item 01) seguem a
+       mesma regra do tema: o atributo sai de uma prop do React, nunca de um
+       setAttribute solto, para que o DOM não tenha como divergir do estado. E
+       ausência de atributo é o padrão — lateral, aberta. */
+    <div
+      className="macos-desktop"
+      data-tema={tema === 'escuro' ? 'escuro' : undefined}
+      {...atributosDaCasca(preferencias)}
+    >
       {/* Atalho para o conteúdo (WCAG 2.4.1). Medido: não havia UM skip link em
           17 rotas, e a casca cobra 20 paradas fixas de Tab (15 links da barra
           lateral + Sair + os 3 chips de recorte + o tema) antes que o teclado
@@ -347,6 +360,38 @@ export function AdminShell() {
                   sem precisar de uma região aria-live que ninguém mais usa.
                   O `aria-label` é explícito porque abaixo de 960px o CSS esconde
                   a palavra e sobra só o ícone. */}
+              {/* ALTERNAR O MENU · item 01. O rótulo nomeia o DESTINO ("Menu
+                  horizontal" = passar para o horizontal), como o do tema, e
+                  `aria-pressed` diz o estado sem depender do desenho. A
+                  palavra some abaixo de 960px pelo mesmo CSS do tema, e o
+                  `aria-label` continua nomeando o botão. */}
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() =>
+                  salvarPreferencias({ menu: preferencias.menu === 'horizontal' ? 'lateral' : 'horizontal' })
+                }
+                aria-pressed={preferencias.menu === 'horizontal'}
+                aria-label={rotuloDaAlternancia(preferencias)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap' }}
+              >
+                <Icon name={preferencias.menu === 'horizontal' ? 'estoque' : 'painel'} size={15} />
+                <span className="rotulo-tema">{rotuloDaAlternancia(preferencias)}</span>
+              </button>
+              {/* RECOLHER · item 01. Recolher ESCONDE o painel (o porquê está
+                  em lib/preferencias.ts); o dock, que é de ícones e fica
+                  sempre visível, mantém a navegação global a um clique. */}
+              <button
+                type="button"
+                className="btn ghost sm btn-recolher"
+                onClick={() => salvarPreferencias({ sidebarRecolhida: !preferencias.sidebarRecolhida })}
+                aria-pressed={preferencias.sidebarRecolhida}
+                aria-label={rotuloDoRecolhimento(preferencias)}
+                title={rotuloDoRecolhimento(preferencias)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap' }}
+              >
+                <span aria-hidden="true">{preferencias.sidebarRecolhida ? '\u00BB' : '\u00AB'}</span>
+              </button>
               <button
                 type="button"
                 className="btn ghost sm"

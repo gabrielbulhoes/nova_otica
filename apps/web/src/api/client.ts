@@ -76,11 +76,21 @@ export interface AuthUser {
   role: Role;
   storeId: string | null;
   storeName?: string | null;
+  /**
+   * Preferências de interface DESTE usuário (rodada final · item 01). Vêm no
+   * próprio `/me` para a casca abrir já no layout certo — chega como objeto
+   * cru de propósito, e quem normaliza é `lib/preferencias.ts`.
+   */
+  preferences?: unknown;
 }
 
 export const login = (email: string, password: string) =>
   api.post<{ token: string; user: AuthUser }>('/auth/login', { email, password }).then((r) => r.data);
 export const getMe = () => api.get<AuthUser>('/auth/me').then((r) => r.data);
+
+/** Grava a preferência de interface (merge raso no servidor). */
+export const salvarPreferencias = (mudanca: Record<string, unknown>) =>
+  api.patch<{ preferences: unknown }>('/auth/preferences', mudanca).then((r) => r.data.preferences);
 
 // ─── Tipos compartilhados com a API ──────────────────────────────────────────
 

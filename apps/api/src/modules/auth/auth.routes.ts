@@ -69,7 +69,67 @@ authRouter.get(
       role: user.role,
       storeId: user.storeId,
       storeName: user.store?.name ?? null,
+      // As preferências VÊM JUNTO, e não numa segunda chamada, porque é o que
+      // impede a interface de abrir num layout e pular para outro meio segundo
+      // depois — o console inteiro se reorganizando na frente de quem entrou.
+      preferences: preferenciasDoBanco(user.preferences),
     });
+  }),
+);
+
+/*
+ * PREFERÊNCIAS DE INTERFACE — rodada final · item 01.
+ *
+ * "O menu deve poder ser exibido tanto lateralmente quanto horizontalmente,
+ *  alternável por configuração. A preferência deve ser salva por usuário."
+ *
+ * Guardadas em JSON (`User.preferences`) e não em colunas: a próxima
+ * preferência de tela não pode custar uma migração, e o servidor não precisa
+ * conhecer o significado de cada chave para guardá-la.
+ *
+ * O que ele PRECISA fazer é não deixar entrar lixo — um `menu: "diagonal"`
+ * gravado aqui vira uma casca sem navegação para aquele usuário, e ninguém
+ * descobre isso a não ser o próprio. Por isso o schema é fechado e o valor
+ * inválido é 400, não descarte silencioso.
+ */
+const preferencesSchema = z
+  .object({
+    menu: z.enum(['lateral', 'horizontal']),
+    sidebarRecolhida: z.boolean(),
+  })
+  .partial()
+  .strict();
+
+/** O que está gravado, filtrado pelo mesmo schema: chave desconhecida some. */
+function preferenciasDoBanco(bruto: unknown): Record<string, unknown> {
+  if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) return {};
+  const parsed = preferencesSchema.safeParse(bruto);
+  // Dado antigo ou escrito fora daqui não derruba o `/me`: a interface trata
+  // chave ausente como padrão, e o usuário reescreve a preferência no primeiro
+  // clique. Perder a preferência é um aborrecimento; não conseguir entrar, não.
+  return parsed.success ? (parsed.data as Record<string, unknown>) : {};
+}
+
+/**
+ * PATCH /api/auth/preferences — MERGE RASO sobre o que já existe.
+ *
+ * Merge, e não substituição, porque a tela manda uma chave por vez: recolher a
+ * barra e trocar o layout são dois gestos independentes, e quem manda o
+ * segundo não deveria apagar o primeiro.
+ */
+authRouter.patch(
+  '/preferences',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const mudanca = preferencesSchema.parse(req.body);
+    const user = await prisma.user.findUnique({
+      where: { id: req.user!.id },
+      select: { preferences: true },
+    });
+    if (!user) throw new HttpError(401, 'Usuário não encontrado');
+    const preferences = { ...preferenciasDoBanco(user.preferences), ...mudanca };
+    await prisma.user.update({ where: { id: req.user!.id }, data: { preferences } });
+    res.json({ preferences });
   }),
 );
 

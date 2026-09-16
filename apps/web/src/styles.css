@@ -3121,3 +3121,121 @@ td .codigo {
     transform: none;
   }
 }
+
+/* ─── Menu lateral ou horizontal, e recolhível · rodada final · item 01 ─────
+   "O menu deve poder ser exibido tanto lateralmente quanto horizontalmente,
+    alternável por configuração. (…) A sidebar deve ser recolhível."
+
+   UM SÓ DOM PARA OS DOIS LAYOUTS. A alternativa — renderizar uma barra de topo
+   quando horizontal e a lateral quando não — duplicaria a navegação em dois
+   lugares do JSX, e a segunda cópia é a que envelhece: a página nova entra em
+   uma e falta na outra, sem nada quebrar. Aqui o que muda é a direção do grid,
+   e a lista de links é a mesma nos dois casos.
+
+   As regras vivem no fim da folha de propósito: precisam vir depois das do
+   bloco `.sidebar` e antes de nada — a média de 720px logo abaixo é que tem a
+   última palavra, porque no celular a largura decide, não a preferência. */
+.macos-desktop[data-menu='horizontal'] .macos-window {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.macos-desktop[data-menu='horizontal'] .sidebar {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 8px 16px;
+  border-right: none;
+  border-bottom: 1px solid var(--linha);
+  overflow-y: visible;
+}
+/* No topo, o bloco de respiro do canto da janela não tem função: ele existia
+   para afastar o conteúdo do filete dourado numa coluna. */
+.macos-desktop[data-menu='horizontal'] .sidebar .traffic {
+  display: none;
+}
+.macos-desktop[data-menu='horizontal'] .sidebar .brand {
+  padding: 0 10px 0 0;
+  white-space: nowrap;
+}
+.macos-desktop[data-menu='horizontal'] .sidebar-modulo {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.macos-desktop[data-menu='horizontal'] .sidebar-dica {
+  margin: 0;
+  padding: 0;
+}
+/* Na horizontal o filete de seleção passa para BAIXO do rótulo: à esquerda ele
+   apontaria para o item anterior da fileira. */
+.macos-desktop[data-menu='horizontal'] .nav-link {
+  border-left: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+.macos-desktop[data-menu='horizontal'] .nav-link.active {
+  border-left-color: transparent;
+  border-bottom-color: var(--ouro);
+}
+/* O cartão do usuário encolhe para caber na fileira: no topo ele é assinatura
+   e botão de sair, não um painel. */
+.macos-desktop[data-menu='horizontal'] .sidebar > div[style] {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+  margin-left: auto;
+}
+.macos-desktop[data-menu='horizontal'] .sidebar .card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px !important;
+  border: none;
+  background: transparent;
+}
+.macos-desktop[data-menu='horizontal'] .sidebar .card .label {
+  margin-bottom: 0 !important;
+}
+.macos-desktop[data-menu='horizontal'] .sidebar .card .btn {
+  width: auto !important;
+}
+
+/* RECOLHIDA: o painel some e a janela fica com uma coluna só. Recolher é
+   esconder, não encolher para uma faixa de ícones — as páginas deste console
+   não têm ícone próprio, e inventar um para cada uma seria dar significado que
+   o produto não tem. O dock continua na tela, e é ele que mantém a navegação
+   global a um clique. */
+.macos-desktop[data-menu-recolhido='1'] .macos-window {
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr);
+}
+.macos-desktop[data-menu-recolhido='1'] .sidebar {
+  display: none;
+}
+/* O botão de recolher é só o chevron: com rótulo, a barra de título passa a
+   ter três palavras disputando a mesma largura do nome da tela. */
+.btn-recolher {
+  padding-left: 9px;
+  padding-right: 9px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+@media (max-width: 720px) {
+  /* NO CELULAR A LARGURA DECIDE. A barra já é um cabeçalho horizontal aqui, e
+     esconder a navegação porque o usuário recolheu a lateral no computador da
+     loja deixaria o telefone sem menu nenhum — uma preferência tomada em outra
+     tela, cobrada numa que nunca teve barra lateral. */
+  .macos-desktop[data-menu-recolhido='1'] .sidebar {
+    display: flex;
+  }
+  .macos-desktop[data-menu-recolhido='1'] .macos-window,
+  .macos-desktop[data-menu='horizontal'] .macos-window {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+}
