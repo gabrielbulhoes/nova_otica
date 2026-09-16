@@ -1,0 +1,12 @@
+-- BORBOLETA no formato da lente — o que o dado real mostrou.
+--
+-- A lista fechada do item 03 foi escrita antes de alguém olhar o catálogo. O
+-- primeiro ensaio do padronizador, contra os 61 mil produtos da rede, achou
+-- 860 peças escritas "Borboleta" — mais que aviador (75) e máscara (10)
+-- somados, e a terceira família do catálogo. Sem o valor, todas caíam em
+-- "não identificado" e ficavam fora da composição do mix.
+--
+-- `ADD VALUE` é aditivo e não reescreve linha nenhuma. O valor novo não pode
+-- ser USADO na mesma transação que o cria, e não é: quem grava é o comando de
+-- padronização, depois, numa execução própria.
+ALTER TYPE "FormatoLente" ADD VALUE IF NOT EXISTS 'BORBOLETA' AFTER 'GATINHO';
