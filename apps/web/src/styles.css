@@ -3495,23 +3495,34 @@ td .codigo {
 
    O que NÃO se faz aqui é voltar a esconder parte do mapa por falta de espaço:
    é exatamente o que o pedido veio corrigir. */
+/* QUEBRA EM LINHAS, não rolagem horizontal.
+   A primeira versão era uma fita rolável: numa tela de 1600px ela mostrava
+   "Operação" inteira e cortava "Inteligência" no meio. Para um menu cujo
+   pedido é "exposição sempre de todos os módulos e submódulos", rolar é meia
+   solução — o que está fora da tela continua escondido, só que com um gesto a
+   mais. Quebrando em linhas, o cabeçalho cresce dois ou três centímetros e
+   mostra o mapa inteiro de uma vez. */
 .macos-desktop[data-menu='horizontal'] .sidebar-mapa {
   flex-direction: row;
   align-items: center;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 2px 12px;
-  overflow-x: auto;
   min-width: 0;
   flex: 1;
   padding-bottom: 2px;
 }
 
+/* A CATEGORIA TAMBÉM QUEBRA. Sem isto, "Inteligência" — quatro módulos e sete
+   telas — vira uma linha mais larga que a janela, e o `wrap` do mapa acima não
+   tem onde agir: o estouro está DENTRO de um filho que não quebra. */
 .macos-desktop[data-menu='horizontal'] .sidebar-categoria {
   flex-direction: row;
   align-items: center;
+  flex-wrap: wrap;
   gap: 2px 8px;
   margin-bottom: 0;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* Na fileira a categoria vira uma etiqueta vertical curta antes dos módulos
