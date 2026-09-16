@@ -1225,7 +1225,14 @@ function ComposicaoDoMix({ params }: { params: Record<string, string | number | 
       />
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', margin: '6px 0 10px' }}>
         <Selo tom={tomDaLeitura} icone={m.cobertura.leitura === 'confiavel' ? 'aprovar' : 'atencao'}>
-          leitura {m.cobertura.leitura === 'sem-base' ? 'sem base' : m.cobertura.leitura}
+          {/* A chave do servidor não vai crua para a tela: "confiavel" sem
+              acento num selo é a interface falando a língua do banco. */}
+          leitura{' '}
+          {m.cobertura.leitura === 'sem-base'
+            ? 'sem base'
+            : m.cobertura.leitura === 'confiavel'
+              ? 'confiável'
+              : 'parcial'}
         </Selo>
         <label style={{ fontSize: 13 }}>
           meta de unidades{' '}

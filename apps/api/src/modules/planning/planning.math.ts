@@ -899,7 +899,10 @@ export function justificativaMinima(x: {
   } else {
     partes.push('sem giro no período');
   }
-  if (x.suggestedQty && x.suggestedQty > 0) partes.push(`sugeridas ${num(x.suggestedQty, 0)} un.`);
+  // Sem o ponto no fim da parte: o `join` já fecha a frase, e com os dois a
+  // linha saía "sugeridas 77 un..", que na tela do comprador lê como descuido
+  // — porque é.
+  if (x.suggestedQty && x.suggestedQty > 0) partes.push(`sugeridas ${num(x.suggestedQty, 0)} un`);
   return partes.join(' · ') + '.';
 }
 

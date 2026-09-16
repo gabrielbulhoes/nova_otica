@@ -147,7 +147,10 @@ describe('justificativa mínima', () => {
     expect(compra.justificativa).toContain('Estoque 5 un.');
     expect(compra.justificativa).toContain('vendeu 90 un. em 90 dias');
     expect(compra.justificativa).toContain('giro de 1/dia');
-    expect(compra.justificativa).toContain('sugeridas 55 un.');
+    expect(compra.justificativa).toContain('sugeridas 55 un');
+    // Um ponto só no fim da frase: "un.." era o que saía na tela do comprador.
+    expect(compra.justificativa.endsWith('un.')).toBe(true);
+    expect(compra.justificativa).not.toContain('..');
 
     const parada = analyzeProduct({ ...base, unitsSold: 0, currentStock: 10 }, 90);
     expect(parada.recommendation).toBe('LIQUIDATE');

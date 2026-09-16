@@ -2574,6 +2574,10 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       analyzeProduct(
         {
           productId: prod.id,
+          // O SKU sobe até o plano (rodada final · item 04): é o código que o
+          // fornecedor reconhece, e é ele que a linha do pedido mostra ao lado
+          // do nome da peça.
+          sku: prod.sku,
           description: prod.description,
           brand: prod.brand,
           category: prod.category,

@@ -63,6 +63,26 @@ function Secao({ titulo, children }: { titulo: string; children: React.ReactNode
 
 const mm = (v: number | null) => (v === null ? null : `${v} mm`);
 
+/**
+ * O texto de origem só aparece quando ACRESCENTA alguma coisa.
+ *
+ * O rótulo da lista fechada carrega o sinônimo entre parênteses ("Máscara
+ * (shield)", "Gatinho (cat-eye)"), e comparar com ele inteiro fazia a ficha
+ * escrever «Máscara (shield) · no cadastro: "Máscara"» — repetir a mesma
+ * palavra com ar de conferência.
+ */
+const divergeDoRotulo = (original: string | null, rotulo: string): boolean => {
+  if (!original) return false;
+  const limpo = (t: string) =>
+    t
+      .replace(/\s*\(.*\)$/, '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  return limpo(original) !== limpo(rotulo);
+};
+
 /** Barras do histórico mensal: doze meses, inclusive os vazios. */
 function HistoricoMensal({ meses }: { meses: FichaTecnica['vendas']['mensal'] }) {
   const teto = Math.max(1, ...meses.map((m) => m.unidades));
@@ -147,11 +167,9 @@ export function ProductSheet() {
             {f.atributos.formatoLente.chave ? (
               <>
                 {f.atributos.formatoLente.rotulo}
-                {f.atributos.formatoLente.textoOriginal &&
-                  f.atributos.formatoLente.textoOriginal.toLowerCase() !==
-                    f.atributos.formatoLente.rotulo.toLowerCase() && (
-                    <span className="hint"> · no cadastro: “{f.atributos.formatoLente.textoOriginal}”</span>
-                  )}
+                {divergeDoRotulo(f.atributos.formatoLente.textoOriginal, f.atributos.formatoLente.rotulo) && (
+                  <span className="hint"> · no cadastro: “{f.atributos.formatoLente.textoOriginal}”</span>
+                )}
               </>
             ) : null}
           </Campo>
@@ -159,11 +177,12 @@ export function ProductSheet() {
             {f.atributos.materialArmacao.chave ? (
               <>
                 {f.atributos.materialArmacao.rotulo}
-                {f.atributos.materialArmacao.textoOriginal &&
-                  f.atributos.materialArmacao.textoOriginal.toLowerCase() !==
-                    f.atributos.materialArmacao.rotulo.toLowerCase() && (
-                    <span className="hint"> · no cadastro: “{f.atributos.materialArmacao.textoOriginal}”</span>
-                  )}
+                {divergeDoRotulo(
+                  f.atributos.materialArmacao.textoOriginal,
+                  f.atributos.materialArmacao.rotulo,
+                ) && (
+                  <span className="hint"> · no cadastro: “{f.atributos.materialArmacao.textoOriginal}”</span>
+                )}
               </>
             ) : null}
           </Campo>
