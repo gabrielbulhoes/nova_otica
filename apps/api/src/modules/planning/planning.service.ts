@@ -1027,7 +1027,19 @@ async function detalharPlanoContinuo(
     const f = fichas.get(p.productId);
     return {
       id: p.productId,
-      sku: p.productId,
+      /*
+       * O SKU DE VERDADE, não o id interno.
+       *
+       * Era `p.productId` — um `cuid` como `cmg7x2k9p0001`. Passou despercebido
+       * enquanto a tela do plano mostrava só a descrição; no momento em que o
+       * SKU entrou na linha do best-seller (16/09/2026, para separar as duas
+       * abas à vista), o comprador passaria a ler o id do banco como se fosse
+       * o código da peça.
+       *
+       * `id` continua sendo o productId: é a chave de React e de rateio, e ela
+       * precisa ser única mesmo para peça sem SKU cadastrado.
+       */
+      sku: p.sku ?? p.productId,
       description: p.description,
       // A GRIFE, não o fornecedor — a mesma regra do resto do motor.
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',

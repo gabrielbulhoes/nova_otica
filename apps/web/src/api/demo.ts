@@ -3080,7 +3080,8 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
      */
     const candidatos: CandidatoDeCompra[] = ps.map((p) => ({
       id: p.productId,
-      sku: p.productId,
+      // O SKU de verdade, não o id interno — mesmo conserto do servidor.
+      sku: prodById(p.productId)?.sku ?? p.productId,
       description: p.description,
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
       tipo: p.category,

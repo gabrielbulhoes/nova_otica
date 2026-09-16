@@ -8,7 +8,7 @@ import type {
   RiskProfile,
   StrategySegment,
 } from '../api/client';
-import { AberturaDeSecao, Botao, Loading, PageHeader, Selo, StatCard, Unidade } from '../components/ui';
+import { AberturaDeSecao, Botao, Codigo, Loading, PageHeader, Selo, StatCard, Unidade } from '../components/ui';
 import { Icon } from '../brand/Icon';
 import { generoProvavel, rotuloDoGenero, rotuloDoGrupoDePeca } from '@planning';
 
@@ -374,6 +374,17 @@ function LinhaDeSku({ linha, compra }: { linha: LinhaDoPlano; compra?: ControleD
           >
             {c.description}
           </Botao>
+          {/* O SKU À VISTA — 16/09/2026.
+              A separação entre as duas abas é exatamente esta: o best-seller é
+              comprado POR PEÇA (repor o que vendeu exige repor aquele modelo) e
+              o lançamento, por característica. A aba mostrava só a descrição, o
+              que deixava a distinção implícita justo onde ela decide o pedido.
+              Em mono, como o SKU aparece na lista de compras. */}
+          {c.sku && (
+            <div style={{ marginLeft: 30 }}>
+              <Codigo>{c.sku}</Codigo>
+            </div>
+          )}
         </td>
         <td className="num">
           <strong>{linha.units}</strong>
