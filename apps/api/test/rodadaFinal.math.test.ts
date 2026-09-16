@@ -52,7 +52,10 @@ describe('normFormatoLente — a lista fechada do cliente', () => {
     expect(normFormatoLente(null)).toBeNull();
     expect(normFormatoLente('')).toBeNull();
     expect(normFormatoLente('   ')).toBeNull();
-    expect(normFormatoLente('Borboleta XPTO')).toBe(NAO_IDENTIFICADO);
+    // (Era "Borboleta XPTO" até o catálogo real mostrar que borboleta é um
+    // formato de verdade, com 860 peças. O exemplo de texto ilegível teve de
+    // virar outro — o dicionário cresce, e é isso que se quer.)
+    expect(normFormatoLente('Formato XPTO 77')).toBe(NAO_IDENTIFICADO);
   });
 
   it('é idempotente: chave canônica passa direto', () => {
@@ -536,6 +539,49 @@ describe('revisão · repartirComTeto não perde a meta', () => {
   it('peso negativo (devolução) não inverte nem some com a meta', () => {
     const r = repartirComTeto([-5, -1], 12, [10, 10]);
     expect(r.naoAlocado).toBe(12);
+  });
+});
+
+// ─── O que o PRIMEIRO ENSAIO contra o catálogo real mostrou ────────────────
+//
+// A lista fechada foi escrita antes de alguém olhar as 61 mil peças. O ensaio
+// do padronizador trouxe as grafias que faltavam, com a contagem de cada uma.
+// Estes testes guardam o que foi acrescentado — e o que foi deixado de fora
+// de propósito.
+
+describe('dicionário · as grafias que o catálogo real trouxe', () => {
+  it('Borboleta é formato próprio: 860 peças, a terceira família do catálogo', () => {
+    expect(normFormatoLente('Borboleta')).toBe('BORBOLETA');
+    expect(normFormatoLente('butterfly')).toBe('BORBOLETA');
+    // Vem antes de gatinho: os dois sobem nas pontas, e "borboleta gatinho"
+    // é, no balcão, uma borboleta.
+    expect(normFormatoLente('Borboleta gatinho')).toBe('BORBOLETA');
+    expect(FORMATOS_DE_LENTE.some((f) => f.chave === 'BORBOLETA')).toBe(true);
+  });
+
+  it('"Viseira lente única" é a máscara descrita como a Oakley escreve', () => {
+    expect(normFormatoLente('Viseira lente unica')).toBe('MASCARA');
+    expect(normFormatoLente('Viseira')).toBe('MASCARA');
+  });
+
+  it('nome comercial de material vira a base que ele é', () => {
+    expect(normMaterialArmacao('O_matter')).toBe('INJETADO');
+    expect(normMaterialArmacao('Omatter')).toBe('INJETADO');
+    expect(normMaterialArmacao('Spx')).toBe('NYLON');
+    expect(normMaterialArmacao('Eco pmma')).toBe('INJETADO');
+    expect(normMaterialArmacao('Aço')).toBe('ACO_INOX');
+  });
+
+  it('material fora da lista vira OUTROS — que é uma afirmação, não uma dúvida', () => {
+    // "É um material que não está na lista" é diferente de "não sei o que é".
+    expect(normMaterialArmacao('Optyl')).toBe('OUTROS');
+    expect(normMaterialArmacao('Chifre')).toBe('OUTROS');
+  });
+
+  it('o que eu não sei continua não sabido', () => {
+    // "C_5" é nome de liga da Oakley e eu não tenho como afirmar qual. Chutar
+    // alumínio encheria a composição do mix de um material inventado.
+    expect(normMaterialArmacao('C_5')).toBe(NAO_IDENTIFICADO);
   });
 });
 

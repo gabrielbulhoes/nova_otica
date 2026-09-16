@@ -4555,6 +4555,7 @@ export type FormatoLenteChave =
   | 'OVAL'
   | 'AVIADOR'
   | 'GATINHO'
+  | 'BORBOLETA'
   | 'GEOMETRICA'
   | 'WAYFARER'
   | 'MASCARA'
@@ -4583,6 +4584,7 @@ export const FORMATOS_DE_LENTE: { chave: FormatoLenteChave; rotulo: string }[] =
   { chave: 'OVAL', rotulo: 'Oval' },
   { chave: 'AVIADOR', rotulo: 'Aviador' },
   { chave: 'GATINHO', rotulo: 'Gatinho (cat-eye)' },
+  { chave: 'BORBOLETA', rotulo: 'Borboleta' },
   { chave: 'GEOMETRICA', rotulo: 'Geométrica' },
   { chave: 'WAYFARER', rotulo: 'Wayfarer' },
   { chave: 'MASCARA', rotulo: 'Máscara (shield)' },
@@ -4630,7 +4632,12 @@ const textoParaCasar = (s: string) =>
  */
 const SINONIMOS_DE_FORMATO: [RegExp, FormatoLenteChave][] = [
   [/\bwayfarer\b|\bway\s?farer\b/, 'WAYFARER'],
-  [/\bmascara\b|\bshield\b|\bwrap\b|\bmask\b|\bvisor\b/, 'MASCARA'],
+  // "Viseira lente única" é como a Oakley descreve a máscara de lente corrida.
+  // 199 peças no catálogo da rede escritas assim.
+  [/\bmascara\b|\bshield\b|\bwrap\b|\bmask\b|\bvisor\b|\bviseira\b|\blente unica\b/, 'MASCARA'],
+  // BORBOLETA antes de gatinho: os dois sobem nas pontas e uma descrição que
+  // diga "borboleta gatinho" é, na prática, uma borboleta.
+  [/\bborboleta\b|\bbutterfly\b/, 'BORBOLETA'],
   [/\baviador\b|\baviator\b|\bpilot(o|a)?\b|\bpiloto\b/, 'AVIADOR'],
   [/\bgatinho\b|\bgato\b|\bcat\s?eye\b|\bcateye\b|\bcat\b|\bolho de gato\b/, 'GATINHO'],
   [/\bgeometric[ao]?\b|\bhexagon\w*|\boctogon\w*|\boctagon\w*|\bpentagon\w*|\birregular\b/, 'GEOMETRICA'],
@@ -4658,6 +4665,26 @@ export function normFormatoLente(texto: string | null | undefined): FormatoLente
 
 const SINONIMOS_DE_MATERIAL: [RegExp, MaterialArmacaoChave][] = [
   [/\btr\s?-?\s?90\b/, 'TR90'],
+  /*
+   * NOMES COMERCIAIS, vindos do primeiro ensaio contra o catálogo real.
+   *
+   *  · "O Matter" é o termoplástico injetado da Oakley (162 peças);
+   *  · "SPX" é a poliamida da Silhouette;
+   *  · "Eco PMMA" é acrílico injetado;
+   *  · "Optyl" (resina epóxi) e "Chifre" são materiais de verdade que NÃO
+   *    estão na lista do cliente — então viram OUTROS, que é a afirmação
+   *    certa: "é um material fora da lista", diferente de "não sei o que é".
+   *
+   * "C_5" ficou de fora de propósito: é nome de liga da Oakley e eu não
+   * tenho como afirmar qual. Continua em "não identificado", que é o que ele
+   * de fato é até alguém do balcão dizer.
+   */
+  [/\bo\s?_?\s?matter\b|\bomatter\b/, 'INJETADO'],
+  [/\bspx\b/, 'NYLON'],
+  [/\bpmma\b|\bacrilic[oa]\b|\bacrylic\b/, 'INJETADO'],
+  // "Aço" sozinho, sem "inox": é o que o cadastro escreve, e a lista do
+  // cliente tem "Aço inoxidável" como o único aço.
+  [/\baco\b/, 'ACO_INOX'],
   [/\btitani[ou]m?\b|\btitan\b|\bbeta\s?titan\w*/, 'TITANIO'],
   [/\baco\b.*\binox\w*|\binox\w*|\bstainless\b/, 'ACO_INOX'],
   [/\balumin\w*/, 'ALUMINIO'],
@@ -4681,6 +4708,14 @@ export function normMaterialArmacao(texto: string | null | undefined): MaterialA
   const canon = t.toUpperCase().replace(/ /g, '_') as MaterialArmacaoChave;
   if (ROTULO_MATERIAL.has(canon)) return canon;
   if (/\bcombinad[ao]\b|\bcombined\b|\bmist[ao]\b|\bmixed\b|\bmix\b/.test(t)) return 'COMBINADO';
+  /*
+   * MATERIAL QUE EXISTE E NÃO ESTÁ NA LISTA — resina epóxi (Optyl), chifre,
+   * couro. "OUTROS" aqui é uma AFIRMAÇÃO ("é um material fora da lista"), e é
+   * por isso que ele é decidido antes do laço de sinônimos: lá embaixo o
+   * OUTROS é descartado de propósito, para não virar o balde de tudo que o
+   * dicionário não conhece — esse é o papel do NAO_IDENTIFICADO.
+   */
+  if (/\boptyl\b|\bepoxi\b|\bchifre\b|\bhorn\b|\bcouro\b/.test(t)) return 'OUTROS';
   const achados = new Set<MaterialArmacaoChave>();
   for (const [re, chave] of SINONIMOS_DE_MATERIAL) if (re.test(t)) achados.add(chave);
   achados.delete('OUTROS');

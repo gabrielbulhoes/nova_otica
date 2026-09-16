@@ -133,7 +133,9 @@ describe('padronizarPeca', () => {
   });
 
   it('texto que o padronizador não entende vira NAO_IDENTIFICADO, não OUTROS', () => {
-    const m = padronizarPeca({ ...base, formatoTexto: 'Borboleta XPTO', fonteDoTexto: 'ficha' });
+    // (Era "Borboleta XPTO": borboleta virou formato de verdade quando o
+    // catálogo mostrou 860 peças escritas assim.)
+    const m = padronizarPeca({ ...base, formatoTexto: 'Formato XPTO 77', fonteDoTexto: 'ficha' });
     expect(m?.formatoLente).toBe('NAO_IDENTIFICADO');
   });
 });

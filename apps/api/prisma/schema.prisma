@@ -907,6 +907,11 @@ enum FormatoLente {
   OVAL
   AVIADOR
   GATINHO
+  /// Entrou DEPOIS da lista original, com dado real: o primeiro ensaio do
+  /// padronizador achou 860 peças escritas "Borboleta" — mais que aviador e
+  /// máscara somados. Era a terceira família do catálogo caindo em "não
+  /// identificado" por não estar na lista.
+  BORBOLETA
   GEOMETRICA
   WAYFARER
   MASCARA
