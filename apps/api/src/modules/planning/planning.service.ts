@@ -35,6 +35,7 @@ import {
   explicarLinha,
   margemPct,
   montarPlanoDetalhado,
+  selecionarUniversoDeCandidatos,
   splitByNeed,
   contarIdades,
   filtrarVista,
@@ -1045,12 +1046,37 @@ async function detalharPlanoContinuo(
   estrategia: ReturnType<typeof buildCommercialStrategy>,
   days: number,
 ) {
-  // Relevância: quem gira primeiro; empate pelo capital da peça, que é o que
-  // diferencia duas peças paradas.
-  const ordenados = [...productPlans].sort(
-    (a, b) => b.unitsSold - a.unitsSold || b.stockValue - a.stockValue,
+  /*
+   * O TETO ERA UMA FILA SÓ, ORDENADA POR GIRO — e isso esvaziava o lançamento.
+   *
+   * `ordenados.slice(0, 3_000)` sobre uma lista por `unitsSold` decrescente
+   * parece neutro e não é: o segmento LANÇAMENTO é definido por giro ZERO
+   * (`segmentoPorGiro`), então toda peça candidata a ele ficava no fim da fila
+   * e o corte a descartava. Com 3.000 ou mais peças vendendo ao menos uma
+   * unidade na janela — e a rede tem —, o balde saía vazio POR CONSTRUÇÃO, e a
+   * aba mostrava "nenhuma peça entrou neste cenário" com o motor inteiro
+   * funcionando. Relatado do cliente em 17/09/2026: "Lançamento não foi
+   * alterado, não está detalhando nada do pedido."
+   *
+   * Agora cada segmento tem COTA PRÓPRIA, dimensionada pela meta que a
+   * estratégia já repartiu (no perfil equilibrado, 45% / 55% do piso). O que um
+   * lado não usa o outro aproveita, então o teto continua valendo inteiro.
+   *
+   * E cada fila é ordenada pela régua DELA:
+   *
+   *  · best-seller — giro, empate pelo capital. É a reposição do que já vende.
+   *  · lançamento  — o giro do TIPO da peça, empate pelo capital. A peça não
+   *    tem histórico próprio (por definição), então quem tem lastro é o perfil;
+   *    o tipo é o pedaço do perfil disponível aqui, antes das fichas. Ordenar
+   *    lançamento por capital parado, como a fila única fazia, era eleger o
+   *    estoque morto mais caro — o oposto do sinal que se procura.
+   */
+  const metaDe = (k: SegmentoDoPlano) => estrategia.segments.find((s) => s.key === k)?.units ?? 0;
+  const pool = selecionarUniversoDeCandidatos(
+    productPlans,
+    { 'best-seller': metaDe('best-seller'), lancamento: metaDe('lancamento') },
+    TETO_DE_CANDIDATOS,
   );
-  const pool = ordenados.slice(0, TETO_DE_CANDIDATOS);
   const fichas = await fichasDoFornecedor(
     pool.map((p) => ({ ...p, recommendation: 'BUY' as const, suggestedQty: 1 })),
   );
