@@ -4041,6 +4041,24 @@ export interface CandidatoDeCompra {
   description: string;
   /** A GRIFE (Ray-Ban, Dior), nunca o fornecedor. */
   brand: string;
+  /**
+   * O FORNECEDOR — quem emite a nota, e o nível em que a compra é fechada.
+   *
+   * "Best seller continua sem separar por fornecedor." — Galbe, 17/09/2026.
+   *
+   * Grife e fornecedor são coisas diferentes e sempre foram: a Ray-Ban e a
+   * Oakley são grifes da MESMA Luxottica, e quem fecha o pedido fecha por
+   * fornecedor, não por grife. A tela de Compras já agrupava assim; a de
+   * Estratégia mostrava só a grife.
+   *
+   * A origem é a mesma das duas telas: o `nome_fornecedor` que o CDS manda em
+   * cada produto, consolidado pelo catálogo de grifes quando ele existe. Sem
+   * catálogo, o nome do ERP vale por si — não é um buraco, é o dado cru.
+   *
+   * Opcional porque a oferta de feira não traz o campo: lá o fornecedor é o
+   * dono da planilha, e quem monta a tela já sabe qual é.
+   */
+  fornecedor?: string | null;
   /** SOLAR · ARMACAO · … — o "tipo" da hierarquia do cliente. */
   tipo: string | null;
   /** Feminino · Masculino · Unissex — vem da ficha do fornecedor. */
@@ -4272,9 +4290,96 @@ export function evidenciaDoPerfil(
  * O que sai é o terceiro BALDE na tela, que dividia uma compra pequena em três
  * pilhas e obrigava o comprador a conciliar duas listas de peças novas.
  */
+/**
+ * A RÉGUA DO SEGMENTO, em um lugar só — e o motivo de ela estar exposta.
+ *
+ * Quem monta o universo de candidatos (`detalharPlanoContinuo`) precisa da MESMA
+ * régua que quem classifica depois. Enquanto a seleção ordenava por giro e a
+ * classificação perguntava por giro zero, as duas discordavam pelo desenho: o
+ * corte por relevância deixava o balde de lançamento de fora inteiro, e a aba
+ * abria vazia com o motor inteiro funcionando.
+ *
+ * Oitava ocorrência do mesmo padrão nesta base (escrever com uma régua e ler
+ * com outra), e a resposta é sempre a mesma: uma função, usada dos dois lados.
+ */
+export function segmentoPorGiro(unitsSold: number): SegmentoDoPlano {
+  return unitsSold > 0 ? 'best-seller' : 'lancamento';
+}
+
 export function classificarCandidato(c: CandidatoDeCompra, _perfil: PerfilQueVende): SegmentoDoPlano {
-  if (c.unitsSold > 0) return 'best-seller';
-  return 'lancamento';
+  return segmentoPorGiro(c.unitsSold);
+}
+
+/**
+ * O UNIVERSO DE CANDIDATOS, com cota por segmento.
+ *
+ * Era uma fila só, ordenada por giro decrescente, cortada no teto. Parece
+ * neutro e não é: o segmento LANÇAMENTO é definido por giro ZERO, então toda
+ * peça candidata a ele ficava no fim da fila e o corte a descartava. Com peças
+ * vendendo mais que o teto — e a rede real tem —, o balde saía vazio POR
+ * CONSTRUÇÃO e a aba abria com "nenhuma peça entrou neste cenário", com o motor
+ * inteiro funcionando. Relatado pelo cliente em 17/09/2026.
+ *
+ * Cada segmento passa a ter cota própria, proporcional à meta que a estratégia
+ * já repartiu (no perfil equilibrado, 45% / 55% do piso). O que um lado não usa
+ * o outro aproveita: o teto continua valendo inteiro, e uma rede sem nenhuma
+ * peça parada não perde vaga de best-seller por causa da reserva.
+ *
+ * Cada fila é ordenada pela régua DELA:
+ *
+ *  · best-seller — giro próprio, empate pelo capital.
+ *  · lançamento  — o giro do TIPO da peça, empate pelo capital. A peça não tem
+ *    histórico próprio (por definição), então quem tem lastro é o perfil, e o
+ *    tipo é o pedaço do perfil disponível antes das fichas do fornecedor.
+ *    Ordenar lançamento por capital parado — o que a fila única fazia com as
+ *    sobras — elegia o estoque morto mais caro, o oposto do sinal procurado.
+ *
+ * Puro: é aqui que se discute a régua, não no laço que consulta o banco.
+ */
+export function selecionarUniversoDeCandidatos(
+  plans: ProductPlan[],
+  metaPorSegmento: Record<SegmentoDoPlano, number>,
+  teto: number,
+): ProductPlan[] {
+  if (teto <= 0) return [];
+  if (plans.length <= teto) return [...plans];
+
+  const giroPorTipo = new Map<string, number>();
+  for (const p of plans) {
+    if (p.unitsSold <= 0 || !p.category) continue;
+    const k = chaveDeAtributo(p.category);
+    giroPorTipo.set(k, (giroPorTipo.get(k) ?? 0) + p.unitsSold);
+  }
+  const lastroDoTipo = (p: ProductPlan) =>
+    p.category ? (giroPorTipo.get(chaveDeAtributo(p.category)) ?? 0) : 0;
+
+  const filas: Record<SegmentoDoPlano, ProductPlan[]> = { 'best-seller': [], lancamento: [] };
+  for (const p of plans) filas[segmentoPorGiro(p.unitsSold)].push(p);
+  filas['best-seller'].sort((a, b) => b.unitsSold - a.unitsSold || b.stockValue - a.stockValue);
+  filas.lancamento.sort((a, b) => lastroDoTipo(b) - lastroDoTipo(a) || b.stockValue - a.stockValue);
+
+  const somaDasMetas = Math.max(0, metaPorSegmento['best-seller'] ?? 0) + Math.max(0, metaPorSegmento.lancamento ?? 0);
+  // Sem meta declarada (piso zero) a divisão é meio a meio — é o que não
+  // privilegia nenhum dos dois quando não há o que privilegiar.
+  const cota = (k: SegmentoDoPlano) =>
+    somaDasMetas > 0
+      ? Math.round((teto * Math.max(0, metaPorSegmento[k] ?? 0)) / somaDasMetas)
+      : Math.round(teto / 2);
+
+  const tomados: Record<SegmentoDoPlano, ProductPlan[]> = {
+    'best-seller': filas['best-seller'].slice(0, cota('best-seller')),
+    lancamento: filas.lancamento.slice(0, cota('lancamento')),
+  };
+  // A sobra de teto vai para quem ainda tem candidato, na ordem em que os
+  // segmentos existem. Sem isto, uma fila curta devolveria vagas ao nada.
+  let folga = teto - tomados['best-seller'].length - tomados.lancamento.length;
+  for (const k of SEGMENTOS_DO_PLANO) {
+    if (folga <= 0) break;
+    const extra = filas[k].slice(tomados[k].length, tomados[k].length + folga);
+    tomados[k] = tomados[k].concat(extra);
+    folga -= extra.length;
+  }
+  return [...tomados['best-seller'], ...tomados.lancamento];
 }
 
 /**

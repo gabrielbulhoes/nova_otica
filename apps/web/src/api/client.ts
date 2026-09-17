@@ -1187,6 +1187,15 @@ export interface CandidatoDoPlano {
   description: string;
   /** A GRIFE (Ray-Ban, Dior), nunca o fornecedor. */
   brand: string;
+  /**
+   * O FORNECEDOR — quem emite a nota. É o nível em que a compra fecha, e o que
+   * faltava na aba de best-seller (17/09/2026). Vem do `nome_fornecedor` do
+   * CDS, consolidado pelo catálogo de grifes quando ele existe.
+   *
+   * Opcional: a oferta de feira não traz o campo, e um plano antigo em cache
+   * não pode quebrar a tela por causa de uma coluna que nasceu depois dele.
+   */
+  fornecedor?: string | null;
   /** SOLAR · ARMACAO — o "tipo" da hierarquia. */
   tipo: string | null;
   genero: string | null;

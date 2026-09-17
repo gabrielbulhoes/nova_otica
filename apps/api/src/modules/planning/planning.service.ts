@@ -35,6 +35,7 @@ import {
   explicarLinha,
   margemPct,
   montarPlanoDetalhado,
+  selecionarUniversoDeCandidatos,
   splitByNeed,
   contarIdades,
   filtrarVista,
@@ -1045,12 +1046,25 @@ async function detalharPlanoContinuo(
   estrategia: ReturnType<typeof buildCommercialStrategy>,
   days: number,
 ) {
-  // Relevância: quem gira primeiro; empate pelo capital da peça, que é o que
-  // diferencia duas peças paradas.
-  const ordenados = [...productPlans].sort(
-    (a, b) => b.unitsSold - a.unitsSold || b.stockValue - a.stockValue,
+  // O universo tem cota POR SEGMENTO, e não uma fila só por giro — o porquê
+  // inteiro está em `selecionarUniversoDeCandidatos`, que é pura de propósito:
+  // é lá que se discute a régua, não aqui no meio das consultas.
+  const metaDe = (k: SegmentoDoPlano) => estrategia.segments.find((s) => s.key === k)?.units ?? 0;
+  const pool = selecionarUniversoDeCandidatos(
+    productPlans,
+    { 'best-seller': metaDe('best-seller'), lancamento: metaDe('lancamento') },
+    TETO_DE_CANDIDATOS,
   );
-  const pool = ordenados.slice(0, TETO_DE_CANDIDATOS);
+
+  // O FORNECEDOR de cada peça, pela MESMA regra da tela de Compras: o catálogo
+  // de grifes quando existe, o `nome_fornecedor` do CDS como base. Duas telas
+  // que agrupam por fornecedor com réguas diferentes seriam a divergência
+  // seguinte — e esta base já tem oito delas no histórico.
+  const catalogoDeGrifes = loadBrandCatalog();
+  const fornecedorDe = (p: ProductPlan) =>
+    supplierFor(analysisBrand(p.description, p.category, p.brand), catalogoDeGrifes) ??
+    p.brand ??
+    null;
   const fichas = await fichasDoFornecedor(
     pool.map((p) => ({ ...p, recommendation: 'BUY' as const, suggestedQty: 1 })),
   );
@@ -1075,6 +1089,9 @@ async function detalharPlanoContinuo(
       description: p.description,
       // A GRIFE, não o fornecedor — a mesma regra do resto do motor.
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
+      // E o FORNECEDOR ao lado dela: é por ele que o pedido fecha, e é o nível
+      // que faltava na aba de best-seller.
+      fornecedor: fornecedorDe(p),
       tipo: p.category,
       genero: f?.genero ?? null,
       /*

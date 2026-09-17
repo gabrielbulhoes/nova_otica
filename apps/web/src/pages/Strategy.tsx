@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getCommercialStrategy } from '../api/client';
 import type {
@@ -66,7 +66,10 @@ export function Strategy() {
           fica para a tela que tem uma ação a cometer (Planejamento & Compras). */}
       <PageHeader
         title="Estratégia comercial"
-        subtitle="Piso, risco e janela — a estratégia da compra. Defina quanto comprar e como distribuir; o motor valida contra a capacidade da rede e divide em best-seller, lançamento e aposta."
+        // DOIS baldes, não três: a "aposta" foi unida ao lançamento em
+        // 16/09/2026 e este subtítulo ficou para trás — a tela mostrava duas
+        // abas enquanto o texto acima delas prometia três.
+        subtitle="Piso, risco e janela — a estratégia da compra. Defina quanto comprar e como distribuir; o motor valida contra a capacidade da rede e divide em best-seller e lançamento."
       />
 
       <div className="grid grid-2" style={{ alignItems: 'start', gap: 16 }}>
@@ -516,7 +519,72 @@ function Nivel({
   );
 }
 
-/** O plano de um segmento, na hierarquia Marca → Tipo → Gênero → SKU. */
+/** O rótulo do fornecedor de uma linha — sempre um nome, nunca um vazio. */
+const fornecedorDaLinha = (l: LinhaDoPlano) =>
+  (l.candidato.fornecedor ?? '').trim() || 'Sem fornecedor';
+
+/**
+ * O TRILHO DE FORNECEDORES do plano — irmão do da tela de Compras.
+ *
+ * Mesmo gesto e mesmas classes de propósito: quem aprendeu a filtrar o pedido
+ * por fornecedor não deve reaprender nada aqui. A diferença é a moeda de cada
+ * botão — ali é dinheiro do pedido, aqui são unidades do plano, porque é isso
+ * que esta tela reparte.
+ *
+ * "Todos" em primeiro e por padrão: é a visão que a aba sempre teve, e exigir
+ * uma escolha antes de ver o plano inteiro seria trocar uma tela pronta por um
+ * formulário.
+ */
+function TrilhoDeFornecedoresDoPlano({
+  fornecedores,
+  escolhido,
+  aoEscolher,
+}: {
+  fornecedores: { nome: string; linhas: number; units: number }[];
+  escolhido: string | null;
+  aoEscolher: (nome: string | null) => void;
+}) {
+  const totalLinhas = fornecedores.reduce((a, f) => a + f.linhas, 0);
+  const totalUnits = fornecedores.reduce((a, f) => a + f.units, 0);
+
+  const botao = (chave: string, ativo: boolean, titulo: string, linhas: number, units: number) => (
+    <button
+      key={chave}
+      type="button"
+      className={`trilho-item${ativo ? ' active' : ''}`}
+      aria-pressed={ativo}
+      onClick={() => aoEscolher(chave === '__todos' ? null : chave)}
+      title={`${titulo} · ${linhas} ${linhas === 1 ? 'linha' : 'linhas'} · ${fmt(units)} un.`}
+    >
+      <span className="trilho-nome">{titulo}</span>
+      <span className="trilho-numeros">
+        {linhas} {linhas === 1 ? 'linha' : 'linhas'} · {fmt(units)} un.
+      </span>
+    </button>
+  );
+
+  return (
+    <nav className="trilho" aria-label="Filtro por fornecedor">
+      {botao('__todos', escolhido === null, 'Todos os fornecedores', totalLinhas, totalUnits)}
+      {fornecedores.map((f) => botao(f.nome, escolhido === f.nome, f.nome, f.linhas, f.units))}
+    </nav>
+  );
+}
+
+/**
+ * O plano de um segmento, na hierarquia Fornecedor → Marca → Tipo → Gênero → SKU.
+ *
+ * O FORNECEDOR ENTROU POR CIMA DA MARCA (17/09/2026).
+ *
+ * "Best seller continua sem separar por fornecedor." O trilho da rodada
+ * anterior ficou na tela de Pedido de compra, porque o pedido era o que o texto
+ * dizia agrupar. Mas a decisão de compra se fecha por fornecedor, e nesta aba
+ * ela aparecia dissolvida entre grifes: a Ray-Ban e a Oakley, que saem na MESMA
+ * nota da Luxottica, eram dois blocos distantes um do outro.
+ *
+ * Fornecedor acima de marca, e não o contrário, porque é a ordem da conversa
+ * real — primeiro com quem se compra, depois o que se compra dele.
+ */
 function SegmentoDoPlano({ linhas, compra }: { linhas: LinhaDoPlano[]; compra?: ControleDeCompra }) {
   if (linhas.length === 0) {
     return (
@@ -527,9 +595,28 @@ function SegmentoDoPlano({ linhas, compra }: { linhas: LinhaDoPlano[]; compra?: 
   }
   return (
     <>
-      {agrupar(linhas, (l) => l.candidato.brand).map((marca) => (
+      {agrupar(linhas, fornecedorDaLinha).map((forn) => (
         <Nivel
+          key={forn.chave}
+          titulo={forn.chave}
+          units={forn.units}
+          detalhe={`${forn.linhas.length} ${forn.linhas.length === 1 ? 'linha' : 'linhas'}`}
+          inicialmenteAberto
+        >
+      {agrupar(forn.linhas, (l) => l.candidato.brand).map((marca) => (
+        /*
+         * MARCA IGUAL AO FORNECEDOR NÃO VIRA UM SEGUNDO NÍVEL.
+         *
+         * Nem toda peça tem grife reconhecível na descrição: quando
+         * `extractBrand` não acha nada, a grife de análise cai no campo do ERP
+         * — que é o próprio fornecedor. Desenhar os dois seria "Hoya › Hoya",
+         * um degrau a mais que não informa nada e um clique a mais para chegar
+         * na peça. Visto no navegador logo depois de subir o nível de
+         * fornecedor; nenhum teste de unidade pegaria.
+         */
+        <NivelOpcional
           key={marca.chave}
+          pular={marca.chave === forn.chave}
           titulo={marca.chave}
           units={marca.units}
           detalhe={`${marca.linhas.length} ${marca.linhas.length === 1 ? 'linha' : 'linhas'}`}
@@ -567,10 +654,34 @@ function SegmentoDoPlano({ linhas, compra }: { linhas: LinhaDoPlano[]; compra?: 
               ))}
             </Nivel>
           ))}
+        </NivelOpcional>
+      ))}
         </Nivel>
       ))}
     </>
   );
+}
+
+/**
+ * Um `Nivel` que some quando não tem o que dizer.
+ *
+ * Nasceu do "Hoya › Hoya": nível cujo título repete o do pai não é hierarquia,
+ * é ruído com um clique embutido. Em vez de duplicar a árvore em duas versões,
+ * o degrau é que decide se existe.
+ */
+function NivelOpcional({
+  pular,
+  children,
+  ...props
+}: {
+  pular: boolean;
+  titulo: string;
+  units: number;
+  detalhe?: string;
+  children: ReactNode;
+}) {
+  if (pular) return <>{children}</>;
+  return <Nivel {...props}>{children}</Nivel>;
 }
 
 /**
@@ -684,6 +795,43 @@ export function PlanoDeCompra({
   const [abaEscolhida, setAba] = useState<StrategySegment['key'] | 'lojas' | null>(null);
   const aba = abaEscolhida ?? primeiraComLinhas;
 
+  /*
+   * O TRILHO DE FORNECEDORES desta aba — o mesmo gesto da tela de Compras.
+   *
+   * O cliente pediu a separação por fornecedor e recebeu o trilho só no Pedido
+   * de compra. Aqui ele responde outra pergunta: "quanto deste plano é de cada
+   * fornecedor", e com um clique, "me mostre só o dele".
+   *
+   * Filtra as LINHAS, e por isso os totais do cabeçalho (meta e alocado)
+   * continuam sendo os do plano inteiro: o recorte é de leitura, não muda o
+   * plano. Um filtro que mexesse na meta faria o comprador achar que escolher
+   * um fornecedor diminui a compra.
+   */
+  const [fornecedor, setFornecedor] = useState<string | null>(null);
+  const linhasDoSegmento = (k: StrategySegment['key']) => doSegmento(k)?.linhas ?? [];
+  const fornecedoresDaAba = useMemo(() => {
+    if (aba === 'lojas') return [];
+    const m = new Map<string, { nome: string; linhas: number; units: number }>();
+    for (const l of linhasDoSegmento(aba as StrategySegment['key'])) {
+      const nome = fornecedorDaLinha(l);
+      const atual = m.get(nome) ?? { nome, linhas: 0, units: 0 };
+      atual.linhas += 1;
+      atual.units += l.units;
+      m.set(nome, atual);
+    }
+    return [...m.values()].sort((a, b) => b.units - a.units || a.nome.localeCompare(b.nome, 'pt-BR'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plano, aba]);
+
+  // Fornecedor escolhido que sumiu na troca de aba não pode continuar filtrando
+  // em silêncio: a lista apareceria vazia sem nada explicando.
+  useEffect(() => {
+    if (fornecedor !== null && !fornecedoresDaAba.some((f) => f.nome === fornecedor)) setFornecedor(null);
+  }, [fornecedoresDaAba, fornecedor]);
+
+  const filtrarPorFornecedor = (linhas: LinhaDoPlano[]) =>
+    fornecedor === null ? linhas : linhas.filter((l) => fornecedorDaLinha(l) === fornecedor);
+
   return (
     <>
       <AberturaDeSecao
@@ -767,11 +915,32 @@ export function PlanoDeCompra({
           </div>
           {/* A ABA DE LANÇAMENTOS NÃO MOSTRA SKU — ver `DetalhamentoDeLancamento`.
               O best-seller segue no padrão por peça: ali o SKU é a resposta,
-              não um detalhe de exibição. */}
+              não um detalhe de exibição.
+
+              O TRILHO só acompanha o best-seller: no lançamento a árvore já
+              começa na marca e não há SKU para filtrar — e o pedido de
+              característica é lido inteiro, não fornecedor a fornecedor. */}
           {aba === 'lancamento' ? (
             <DetalhamentoDeLancamento arvore={doSegmento('lancamento')?.detalhamento ?? []} />
+          ) : fornecedoresDaAba.length > 1 ? (
+            <div className="compras-com-trilho">
+              <TrilhoDeFornecedoresDoPlano
+                fornecedores={fornecedoresDaAba}
+                escolhido={fornecedor}
+                aoEscolher={setFornecedor}
+              />
+              <div style={{ minWidth: 0 }}>
+                {fornecedor !== null && (
+                  <div className="hint" style={{ margin: '0 0 8px' }}>
+                    Mostrando só <strong>{fornecedor}</strong>. A meta e o alocado acima continuam
+                    sendo os do plano inteiro.
+                  </div>
+                )}
+                <SegmentoDoPlano linhas={filtrarPorFornecedor(linhasDoSegmento(aba))} compra={compra} />
+              </div>
+            </div>
           ) : (
-            <SegmentoDoPlano linhas={doSegmento(aba)?.linhas ?? []} compra={compra} />
+            <SegmentoDoPlano linhas={linhasDoSegmento(aba)} compra={compra} />
           )}
         </>
       )}
