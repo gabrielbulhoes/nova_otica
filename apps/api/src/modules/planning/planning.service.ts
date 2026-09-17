@@ -1046,37 +1046,25 @@ async function detalharPlanoContinuo(
   estrategia: ReturnType<typeof buildCommercialStrategy>,
   days: number,
 ) {
-  /*
-   * O TETO ERA UMA FILA SÓ, ORDENADA POR GIRO — e isso esvaziava o lançamento.
-   *
-   * `ordenados.slice(0, 3_000)` sobre uma lista por `unitsSold` decrescente
-   * parece neutro e não é: o segmento LANÇAMENTO é definido por giro ZERO
-   * (`segmentoPorGiro`), então toda peça candidata a ele ficava no fim da fila
-   * e o corte a descartava. Com 3.000 ou mais peças vendendo ao menos uma
-   * unidade na janela — e a rede tem —, o balde saía vazio POR CONSTRUÇÃO, e a
-   * aba mostrava "nenhuma peça entrou neste cenário" com o motor inteiro
-   * funcionando. Relatado do cliente em 17/09/2026: "Lançamento não foi
-   * alterado, não está detalhando nada do pedido."
-   *
-   * Agora cada segmento tem COTA PRÓPRIA, dimensionada pela meta que a
-   * estratégia já repartiu (no perfil equilibrado, 45% / 55% do piso). O que um
-   * lado não usa o outro aproveita, então o teto continua valendo inteiro.
-   *
-   * E cada fila é ordenada pela régua DELA:
-   *
-   *  · best-seller — giro, empate pelo capital. É a reposição do que já vende.
-   *  · lançamento  — o giro do TIPO da peça, empate pelo capital. A peça não
-   *    tem histórico próprio (por definição), então quem tem lastro é o perfil;
-   *    o tipo é o pedaço do perfil disponível aqui, antes das fichas. Ordenar
-   *    lançamento por capital parado, como a fila única fazia, era eleger o
-   *    estoque morto mais caro — o oposto do sinal que se procura.
-   */
+  // O universo tem cota POR SEGMENTO, e não uma fila só por giro — o porquê
+  // inteiro está em `selecionarUniversoDeCandidatos`, que é pura de propósito:
+  // é lá que se discute a régua, não aqui no meio das consultas.
   const metaDe = (k: SegmentoDoPlano) => estrategia.segments.find((s) => s.key === k)?.units ?? 0;
   const pool = selecionarUniversoDeCandidatos(
     productPlans,
     { 'best-seller': metaDe('best-seller'), lancamento: metaDe('lancamento') },
     TETO_DE_CANDIDATOS,
   );
+
+  // O FORNECEDOR de cada peça, pela MESMA regra da tela de Compras: o catálogo
+  // de grifes quando existe, o `nome_fornecedor` do CDS como base. Duas telas
+  // que agrupam por fornecedor com réguas diferentes seriam a divergência
+  // seguinte — e esta base já tem oito delas no histórico.
+  const catalogoDeGrifes = loadBrandCatalog();
+  const fornecedorDe = (p: ProductPlan) =>
+    supplierFor(analysisBrand(p.description, p.category, p.brand), catalogoDeGrifes) ??
+    p.brand ??
+    null;
   const fichas = await fichasDoFornecedor(
     pool.map((p) => ({ ...p, recommendation: 'BUY' as const, suggestedQty: 1 })),
   );
@@ -1101,6 +1089,9 @@ async function detalharPlanoContinuo(
       description: p.description,
       // A GRIFE, não o fornecedor — a mesma regra do resto do motor.
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
+      // E o FORNECEDOR ao lado dela: é por ele que o pedido fecha, e é o nível
+      // que faltava na aba de best-seller.
+      fornecedor: fornecedorDe(p),
       tipo: p.category,
       genero: f?.genero ?? null,
       /*

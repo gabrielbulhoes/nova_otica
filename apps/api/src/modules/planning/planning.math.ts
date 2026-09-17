@@ -4041,6 +4041,24 @@ export interface CandidatoDeCompra {
   description: string;
   /** A GRIFE (Ray-Ban, Dior), nunca o fornecedor. */
   brand: string;
+  /**
+   * O FORNECEDOR — quem emite a nota, e o nível em que a compra é fechada.
+   *
+   * "Best seller continua sem separar por fornecedor." — Galbe, 17/09/2026.
+   *
+   * Grife e fornecedor são coisas diferentes e sempre foram: a Ray-Ban e a
+   * Oakley são grifes da MESMA Luxottica, e quem fecha o pedido fecha por
+   * fornecedor, não por grife. A tela de Compras já agrupava assim; a de
+   * Estratégia mostrava só a grife.
+   *
+   * A origem é a mesma das duas telas: o `nome_fornecedor` que o CDS manda em
+   * cada produto, consolidado pelo catálogo de grifes quando ele existe. Sem
+   * catálogo, o nome do ERP vale por si — não é um buraco, é o dado cru.
+   *
+   * Opcional porque a oferta de feira não traz o campo: lá o fornecedor é o
+   * dono da planilha, e quem monta a tela já sabe qual é.
+   */
+  fornecedor?: string | null;
   /** SOLAR · ARMACAO · … — o "tipo" da hierarquia do cliente. */
   tipo: string | null;
   /** Feminino · Masculino · Unissex — vem da ficha do fornecedor. */

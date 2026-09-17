@@ -3092,6 +3092,14 @@ export function demoHandle({ method, url, params = {}, body = {} }: DemoRequest)
       sku: prodById(p.productId)?.sku ?? p.productId,
       description: p.description,
       brand: analysisBrand(p.description, p.category, p.brand) ?? 'Sem grife',
+      /*
+       * O FORNECEDOR da demonstração é o campo `brand` do produto — que na
+       * produção é exatamente isto: o `nome_fornecedor` que o CDS manda. A
+       * grife acima sai da DESCRIÇÃO; as duas convivem na mesma linha porque
+       * são coisas diferentes, e é essa diferença que a aba de best-seller
+       * passou a mostrar.
+       */
+      fornecedor: prodById(p.productId)?.brand ?? p.brand ?? null,
       tipo: p.category,
       /*
        * A FICHA DA DEMONSTRAÇÃO entra aqui — antes era `null` nos três campos.
