@@ -3046,10 +3046,42 @@ td .codigo {
    só ficam legíveis com a hierarquia desenhada (categoria em mono miúda,
    módulo em peso médio com ícone, página recuada) e com o módulo ATUAL
    marcado, senão a lista vira parede. */
+/*
+ * O MAPA ROLA; ELE NÃO ENCOLHE.
+ *
+ * Enquanto a barra mostrava só as páginas do módulo atual (no máximo quatro),
+ * ela nunca passava da altura da janela. Expondo o mapa inteiro — três
+ * categorias, sete módulos, treze telas — ela passa, e numa janela de 610px o
+ * flex fazia a única coisa que ninguém queria: ESPREMIA a caixa do <nav> (que
+ * nasce `flex: 0 1 auto`) para caber, e o conteúdo, com `overflow` visível,
+ * continuava desenhando para fora dela.
+ *
+ * O resultado media-se: a caixa do mapa terminava em 489px e os links seguiam
+ * até 868px. O cartão do usuário vem DEPOIS no DOM, então pintava por cima —
+ * "Histórico geral", "Planejamento & Compras" e "Estratégia comercial" ficavam
+ * atrás do cartão, e outras cinco telas caíam fora da barra. A tela que o
+ * cliente não achava estava desenhada, legível e inalcançável.
+ *
+ * `flex: 1 1 auto` + `min-height: 0` + `overflow-y: auto` trocam o espremer
+ * pelo rolar: o mapa fica com a altura que sobra e rola por dentro. O cartão
+ * de sair (`flex: 0 0 auto`, logo abaixo) deixa de ter o que cobrir, e a
+ * `.sidebar` nunca mais precisa da própria rolagem.
+ *
+ * Vale só na coluna: no horizontal e no celular a barra é uma FILEIRA que
+ * quebra em linhas, e lá quem manda são as regras de cada layout.
+ */
 .sidebar-mapa {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+/* O cartão do usuário é o piso da barra: não estica, não encolhe e não sai da
+   tela. Sem isto ele voltaria a disputar altura com o mapa. */
+.sidebar > div[style] {
+  flex: 0 0 auto;
 }
 
 .sidebar-categoria {
@@ -3510,6 +3542,9 @@ td .codigo {
   min-width: 0;
   flex: 1;
   padding-bottom: 2px;
+  /* Na fileira o mapa quebra em linhas e cresce; a rolagem interna da COLUNA
+     não tem função aqui e só criaria uma barra de rolagem parasita. */
+  overflow: visible;
 }
 
 /* A CATEGORIA TAMBÉM QUEBRA. Sem isto, "Inteligência" — quatro módulos e sete
